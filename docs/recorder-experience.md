@@ -16,6 +16,13 @@ First use opens a three-step setup wizard:
 2. Recording quality and transcription: record only, local model, or Qwen.
    Model import/download and token entry appear only for their chosen mode.
    Language and vocabulary are optional advanced fields.
+   Vocabulary is file-first: select multiple TXT/SCEL dictionaries, see filenames
+   and word counts, and remove individual entries. Merge overlapping words without
+   removing words still supplied by another file or manual input. Manual words live
+   in a secondary disclosure. Link to the official Sogou dictionary download site
+   in the system browser, without sending the preset/project name. Dictionary word
+   snapshots are saved per preset, so moving source files does not break recording.
+   Cancelling selection or any file parsing failure preserves the current draft.
 3. Output folder, optional installed Obsidian path, and a short summary. Save the
    choices as a named reusable preset; do not start recording here. First setup
    and New preset use the same wizard. Edit starts from the selected preset.

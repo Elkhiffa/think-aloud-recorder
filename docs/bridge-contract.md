@@ -20,6 +20,9 @@ Methods:
 - `choose_directory(kind)` returns {path} or {path:null}; kind vault/model/download. Only selects, does not write selected directory or import a model.
 - `choose_obsidian()` returns {path} after native EXE picker; user saves it with save_settings.
 - `import_hotwords(current_text=null)` returns {text,count} after native multi-file .txt/.scel picker; merges with the unsaved draft when supplied. Does not save until settings/preset is saved.
+- `choose_hotword_files()` returns `{files:[{id,name,words}]}` from a native multi-file TXT/SCEL picker. Cancel returns an empty list. All selected files must parse before any are returned. Names are basenames, never absolute paths; IDs identify normalized word content. The wizard appends unique files to its unsaved draft.
+- `open_dictionary_site()` opens only `https://pinyin.sogou.com/dict/` in the system browser. It does not send preset names, words or local filenames.
+- Preset/config fields `hotword_files` and `hotword_manual` retain dictionary snapshots and optional manual terms. Save recomputes and validates the flattened `hotwords` transcription input. Legacy flat vocabulary becomes manual terms. Session exports contain flattened words only, never file metadata.
 - `start_recording(payload)` frontend passes `{}` to start from the persisted active preset. Backend revalidates before starting. `later` never requires a cloud key or local model. Other modes require their respective capability. No test-only source reachable through this method.
 - `stop_recording()` saves recording; `later` stays 待整理; other modes invoke existing process_isolated. Do not leave active ownership ambiguous on failure.
 - `process_session(id)` reprocesses using current transcription settings; preserve old transcript via existing version mechanism. Reject `later` with a helpful instruction.

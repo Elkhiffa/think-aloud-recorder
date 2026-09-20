@@ -5,7 +5,8 @@ import threading
 from contextlib import contextmanager
 
 BRIDGE_METHODS = ('get_state', 'refresh_devices', 'save_settings', 'save_preset', 'select_preset', 'choose_directory',
-                  'choose_obsidian', 'import_hotwords', 'start_recording', 'stop_recording',
+                  'choose_obsidian', 'import_hotwords', 'choose_hotword_files', 'open_dictionary_site',
+                  'start_recording', 'stop_recording',
                   'process_session', 'open_review', 'package_session', 'open_folder',
                   'open_raw', 'save_cloud_key', 'verify_cloud_key', 'recover_cloud_task',
                   'model_action', 'open_official_obsidian')

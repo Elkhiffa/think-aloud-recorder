@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const {State} = require('../ui/state.js');
+const {State,vocabularyWords} = require('../ui/state.js');
 
 function snapshot(overrides={}) {
   return {
@@ -39,7 +39,7 @@ test('new preset is independent; editing and cancellation preserve every saved s
   assert.equal(state.draft.transcription_provider,'later');assert.equal(state.draft.hotwords,'');
   assert.equal(state.draft.obsidian_exe,'');assert.equal(state.draft.window,'');
   state.updateDraft('game','Unsaved');state.cancelDraft();assert.equal(JSON.stringify(state.saved),saved);
-  state.openDraft('edit');assert.equal(state.editingId,'one');assert.deepEqual(state.draft,Object.fromEntries(Object.keys(state.draft).map(key=>[key,state.saved[key]])));
+  state.openDraft('edit');assert.equal(state.editingId,'one');assert.equal(state.draft.vault,state.saved.vault);assert.equal(state.draft.hotword_manual,'Saved vocabulary');assert.deepEqual(state.draft.hotword_files,[]);
   state.updateDraft('hotwords','Unsaved words');state.cancelDraft();state.openDraft('edit');
   assert.equal(state.draft.hotwords,'Saved vocabulary');
 });
@@ -84,7 +84,7 @@ function fakeDOM() {
 async function settle(){for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}
 async function fixture(initial=snapshot()) {
   const {document,elements}=fakeDOM();const calls=[];const data={snapshot:initial};
-  const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='save_preset'){data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
+  const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_preset'){data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
   const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(){return 1;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},console});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/state.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/app.js'),'utf8'),context);
@@ -131,4 +131,35 @@ test('session dates use local minute precision and preserve readable invalid val
   assert.equal(f.run("formatDate('未记录时间')"),'未记录时间');
   assert.equal(f.run("formatDate('not-a-date')"),'not-a-date');
   assert.equal(f.run('formatDate(null)'),'—');
+});
+
+test('vocabulary files stay independent and removal preserves overlapping and manual words',()=>{
+  assert.deepEqual(vocabularyWords({hotword_files:[{words:['Café']}],hotword_manual:'Cafe\u0301'}),['Café']);
+  const a={id:'a',name:'角色.txt',words:['重叠词','角色名']},b={id:'b',name:'道具.scel',words:['重叠词','道具名']};
+  const saved=snapshot();saved.config={...saved.config,hotword_files:[a],hotword_manual:'手动词',hotwords:'重叠词\n角色名\n手动词'};
+  const state=new State();state.accept(saved);state.openDraft('edit');
+  assert.equal(state.addVocabularyFiles([a,b]),1);state.removeVocabularyFile('a');
+  assert.equal(state.draft.hotwords,'重叠词\n道具名\n手动词');assert.equal(state.saved.hotword_files.length,1);
+  assert.equal(state.saved.hotword_files[0].id,'a');state.accept(saved);assert.equal(state.draft.hotword_files[0].id,'b');
+  assert.deepEqual(state.presetPayload().hotword_files,[b]);state.cancelDraft();state.openDraft('edit');
+  assert.equal(state.draft.hotword_files[0].id,'a');state.openDraft('new');assert.equal(state.draft.hotword_files.length,0);assert.equal(state.draft.hotword_manual,'');
+});
+
+test('actual file-first UI supports multi-select, cancel, failure, removal and saved re-entry',async()=>{
+  const f=await fixture();f.elements.get('settingsButton').onclick();
+  assert.equal(f.elements.get('manualWords').open,false);
+  f.data.chosenFiles=[{id:'a',name:'角色.txt',words:['同词','角色']},{id:'b',name:'<道具>.txt',words:['同词','道具']}];
+  await f.elements.get('chooseHotwordFiles').onclick();
+  assert.equal(f.run('store.draft.hotword_files.length'),2);assert.equal(f.run('store.draft.hotwords'),'同词\n角色\n道具\nSaved vocabulary');
+  assert.ok(f.elements.get('hotwordFiles').innerHTML.includes('&lt;道具&gt;.txt'));
+  assert.ok(f.elements.get('vocabularyCount').textContent.includes('4 个词'));
+  assert.equal(f.calls.some(call=>call.name==='save_preset'),false);
+  f.data.chosenFiles=[];await f.elements.get('chooseHotwordFiles').onclick();assert.equal(f.run('store.draft.hotword_files.length'),2);
+  f.data.dictionaryError='无法读取词库';await f.elements.get('chooseHotwordFiles').onclick();assert.equal(f.run('store.draft.hotword_files.length'),2);
+  assert.equal(f.elements.get('wizardError').textContent,'无法读取词库');
+  f.elements.get('hotwordFiles').onclick({target:{closest:()=>({dataset:{removeVocabulary:'a'}})}});
+  assert.equal(f.run('store.draft.hotwords'),'同词\n道具\nSaved vocabulary');
+  await f.run('finishWizard()');f.elements.get('settingsButton').onclick();assert.equal(f.run('store.draft.hotword_files.length'),1);assert.equal(f.run('store.draft.hotword_files[0].id'),'b');
+  await f.elements.get('dictionaryDownload').onclick({preventDefault(){}});await settle();
+  const link=f.calls.find(call=>call.name==='open_dictionary_site');assert.ok(link);assert.equal(link.args.length,0);
 });

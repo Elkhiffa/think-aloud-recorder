@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import desktop_service as bridge
+import hotword_files
 
 
 class DesktopServiceTests(unittest.TestCase):
@@ -756,6 +757,188 @@ class DesktopServiceTests(unittest.TestCase):
         state = self.readiness()
         self.assertEqual([item['code'] for item in state['errors']], ['SETUP_REQUIRED'])
         self.assertEqual(self.service.get_state()['data']['devices'], self.devices)
+
+    def choose_dictionaries(self, *files):
+        with patch.object(self.service, '_dialog', return_value=tuple(str(file) for file in files)) as dialog:
+            result = self.service.choose_hotword_files()
+        dialog.assert_called_once_with('file', allow_multiple=True,
+                                       file_types=('Hotword dictionaries (*.txt;*.scel)',))
+        return result
+
+    def test_dictionary_multiselect_returns_only_name_content_and_stable_id(self):
+        first, second = self.root / '术语.txt', self.root / 'Other.txt'
+        first.write_text('角色名\n共享词\n角色名', encoding='utf-8')
+        second.write_text('共享词\nOther term', encoding='utf-8')
+        result = self.choose_dictionaries(first, second)
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(len(result['data']['files']), 2)
+        self.assertEqual(result['data']['files'][0]['words'], ['角色名', '共享词'])
+        self.assertEqual(result['data']['files'][0]['name'], '术语.txt')
+        for item in result['data']['files']:
+            self.assertEqual(set(item), {'id', 'name', 'words'})
+            self.assertRegex(item['id'], r'^[a-f0-9]{64}$')
+        self.assertNotIn(str(self.root), json.dumps(result, ensure_ascii=False))
+        self.assertEqual(self.service._cfg['hotword_files'], [])
+        self.assertFalse((self.root / 'config.json').exists())
+
+    def test_dictionary_cancel_and_partial_parse_failure_are_atomic(self):
+        self.assertEqual(self.choose_dictionaries(), {'ok': True, 'data': {'files': []}})
+        valid = self.root / 'good.txt'
+        valid.write_text('valid term', encoding='utf-8')
+        invalid = self.root / 'bad.scel'
+        invalid.write_bytes(b'not a SCEL dictionary')
+        before = deepcopy(self.service._cfg)
+        result = self.choose_dictionaries(valid, invalid)
+        self.assertFalse(result['ok'])
+        self.assertNotIn('data', result)
+        self.assertIn('bad.scel', result['error'])
+        self.assertNotIn(str(self.root), result['error'])
+        self.assertEqual(self.service._cfg, before)
+        self.assertFalse((self.root / 'config.json').exists())
+
+    def test_identical_dictionaries_deduplicate_across_filename_order_and_unicode(self):
+        first, duplicate = self.root / 'first.txt', self.root / 'renamed.txt'
+        first.write_text('Alpha\nCafe\u0301\nBeta', encoding='utf-8')
+        duplicate.write_text(' Beta \nCaf\u00e9\nAlpha\nBeta', encoding='utf-8')
+        one = self.choose_dictionaries(first)['data']['files'][0]
+        two = self.choose_dictionaries(duplicate)['data']['files'][0]
+        self.assertEqual(one['id'], two['id'])
+        result = self.choose_dictionaries(first, duplicate)
+        self.assertEqual(len(result['data']['files']), 1)
+        result = self.service.save_settings({'hotword_files': [one, two], 'hotword_manual': 'Alpha\nManual'})
+        self.assertTrue(result['ok'], result)
+        self.wait()
+        self.assertEqual(len(self.service._cfg['hotword_files']), 1)
+        self.assertEqual(self.service._cfg['hotwords'], 'Alpha\nCafé\nBeta\nManual')
+
+    def test_removing_dictionary_recomputes_words_and_ignores_flattened_payload(self):
+        first, second = self.root / 'one.txt', self.root / 'two.txt'
+        first.write_text('Alpha\nShared', encoding='utf-8')
+        second.write_text('Beta\nShared', encoding='utf-8')
+        files = self.choose_dictionaries(first, second)['data']['files']
+        saved = self.service.save_settings({'hotword_files': files, 'hotword_manual': 'Manual',
+                                            'hotwords': 'Untrusted flattened text'})
+        self.assertTrue(saved['ok'], saved)
+        self.wait()
+        self.assertEqual(self.service._cfg['hotwords'], 'Alpha\nShared\nBeta\nManual')
+        removed = self.service.save_settings({'hotword_files': [files[1]], 'hotword_manual': 'Manual',
+                                              'hotwords': self.service._cfg['hotwords']})
+        self.assertTrue(removed['ok'], removed)
+        self.wait()
+        self.assertEqual(self.service._cfg['hotwords'], 'Beta\nShared\nManual')
+        self.assertTrue(self.service.save_settings({'hotword_files': [], 'hotword_manual': ''})['ok'])
+        self.wait()
+        self.assertEqual(self.service._cfg['hotwords'], '')
+
+    def test_dictionary_snapshots_survive_source_move_and_stay_out_of_session_settings(self):
+        file = self.root / 'source.txt'
+        file.write_text('Durable term', encoding='utf-8')
+        files = self.choose_dictionaries(file)['data']['files']
+        file.rename(self.root / 'moved-source.txt')
+        saved = self.service.save_settings({'hotword_files': files, 'hotword_manual': 'Manual term'})
+        self.assertTrue(saved['ok'], saved)
+        self.wait()
+        # Exercise the engine's actual allowlist used for session.json, without
+        # creating any recording. Files/manual metadata must never be copied.
+        settings = bridge.recorder.session_settings(self.service._cfg)
+        self.assertEqual(settings['hotwords'], 'Durable term\nManual term')
+        self.assertNotIn('hotword_files', settings)
+        self.assertNotIn('hotword_manual', settings)
+        self.assertNotIn(str(self.root), json.dumps(settings, ensure_ascii=False))
+        self.assertNotIn('source.txt', json.dumps(settings))
+
+    def test_legacy_hotwords_migrate_to_manual_and_text_api_remains_compatible(self):
+        legacy = self.service._cfg['presets']['legacy']
+        legacy.pop('hotword_files')
+        legacy.pop('hotword_manual')
+        legacy['hotwords'] = '旧词条,Another term'
+        self.service._initialize_presets()
+        config = self.service.get_state()['data']['config']
+        self.assertEqual(config['hotword_files'], [])
+        self.assertEqual(config['hotword_manual'], '旧词条,Another term')
+        self.assertEqual(config['hotwords'], '旧词条\nAnother term')
+        self.assertTrue(self.service.save_settings({'hotwords': 'Text editor replacement'})['ok'])
+        self.wait()
+        self.assertEqual(self.service._cfg['hotword_manual'], 'Text editor replacement')
+        self.assertEqual(self.service._cfg['hotwords'], 'Text editor replacement')
+
+    def test_dictionary_snapshots_are_deeply_isolated_between_presets_and_callers(self):
+        file = self.root / 'shared.txt'
+        file.write_text('Shared source', encoding='utf-8')
+        selected = self.choose_dictionaries(file)['data']['files']
+        first = self.service.save_preset({'name': 'Preset A', 'hotword_files': selected,
+                                           'hotword_manual': 'Only A'})['data']['id']
+        self.wait()
+        second_result = self.service.save_preset({'name': 'Preset B', 'hotword_files': selected,
+                                                  'hotword_manual': 'Only B'})
+        second = second_result['data']['id']
+        self.wait()
+        selected[0]['words'].append('Caller mutation')
+        second_result['data']['config']['hotword_files'][0]['words'].append('Response mutation')
+        self.assertTrue(self.service.save_settings({'hotword_files': [], 'hotword_manual': 'Only B'})['ok'])
+        self.wait()
+        self.assertEqual(self.service._cfg['presets'][second]['hotword_files'], [])
+        self.assertTrue(self.service.select_preset(first)['ok'])
+        self.wait()
+        config = self.service.get_state()['data']['config']
+        self.assertEqual(config['hotword_files'][0]['words'], ['Shared source'])
+        self.assertEqual(config['hotwords'], 'Shared source\nOnly A')
+
+    def test_dictionary_selection_defers_qwen_limits_until_preset_save(self):
+        self.service._cfg['transcription_provider'] = 'qwen'
+        file = self.root / 'long-term.txt'
+        word = '甲' * 16
+        file.write_text(word, encoding='utf-8')
+        result = self.choose_dictionaries(file)
+        self.assertTrue(result['ok'], result)
+        before = deepcopy(self.service._cfg)
+        saved = self.service.save_settings({'hotword_files': result['data']['files'], 'hotword_manual': ''})
+        self.assertFalse(saved['ok'])
+        self.assertIn('过长', saved['error'])
+        self.assertEqual(self.service._cfg, before)
+
+    def test_dictionary_structure_hash_paths_and_word_limits_are_validated_before_save(self):
+        file = self.root / 'valid.txt'
+        file.write_text('Alpha', encoding='utf-8')
+        valid = self.choose_dictionaries(file)['data']['files'][0]
+        too_many = [f'word-{index}' for index in range(2000)]
+        limit_file = dict(name='limit.txt', words=too_many, id=hotword_files.dictionary_id(too_many))
+        malformed = [
+            {'hotword_files': 'not an array', 'hotword_manual': ''},
+            {'hotword_files': [{**valid, 'path': str(file)}], 'hotword_manual': ''},
+            {'hotword_files': [{**valid, 'name': str(file)}], 'hotword_manual': ''},
+            {'hotword_files': [{**valid, 'id': 'forged'}], 'hotword_manual': ''},
+            {'hotword_files': [{**valid, 'words': [42]}], 'hotword_manual': ''},
+            {'hotword_files': [limit_file], 'hotword_manual': 'one more unique word'},
+            {'hotword_files': [], 'hotword_manual': 'x' * 128001},
+        ]
+        before = deepcopy(self.service._cfg)
+        for payload in malformed:
+            with self.subTest(payload_kind=next(iter(payload))):
+                self.assertFalse(self.service.save_settings(payload)['ok'])
+                self.assertEqual(self.service._cfg, before)
+        self.assertFalse((self.root / 'config.json').exists())
+
+    def test_dictionary_file_size_and_combined_words_are_bounded(self):
+        oversized = self.root / 'oversized.txt'
+        with oversized.open('wb') as file:
+            file.truncate(hotword_files.MAX_FILE_BYTES + 1)
+        self.assertIn('8 MB', self.choose_dictionaries(oversized)['error'])
+        first, second = self.root / 'first.txt', self.root / 'second.txt'
+        first.write_text('\n'.join(f'word-{index}' for index in range(1500)), encoding='utf-8')
+        second.write_text('\n'.join(f'word-{index}' for index in range(1500, 2100)), encoding='utf-8')
+        result = self.choose_dictionaries(first, second)
+        self.assertFalse(result['ok'])
+        self.assertIn('2000', result['error'])
+        self.assertEqual(self.service._cfg['hotword_files'], [])
+
+    def test_dictionary_site_opens_fixed_url_without_preset_name_or_upload(self):
+        self.service._cfg['game'] = 'Private project name'
+        with patch.object(bridge.webbrowser, 'open', return_value=True) as browser:
+            self.assertEqual(self.service.open_dictionary_site(), {'ok': True, 'data': {'requested': True}})
+        browser.assert_called_once_with('https://pinyin.sogou.com/dict/')
+        with patch.object(bridge.webbrowser, 'open', return_value=False):
+            self.assertFalse(self.service.open_dictionary_site()['ok'])
 
 
 if __name__ == '__main__':

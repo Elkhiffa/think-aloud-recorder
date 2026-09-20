@@ -18,7 +18,8 @@ from obsws_python.error import OBSSDKError
 from websocket import WebSocketException
 
 import recorder
-from hotword_files import merge_files, split_words, validate_words
+from hotword_files import (merge_files, split_words, validate_words, compile_hotword_snapshots,
+                           read_dictionary_snapshots, SOGOU_DICTIONARIES)
 from model_manager import ModelManager
 from portable_config import load_settings, stored_settings
 from processing import process_isolated
@@ -26,9 +27,11 @@ import secret_store
 
 
 PUBLIC_KEYS = ('game', 'vault', 'preset', 'source', 'window', 'monitor', 'mic',
-               'language', 'hotwords', 'transcription_provider', 'obsidian_exe', 'configured')
+               'language', 'hotwords', 'hotword_files', 'hotword_manual',
+               'transcription_provider', 'obsidian_exe', 'configured')
 EDITABLE_KEYS = set(PUBLIC_KEYS) - {'configured'}
-PRESET_KEYS = ('preset', 'source', 'window', 'monitor', 'mic', 'language', 'hotwords')
+PRESET_KEYS = ('preset', 'source', 'window', 'monitor', 'mic', 'language', 'hotwords',
+               'hotword_files', 'hotword_manual')
 SUSPECT_STATES = {'录制中', '启动中', '保存中'}
 READINESS_MAX_AGE = 15
 
@@ -145,6 +148,7 @@ class DesktopService:
         return result
 
     def _initialize_presets(self):
+        self._normalize_hotword_config(self._cfg)
         migrated = 'presets' not in self._cfg
         if migrated:
             self._cfg['presets'] = {}
@@ -153,6 +157,7 @@ class DesktopService:
                 self._cfg['presets']['legacy'] = self._preset_snapshot(self._cfg)
                 self._cfg['active_preset_id'] = 'legacy'
         for value in self._cfg['presets'].values():
+            self._normalize_hotword_config(value)
             if value.get('vault') and not Path(value['vault']).is_absolute():
                 value['vault'] = str((self.root / value['vault']).resolve())
         ident = self._cfg.get('active_preset_id')
@@ -164,6 +169,16 @@ class DesktopService:
             self._cfg['configured'] = False
         if migrated and (self.root / 'config.json').exists():
             self._persist(self._cfg)
+
+    @staticmethod
+    def _normalize_hotword_config(cfg):
+        if 'hotword_files' not in cfg and 'hotword_manual' not in cfg:
+            files, manual = [], cfg.get('hotwords', '')
+        else:
+            files, manual = cfg.get('hotword_files', []), cfg.get('hotword_manual', '')
+        # Loading old presets does not newly reject them under provider-specific
+        # limits; selecting/saving a provider performs that validation below.
+        cfg.update(compile_hotword_snapshots(files, manual, qwen=False))
 
     @staticmethod
     def _preset_snapshot(cfg):
@@ -497,23 +512,31 @@ class DesktopService:
     def _validated_settings(self, payload, base=None):
         if not isinstance(payload, dict) or set(payload) - EDITABLE_KEYS:
             raise ValueError('设置包含不支持的字段。')
-        if any(not isinstance(value, str) for value in payload.values()):
+        if any(not isinstance(value, str) for key, value in payload.items() if key != 'hotword_files'):
             raise ValueError('设置格式不正确。')
         updated = deepcopy(self._cfg if base is None else base)
-        updated.update(payload)
+        updated.update(deepcopy(payload))
         updated['vault'] = self._validate_vault(updated.get('vault'))
         for key, allowed in [('preset', recorder.PRESETS), ('source', ['游戏窗口', '整个显示器']),
                              ('language', ['zh', 'en', 'ja', '']),
                              ('transcription_provider', ['later', 'local', 'qwen'])]:
             if updated.get(key) not in allowed:
                 raise ValueError('设置选项无效：' + key)
-        for key in EDITABLE_KEYS - {'hotwords'}:
+        for key in EDITABLE_KEYS - {'hotwords', 'hotword_files', 'hotword_manual'}:
             value = updated.get(key, '')
             if not isinstance(value, str) or len(value) > 4096 or any(ord(char) < 32 for char in value):
                 raise ValueError('设置文本包含无效内容：' + key)
         updated['game'] = updated.get('game', '').strip()[:120] or '自由探索'
-        updated['hotwords'] = '\n'.join(validate_words(split_words(updated.get('hotwords', '')),
-                                       qwen=updated['transcription_provider'] == 'qwen'))
+        if 'hotwords' in payload and not {'hotword_files', 'hotword_manual'}.intersection(payload):
+            # Compatibility with a legacy text-only editor explicitly replacing
+            # its vocabulary. New structured fields always win over flattened text.
+            files, manual = [], payload['hotwords']
+        elif 'hotword_files' not in updated and 'hotword_manual' not in updated:
+            files, manual = [], updated.get('hotwords', '')
+        else:
+            files, manual = updated.get('hotword_files', []), updated.get('hotword_manual', '')
+        updated.update(compile_hotword_snapshots(files, manual,
+                       qwen=updated['transcription_provider'] == 'qwen'))
         exe = updated.get('obsidian_exe', '')
         if exe:
             path = Path(exe)
@@ -711,6 +734,22 @@ class DesktopService:
             return ok({'text': '\n'.join(words), 'count': count})
         except Exception as error:
             return self._error(error)
+
+    def choose_hotword_files(self):
+        try:
+            paths = self._dialog('file', allow_multiple=True,
+                                 file_types=('Hotword dictionaries (*.txt;*.scel)',))
+            return ok({'files': read_dictionary_snapshots(paths)})
+        except Exception as error:
+            return self._error(error)
+
+    def open_dictionary_site(self):
+        try:
+            if not webbrowser.open(SOGOU_DICTIONARIES):
+                raise RuntimeError('未能请求浏览器打开搜狗词库下载页。')
+            return ok({'requested': True})
+        except Exception:
+            return self._error('未能请求浏览器打开搜狗词库下载页。')
 
     def _require_transcription(self, cfg, allow_later=False):
         provider = cfg.get('transcription_provider', 'later')

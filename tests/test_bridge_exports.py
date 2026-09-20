@@ -21,6 +21,8 @@ EXPECTED_EXPORTS = {
     'choose_directory': ['kind'],
     'choose_obsidian': [],
     'import_hotwords': ['current_text'],
+    'choose_hotword_files': [],
+    'open_dictionary_site': [],
     'start_recording': ['payload'],
     'stop_recording': [],
     'process_session': ['id'],
