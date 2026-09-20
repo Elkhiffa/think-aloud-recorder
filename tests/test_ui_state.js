@@ -119,3 +119,16 @@ test('actual wizard saves named preset then polls fresh state before closing; ne
   assert.equal(f.elements.get('wizard').open,false);assert.equal(f.elements.get('recordButton').disabled,true);
   assert.equal(calls.some(call=>call.name==='start_recording'),false);
 });
+
+test('session dates use local minute precision and preserve readable invalid values',async()=>{
+  const timestamp='2026-09-20T17:26:53.973896+08:00';
+  const expected=new Intl.DateTimeFormat('sv-SE',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(timestamp));
+  const f=await fixture(snapshot({sessions:[{id:'dated',game:'Dated session',created:timestamp,duration:10,state:'待整理'}]}));
+  assert.equal(f.run(`formatDate(${JSON.stringify(timestamp)})`),expected);
+  const rendered=f.elements.get('sessionList').innerHTML;
+  assert.ok(rendered.includes(expected));assert.ok(!rendered.includes(timestamp));
+  assert.equal(f.run("formatDate('2026-01-02T03:04:59')"),'2026-01-02 03:04');
+  assert.equal(f.run("formatDate('未记录时间')"),'未记录时间');
+  assert.equal(f.run("formatDate('not-a-date')"),'not-a-date');
+  assert.equal(f.run('formatDate(null)'),'—');
+});
