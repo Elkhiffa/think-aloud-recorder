@@ -19,22 +19,12 @@ ROOT_FILES = (
     'app.py', 'desktop_service.py', 'hotword_files.py', 'hotword_ui.py',
     'model_manager.py', 'model-manifest.json', 'portable_check.py', 'portable_config.py',
     'portable_entry.py', 'processing_worker.py', 'processing.py', 'qwen_transcription.py',
-    'recorder.py', 'review_runtime.py', 'scel_to_text.py', 'secret_store.py',
+    'recorder.py', 'window_manager.py', 'review_runtime.py', 'scel_to_text.py', 'secret_store.py',
     'transcription_runtime.py', 'player.html', 'requirements-lock.txt',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md',
     'scripts/build_portable.py', 'scripts/fetch_runtime.py',
 )
 OPTIONAL_ROOT_FILES = ('README.md',)
-TEMPLATE_FILES = (
-    '.obsidian/community-plugins.json',
-    '.obsidian/plugins/experience-opener/main.js',
-    '.obsidian/plugins/experience-opener/manifest.json',
-    '.obsidian/plugins/media-transcript/main.js',
-    '.obsidian/plugins/media-transcript/manifest.json',
-    '.obsidian/plugins/media-transcript/styles.css',
-    '.obsidian/plugins/media-transcript/data.json',
-    '.obsidian/plugins/media-transcript/LICENSE',
-)
 BLOCKED_PARTS = {'__pycache__', '.git', '.cache', 'cache', 'caches', 'logs', 'log',
                  'crashes', 'crashdumps', 'pip-cache', 'wheelhouse', '.pytest_cache',
                  'gpucache', 'dawncache', 'code cache', 'local storage', 'session storage'}
@@ -78,8 +68,6 @@ def collect_files(root):
         add(relative)
     for relative in OPTIONAL_ROOT_FILES:
         add(relative, False)
-    for relative in TEMPLATE_FILES:
-        add('vault-template/' + relative)
     for dirname in ('licenses', 'ui', 'runtime', 'tools/obs'):
         base = root / dirname
         if not base.is_dir():
@@ -101,7 +89,9 @@ def collect_files(root):
                 if local.as_posix() != 'portable_mode.txt' and local.parts[0] not in {'bin', 'data', 'obs-plugins'}:
                     continue
             add(relative.as_posix())
-    for required in ('ui/index.html', 'runtime/python.exe', 'runtime/pythonw.exe',
+    for required in ('ui/index.html', 'ui/review.js', 'ui/review.css',
+                     'ui/vendor/plyr/plyr.min.js', 'ui/vendor/plyr/plyr.css', 'ui/vendor/plyr/plyr.svg',
+                     'licenses/Plyr-MIT.txt', 'runtime/python.exe', 'runtime/pythonw.exe',
                      'runtime/python312._pth', 'tools/obs/bin/64bit/obs64.exe',
                      'tools/obs/portable_mode.txt'):
         if required not in entries:
@@ -184,7 +174,7 @@ def write_zip(path, entries):
     return {'filename': path.name, 'bytes': path.stat().st_size, 'sha256': sha256(path)}
 
 
-def build(root, outdir, source_dir=None, *, candidate=False, version='0.2.0', launcher=None):
+def build(root, outdir, source_dir=None, *, candidate=False, version='0.3.0', launcher=None):
     root, outdir = Path(root).resolve(), Path(outdir).resolve()
     source_dir = Path(source_dir or root / 'build/dependency-sources').resolve()
     if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?', version):
@@ -233,7 +223,7 @@ def main():
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--outdir', required=True, type=Path)
     parser.add_argument('--source-dir', type=Path)
-    parser.add_argument('--version', default='0.2.0')
+    parser.add_argument('--version', default='0.3.0')
     parser.add_argument('--candidate', action='store_true')
     args = parser.parse_args()
     print(json.dumps(build(args.root, args.outdir, args.source_dir,

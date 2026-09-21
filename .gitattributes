@@ -1,0 +1,3 @@
+# Preserve the upstream asset bytes recorded in ui/vendor/plyr/README.md.
+ui/vendor/plyr/plyr.* -text
+licenses/Plyr-MIT.txt -text

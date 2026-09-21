@@ -406,10 +406,10 @@ class DesktopServiceTests(unittest.TestCase):
                 self.assertEqual([j['state'] for j in state['background_jobs']], ['running', 'queued'])
                 self.assertEqual(calls, ['capture-a'])
                 with patch.object(bridge.recorder, 'open_review') as review:
-                    self.assertTrue(self.service.open_review('capture-a')['ok'])
-                    self.wait(background=False)
+                    result = self.service.open_review('capture-a')
+                    self.assertFalse(result['ok'])
                     review.assert_not_called()
-                    self.assertIn('后台整理', self.service.get_state()['data']['activity']['detail'])
+                    self.assertIn('后台整理', result['error'])
                 self.assertEqual(bridge.recorder.read(b.path / 'session.json')['state'], '待整理')
                 self.assertFalse(self.service.close_allowed())
                 self.service._recover()
@@ -653,16 +653,108 @@ class DesktopServiceTests(unittest.TestCase):
             process.assert_not_called()
             self.assertEqual(bridge.recorder.read(job)['task_id'], 'old-task')
 
-    def test_review_distinguishes_plugin_ack_from_browser_request(self):
-        session = self.session(state='可回看')
-        with patch.object(bridge.recorder, 'open_review', return_value='obsidian'):
-            self.service.open_review(session.meta['id'])
-            self.wait()
-            self.assertIn('插件已确认', self.service.get_state()['data']['activity']['detail'])
-        with patch.object(bridge.recorder, 'open_review', return_value='browser-requested'):
-            self.service.open_review(session.meta['id'])
-            self.wait()
-            self.assertIn('未确认', self.service.get_state()['data']['activity']['detail'])
+    def test_review_does_not_replace_recording_activity(self):
+        old = self.session(state='可回看')
+        active = self.session('new-recording', state='录制中')
+        self.service._active = active
+        before = dict(self.service._activity)
+        opener = MagicMock(return_value={'ready': True})
+        self.service.set_review_opener(opener)
+        result = self.service.open_review(old.meta['id'])
+        self.assertTrue(result['ok'], result)
+        self.assertTrue(result['data']['ready'])
+        self.assertEqual(self.service._activity, before)
+        self.assertFalse(self.service.open_review(active.meta['id'])['ok'])
+        self.service._active = None
+
+    def test_idle_readiness_never_prevents_exit(self):
+        self.service._readiness.update(checking=True)
+        self.service._readiness_thread = MagicMock()
+        self.service._readiness_thread.is_alive.return_value = True
+        self.assertTrue(self.service.close_allowed())
+        self.assertTrue(self.service._closed.is_set())
+        self.service._readiness_thread = None
+
+    def test_closing_a_slow_idle_probe_is_nonblocking(self):
+        entered, release = threading.Event(), threading.Event()
+        def probe():
+            entered.set()
+            release.wait(3)
+            return deepcopy(self.devices), None
+        with patch.object(self.service, '_probe_obs_devices', side_effect=probe):
+            try:
+                self.service._request_readiness(invalidate=True)
+                self.assertTrue(entered.wait(2))
+                start = time.monotonic()
+                self.assertTrue(self.service.close_allowed())
+                self.assertLess(time.monotonic()-start, .2)
+                self.assertFalse(self.service._request_readiness())
+            finally:
+                release.set()
+                self.wait()
+
+    def test_close_waits_for_queued_work_and_refuses_new_jobs(self):
+        self.service._background_jobs['synthetic'] = {'state': 'running'}
+        done = threading.Event()
+        thread = threading.Thread(target=lambda: (self.service.finish_for_close(), done.set()))
+        try:
+            thread.start()
+            deadline = time.monotonic()+2
+            while not self.service._exit_pending and time.monotonic()<deadline:
+                time.sleep(.01)
+            self.assertTrue(self.service._exit_pending)
+            self.assertFalse(self.service.start_recording({})['ok'])
+            self.assertFalse(done.is_set())
+            with self.service._lock:
+                self.service._background_jobs.clear()
+            self.assertTrue(done.wait(2))
+            self.assertTrue(self.service._closed.is_set())
+        finally:
+            self.service._background_jobs.clear()
+            thread.join(3)
+
+    def test_safe_close_stops_recording_once_and_waits_for_file_save(self):
+        session = self.session(state='录制中')
+        self.service._active = session
+        entered, release, done = threading.Event(), threading.Event(), threading.Event()
+        errors = []
+
+        def finish():
+            try:
+                self.service.finish_for_close()
+                done.set()
+            except Exception as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=finish)
+        with patch.object(session, 'stop', side_effect=lambda: (entered.set(), release.wait(3))) as stop:
+            try:
+                thread.start()
+                self.assertTrue(entered.wait(2))
+                self.assertFalse(done.is_set())
+                self.assertFalse(self.service._closed.is_set())
+                self.assertFalse(self.service.start_recording({})['ok'])
+                release.set()
+                self.assertTrue(done.wait(2), errors)
+                stop.assert_called_once()
+                self.assertIsNone(self.service._active)
+                self.assertEqual(bridge.recorder.Session(session.path).meta['state'], '待整理')
+                self.assertTrue(self.service._closed.is_set())
+            finally:
+                release.set()
+                thread.join(3)
+
+    def test_failed_stop_preserves_recording_and_cancels_pending_close(self):
+        session = self.session(state='录制中')
+        self.service._active = session
+        with patch.object(session, 'stop', side_effect=RuntimeError('synthetic stop failure')) as stop:
+            with self.assertRaisesRegex(RuntimeError, '尚未确认保存成功'):
+                self.service.finish_for_close()
+            stop.assert_called_once()
+        self.assertIs(self.service._active, session)
+        self.assertFalse(self.service._closed.is_set())
+        self.assertFalse(self.service._exit_pending)
+
 
     def test_external_processing_lock_is_not_clobbered_during_recovery(self):
         import msvcrt

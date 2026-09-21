@@ -1,15 +1,14 @@
 """Local WebView2 desktop shell. The service is the authority for all jobs."""
 from pathlib import Path
 import sys
-import threading
 from contextlib import contextmanager
 
 BRIDGE_METHODS = ('get_state', 'refresh_devices', 'save_settings', 'save_preset', 'select_preset', 'choose_directory',
-                  'choose_obsidian', 'import_hotwords', 'choose_hotword_files', 'open_dictionary_site',
+                  'import_hotwords', 'choose_hotword_files', 'open_dictionary_site',
                   'start_recording', 'stop_recording',
                   'process_session', 'open_review', 'package_session', 'open_folder',
                   'open_raw', 'save_cloud_key', 'verify_cloud_key', 'recover_cloud_task',
-                  'model_action', 'open_official_obsidian')
+                  'model_action')
 
 
 class DesktopAPI:
@@ -36,37 +35,6 @@ def instance_lock(root):
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
 
 
-def _close_is_allowed(result):
-    """Fail closed if a bridge/service response is missing or malformed."""
-    if isinstance(result, bool):
-        return result
-    if isinstance(result, dict) and result.get('ok') is True:
-        data = result.get('data')
-        if isinstance(data, bool):
-            return data
-        if isinstance(data, dict):
-            return data.get('allowed') is True
-    return False
-
-
-def build_close_guard(service, window):
-    def closing():
-        try:
-            allowed = _close_is_allowed(service.close_allowed())
-        except Exception:
-            allowed = False
-        if not allowed:
-            # Returning False cancels the native close; do not block its UI event.
-            def minimize():
-                try:
-                    window.minimize()
-                except Exception:
-                    pass
-            threading.Thread(target=minimize, name='minimize-on-active-close', daemon=True).start()
-        return allowed
-    return closing
-
-
 def main():
     root = Path(__file__).resolve().parent
     with instance_lock(root):
@@ -79,15 +47,19 @@ def run_window(root):
 
     service = DesktopService(root)
     window = webview.create_window(
-        '游戏体验记录器', url=(root / 'ui' / 'index.html').as_uri(),
-        js_api=DesktopAPI(service), width=1000, height=740, min_size=(820, 620),
-        frameless=False, background_color='#ffffff', text_select=True,
+        'Think Aloud · 体验记录器', url=(root / 'ui' / 'index.html').as_uri(),
+        js_api=DesktopAPI(service), width=1240, height=960, min_size=(820, 620),
+        frameless=False, background_color='#fafbf7', text_select=True,
     )
+    from window_manager import WindowManager
+    windows = WindowManager(service, webview)
+    windows.bind_main(window)
     service.set_window(window)
-    window.events.closing += build_close_guard(service, window)
+    service.set_review_opener(windows.open_review)
     # Explicit renderer prevents silent fallback to the obsolete MSHTML engine.
+    webview.settings['ALLOW_FILE_URLS'] = True
     webview.start(gui='edgechromium', debug=False, private_mode=False,
-                  storage_path=str(root / 'state' / 'webview'))
+                  storage_path=str(root / 'state' / 'webview'), icon=str(root / 'ui' / 'brand.ico'))
     return 0
 
 

@@ -29,7 +29,7 @@ import secret_store
 
 PUBLIC_KEYS = ('game', 'vault', 'preset', 'source', 'window', 'monitor', 'mic',
                'language', 'hotwords', 'hotword_files', 'hotword_manual',
-               'transcription_provider', 'obsidian_exe', 'configured')
+               'transcription_provider', 'configured')
 EDITABLE_KEYS = set(PUBLIC_KEYS) - {'configured'}
 PRESET_KEYS = ('preset', 'source', 'window', 'monitor', 'mic', 'language', 'hotwords',
                'hotword_files', 'hotword_manual')
@@ -59,6 +59,9 @@ class DesktopService:
         self._background_history = {}
         self._background_thread = None
         self._active = None
+        self._exit_pending = False
+        self._review_opener = None
+        self._review_opening = 0
         self._uncertain_ids = set()
         self._obs_uncertain = False
         self._closed = threading.Event()
@@ -67,12 +70,12 @@ class DesktopService:
         self._readiness = dict(ready=False, checking=True, errors=[], checked_at=None)
         self._cfg = load_settings(self.root)
         self._cfg.setdefault('transcription_provider', 'later')
-        self._cfg.setdefault('obsidian_exe', '')
+        self._cfg.pop('obsidian_exe', None)
         self._initialize_presets()
         self._model = ModelManager(self.root)
         self._activity = dict(busy=False, kind='idle', status='待开始', detail='',
                               active_id=None, elapsed_seconds=0)
-        self._launch('devices', self._startup, status='检查上次场次')
+        self._launch('recovery', self._startup, status='检查上次场次')
         self._monitor = threading.Thread(target=self._monitor_loop, daemon=True,
                                          name='recording-health')
         self._monitor.start()
@@ -108,8 +111,8 @@ class DesktopService:
             if status:
                 self._activity['status'] = status
 
-    def _guard(self, allow_active=False, allow_uncertain=False):
-        if self._closed.is_set():
+    def _guard(self, allow_active=False, allow_uncertain=False, allow_closing=False):
+        if self._closed.is_set() or (self._exit_pending and not allow_closing):
             raise RuntimeError('应用正在关闭。')
         if self._activity['busy']:
             raise RuntimeError('当前操作尚未结束，请稍候。')
@@ -123,7 +126,7 @@ class DesktopService:
     def _launch(self, kind, operation, *, status=None, allow_active=False, allow_uncertain=False):
         with self._lock:
             try:
-                self._guard(allow_active, allow_uncertain)
+                self._guard(allow_active, allow_uncertain, allow_closing=kind == 'saving')
             except Exception as error:
                 return self._error(error)
             self._activity.update(busy=True, kind=kind, status=status or '处理中', detail='')
@@ -313,14 +316,13 @@ class DesktopService:
                 model = {key: model.get(key) for key in ('state', 'model', 'path', 'downloaded_bytes',
                          'total_bytes', 'error', 'source', 'revision')}
                 model['error'] = self._safe_text(model.get('error'))
-                return ok(dict(config=self._public_config(), sessions=sessions,
+                return ok(dict(config=self._public_config(), sessions=sessions, closing=self._exit_pending,
                                default_vault=self._default_vault(),
                                readiness=self._visible_readiness(),
                                presets=self._preset_list(), active_preset_id=self._cfg.get('active_preset_id'),
                                background_jobs=[self._job_summary(job) for job in self._background_jobs.values()],
                                activity=activity, devices=deepcopy(self._devices), model=model,
                                capabilities=dict(cloud_key=self._has_key(),
-                                   obsidian=self._obsidian_available(),
                                    obs=(self.root / 'tools/obs/bin/64bit/obs64.exe').is_file(),
                                    local_model=model['state'] == 'ready')))
         except Exception as error:
@@ -332,13 +334,14 @@ class DesktopService:
     def _startup(self):
         self._recover()
         with self._lock:
-            initialize = (not self._startup_launch_attempted and self._cfg.get('configured')
+            self._activity['kind'] = 'devices'
+            initialize = (not self._closed.is_set() and not self._startup_launch_attempted and self._cfg.get('configured')
                           and self._cfg.get('active_preset_id') and self._active is None
                           and not self._obs_uncertain and not self._uncertain_ids
                           and (self.root / 'tools/obs/bin/64bit/obs64.exe').is_file())
             if initialize:
                 self._startup_launch_attempted = True
-        if initialize:
+        if initialize and not self._closed.is_set():
             try:
                 # The existing client connects before considering a launch and
                 # never launches another instance after a readiness failure.
@@ -398,6 +401,8 @@ class DesktopService:
         Never switch profiles/collections, configure capture, or stop outputs.
         Service jobs hold the same operation lock, so Start cannot interleave.
         """
+        if self._closed.is_set():
+            return None, ('CLOSING', '正在关闭。')
         client = recorder.client(False)
         temporary = []
         try:
@@ -413,6 +418,8 @@ class DesktopService:
                 ('window', 'window_capture', 'window', {}),
                 ('monitor', 'monitor_capture', 'monitor_id', {}),
             ):
+                if self._closed.is_set():
+                    return None, ('CLOSING', '正在关闭。')
                 name = next((item['inputName'] for item in inputs if item.get('inputKind') == kind), None)
                 if name is None:
                     # Check again before any temporary input creation. No source
@@ -531,9 +538,6 @@ class DesktopService:
             self._readiness_thread.start()
             return True
 
-    def _obsidian_available(self):
-        from review_runtime import find_obsidian
-        return find_obsidian(self._cfg.get('obsidian_exe')) is not None
 
     def _validate_vault(self, value):
         if not isinstance(value, str) or not value.strip() or '\x00' in value:
@@ -583,12 +587,7 @@ class DesktopService:
             files, manual = updated.get('hotword_files', []), updated.get('hotword_manual', '')
         updated.update(compile_hotword_snapshots(files, manual,
                        qwen=updated['transcription_provider'] == 'qwen'))
-        exe = updated.get('obsidian_exe', '')
-        if exe:
-            path = Path(exe)
-            if not path.is_absolute() or path.name.lower() != 'obsidian.exe' or not path.is_file():
-                raise ValueError('请选择已安装的 Obsidian.exe。')
-            updated['obsidian_exe'] = str(path.resolve())
+        updated.pop('obsidian_exe', None)
         # Saved selections remain editable even while devices are disconnected.
         # Availability is a readiness gate, not a reason to discard a preset.
         updated['configured'] = bool(updated.get('mic') and updated.get('window' if updated['source'] == '游戏窗口' else 'monitor'))
@@ -602,25 +601,6 @@ class DesktopService:
         for name in ('场次', '打包'):
             if (vault / name).resolve().parent != vault.resolve():
                 raise ValueError('资料目录指向外部位置，已停止写入。')
-        source = self.root / 'vault-template/.obsidian'
-        for file in source.rglob('*'):
-            if file.is_file():
-                dest = vault / '.obsidian' / file.relative_to(source)
-                if not dest.resolve().is_relative_to(vault.resolve()):
-                    raise ValueError('资料库插件目录指向外部位置，已停止写入。')
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                if not dest.exists():
-                    shutil.copy2(file, dest)
-        enabled = vault / '.obsidian/community-plugins.json'
-        if not enabled.resolve().is_relative_to(vault.resolve()):
-            raise ValueError('资料库配置文件指向外部位置。')
-        plugins = recorder.read(enabled) if enabled.exists() else []
-        if not isinstance(plugins, list) or not all(isinstance(name, str) for name in plugins):
-            raise ValueError('资料库插件清单格式不正确，已保留原文件。')
-        for name in ['media-transcript', 'experience-opener']:
-            if name not in plugins:
-                plugins.append(name)
-        recorder.write(enabled, plugins)
         instructions = vault / '办公室打开说明.md'
         if not instructions.exists():
             instructions.write_text(recorder.OFFICE, encoding='utf-8')
@@ -783,14 +763,6 @@ class DesktopService:
         except Exception as error:
             return self._error(error)
 
-    def choose_obsidian(self):
-        try:
-            paths = self._dialog('file', allow_multiple=False, file_types=('Obsidian executable (*.exe)',))
-            if paths and Path(paths[0]).name.lower() != 'obsidian.exe':
-                raise ValueError('请选择 Obsidian.exe。')
-            return ok({'path': str(Path(paths[0]).resolve()) if paths else None})
-        except Exception as error:
-            return self._error(error)
 
     def import_hotwords(self, current_text=None):
         try:
@@ -1054,27 +1026,32 @@ class DesktopService:
         except Exception as error:
             return self._error(error)
 
-    def open_review(self, id, mode='obsidian'):
-        if mode not in ('obsidian', 'html'):
-            return self._error('回看方式无效。')
-
-        def work():
-            session = self._session(id)
+    def open_review(self, id):
+        admitted = False
+        try:
             with self._lock:
+                if self._closed.is_set() or self._exit_pending:
+                    raise RuntimeError('记录器正在关闭。')
+                session = self._session(id)
                 if self._background_for(session.path):
                     raise RuntimeError('此场次仍在后台整理或排队，请等待整理结束后回看。')
-            if mode == 'html':
-                file = self._contained_file(session, '独立回看.html')
-                os.startfile(file)
-                self._progress('已请求浏览器打开独立回看网页。', status='已请求打开')
-            else:
-                self._install_vault(session.path.parent.parent)
-                result = recorder.open_review(session, self._progress)
-                if result == 'obsidian':
-                    self._progress('Obsidian 插件已确认打开同步回看。', status='回看已打开')
-                else:
-                    self._progress('Obsidian 未确认打开；已请求浏览器打开独立回看网页。', status='已请求网页回看')
-        return self._launch('review', work, status='正在打开回看')
+                if self._active and self._active.path == session.path:
+                    raise RuntimeError('此场次仍在录制，请先结束并保存。')
+                opener = self._review_opener
+                if opener is None:
+                    raise RuntimeError('回看窗口尚未就绪。')
+                self._review_opening += 1
+                admitted = True
+            return ok(opener(session))
+        except Exception as error:
+            return self._error(error)
+        finally:
+            if admitted:
+                with self._lock:
+                    self._review_opening -= 1
+
+    def set_review_opener(self, opener):
+        self._review_opener = opener
 
     def package_session(self, id):
         def work():
@@ -1194,14 +1171,6 @@ class DesktopService:
             except Exception as error:
                 return self._error(error)
 
-    def open_official_obsidian(self):
-        try:
-            requested = webbrowser.open('https://obsidian.md/download')
-            if not requested:
-                raise RuntimeError('未能请求浏览器打开，请访问 https://obsidian.md/download。')
-            return ok({'requested': True})
-        except Exception as error:
-            return self._error(error)
 
     def _recover(self):
         connected = False
@@ -1325,19 +1294,55 @@ class DesktopService:
             self._progress('OBS 正在录制 ' + str(getattr(state, 'output_timecode', '')) + '；未开始电平检测。', status='录制中')
 
     def close_allowed(self):
-        """Internal pywebview closing event handler; intentionally returns bool."""
+        """Only durable work blocks close. Idle readiness never owns the window."""
         with self._lock:
-            blocked = (self._activity['busy'] or self._active is not None or bool(self._uncertain_ids)
-                       or bool(self._background_jobs)
-                       or self._obs_uncertain or self._dialog_open or self._readiness['checking']
-                       or bool(self._readiness_thread and self._readiness_thread.is_alive()))
+            foreground = self._activity['busy'] and self._activity['kind'] not in ('devices', 'idle')
+            blocked = (foreground or self._active is not None or bool(self._uncertain_ids)
+                       or bool(self._background_jobs) or self._obs_uncertain or self._dialog_open
+                       or self._review_opening > 0)
             if not blocked:
                 self._model.pause_download()
-                stopped = self._model.wait(timeout=0)
-                state = self._model.status()['state']
-                blocked = stopped is False or state in ('downloading', 'verifying')
+                blocked = self._model.wait(timeout=0) is False
             if blocked:
-                self._progress('操作仍在后台进行，窗口已最小化。请等待录制、保存或模型写入安全结束后关闭。')
                 return False
             self._closed.set()
             return True
+
+    def close_reason(self):
+        with self._lock:
+            if self._active is not None:
+                return '当前场次仍在录制，退出前需要先保存录像。'
+            if self._uncertain_ids or self._obs_uncertain:
+                return '录制状态尚未确认，请先重新检查录制引擎。'
+            if self._background_jobs:
+                return '还有场次正在整理或排队，完成后可以安全关闭。'
+            return '当前操作尚未完成，需要等到资料安全保存后关闭。'
+
+    def finish_for_close(self):
+        with self._lock:
+            if self._uncertain_ids or self._obs_uncertain:
+                raise RuntimeError('无法确认录制已停止，请先重新检查录制引擎。')
+            if self._dialog_open:
+                raise RuntimeError('请先完成或取消当前文件选择。')
+            self._exit_pending = True
+        stop_requested = False
+        try:
+            while not self._closed.is_set():
+                with self._lock:
+                    if self._uncertain_ids or self._obs_uncertain:
+                        raise RuntimeError('录制状态无法确认，请重新检查后关闭。')
+                    active, busy = self._active is not None, self._activity['busy']
+                    if active and not busy:
+                        if stop_requested:
+                            raise RuntimeError('录像尚未确认保存成功，请处理录制错误后再关闭。')
+                        result = self.stop_recording()
+                        if not result['ok']:
+                            raise RuntimeError(result['error'])
+                        stop_requested = True
+                if self.close_allowed():
+                    return
+                self._closed.wait(.2)
+        except Exception:
+            with self._lock:
+                self._exit_pending = False
+            raise

@@ -50,15 +50,15 @@ def main():
         checks['ffmpeg'] = str(Path(FFMPEG).relative_to(root))
         checks['library'] = cfg['vault']
         from model_manager import ModelManager
-        from review_runtime import find_obsidian
         checks['model_available'] = ModelManager(root).resolve_model() is not None
         checks['model_optional'] = True
         checks['record_engine'] = (root / 'tools/obs/bin/64bit/obs64.exe').is_file()
-        checks['obsidian_installed'] = find_obsidian(cfg.get('obsidian_exe')) is not None
         checks['default_mode'] = cfg.get('transcription_provider', 'later')
         assert checks['record_engine'], '缺少 OBS 录制引擎'
         assert (root / 'ui/index.html').is_file(), '缺少桌面界面'
         assert (root / 'player.html').is_file(), '缺少独立回看模板'
+        for asset in ('review.js', 'review.css', 'vendor/plyr/plyr.min.js', 'vendor/plyr/plyr.css', 'vendor/plyr/plyr.svg'):
+            assert (root / 'ui' / asset).is_file(), '缺少回看资源：' + asset
         import ctypes
         kernel = ctypes.WinDLL('kernel32', use_last_error=True)
         kernel.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
@@ -107,7 +107,8 @@ def main():
                 checks['session_package'] = str(session.package())
                 if args.review_test:
                     checks['review'] = open_review(session)
-                    assert checks['review'] == 'obsidian', '未收到 Obsidian 插件回看确认'
+                    assert checks['review'] == 'browser-requested'
+                    checks['review_notice'] = '仅请求浏览器打开，实际播放需桌面验证'
             finally:
                 if recording:
                     session.stop()

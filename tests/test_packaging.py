@@ -7,7 +7,7 @@ import tempfile
 import unittest
 import zipfile
 
-from scripts.build_portable import (ROOT_FILES, TEMPLATE_FILES, build, collect_files,
+from scripts.build_portable import (ROOT_FILES, build, collect_files,
                                     launcher_bytes, read_sources, sha256)
 from scripts.fetch_runtime import extract_webview_notices, supplement
 
@@ -19,9 +19,8 @@ class PackagingTests(unittest.TestCase):
         self.root = self.base / 'fixture'
         for path in ROOT_FILES:
             self.write(path, b'fixture source\n')
-        for path in TEMPLATE_FILES:
-            self.write('vault-template/' + path, b'fixture template\n')
-        for path in ('ui/index.html', 'ui/app.js', 'licenses/Python.txt',
+        for path in ('ui/index.html', 'ui/app.js', 'ui/review.js', 'ui/review.css',
+                     'ui/vendor/plyr/plyr.min.js', 'ui/vendor/plyr/plyr.css', 'ui/vendor/plyr/plyr.svg', 'licenses/Plyr-MIT.txt', 'licenses/Python.txt',
                      'runtime/python.exe', 'runtime/pythonw.exe', 'runtime/python312._pth',
                      'runtime/Lib/site-packages/fixture-1.dist-info/licenses/LICENSE',
                      'runtime/Lib/site-packages/fixture-1.dist-info/METADATA',

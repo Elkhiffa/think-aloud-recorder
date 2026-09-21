@@ -5,12 +5,12 @@
   else root.RecorderState = exported;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
-  const FIELDS = ['game','vault','preset','source','window','monitor','mic','language','hotwords','hotword_files','hotword_manual','transcription_provider','obsidian_exe'];
+  const FIELDS = ['game','vault','preset','source','window','monitor','mic','language','hotwords','hotword_files','hotword_manual','transcription_provider'];
   const clone = value => JSON.parse(JSON.stringify(value));
   const splitWords = text => String(text||'').replace(/^\uFEFF/,'').split(/[,，;；、\r\n]+/).map(word=>word.normalize('NFC').trim()).filter(Boolean);
   const vocabularyWords = draft => [...new Set([...(draft?.hotword_files||[]).flatMap(file=>file.words||[]),...splitWords(draft?.hotword_manual)].map(word=>word.normalize('NFC').trim()).filter(Boolean))];
   function defaults(vault='') {
-    return {game:'',vault,preset:'均衡 1080p30',source:'游戏窗口',window:'',monitor:'',mic:'',language:'zh',hotwords:'',hotword_files:[],hotword_manual:'',transcription_provider:'later',obsidian_exe:''};
+    return {game:'',vault,preset:'均衡 1080p30',source:'游戏窗口',window:'',monitor:'',mic:'',language:'zh',hotwords:'',hotword_files:[],hotword_manual:'',transcription_provider:'later'};
   }
   class State {
     constructor() { this.snapshot=null;this.connected=false;this.draft=null;this.editingId=null;this.step=1;this.requestPending=false;this.confirmedVault=''; }
@@ -24,7 +24,7 @@
     get backgroundJobs() { return this.snapshot?.background_jobs||[]; }
     sessionJob(id) { return this.backgroundJobs.find(job=>String(job.session_id)===String(id)); }
     get recording() { return this.activity.kind==='recording'; }
-    get busy() { return !!this.activity.busy||this.recording; }
+    get busy() { return !!this.snapshot?.closing||!!this.activity.busy||this.recording; }
     get canStart() { return this.connected&&!this.requestPending&&!this.busy&&this.readiness.ready===true&&this.readiness.checking!==true; }
     get canConfigure() { return this.connected&&!this.requestPending&&!this.busy; }
     sameVault(a,b) { return !!a&&!!b&&String(a).replace(/\\/g,'/').replace(/\/$/,'').toLowerCase()===String(b).replace(/\\/g,'/').replace(/\/$/,'').toLowerCase(); }

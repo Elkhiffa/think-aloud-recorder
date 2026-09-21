@@ -34,39 +34,12 @@ def config():
 def save_config(cfg):
     from portable_config import stored_settings
     write(ROOT/'config.json',stored_settings(ROOT,cfg))
-def open_review(session,progress=lambda s:None):
-    import urllib.parse
-    if session.meta['state']!='可回看':raise RuntimeError('此场次尚未完成自动转写，请点击“开始整理”或“重试生成回看”。')
-    for name in ['录像.mp4','录像.whisper.json','独立回看.html']:
-        if not (session.path/name).is_file():raise RuntimeError('缺少 '+name+'，请恢复整理或查看资料文件夹。')
-    vault=session.path.parent.parent;data_dir=ROOT/'state/obsidian';registry=data_dir/'obsidian.json'
-    state=read(registry) if registry.exists() else {'vaults':{}}
-    if state.get('vaults') and not any(Path(v['path']).resolve()==vault.resolve() for v in state['vaults'].values()):
-        data_dir=ROOT/'state'/('obsidian-'+hashlib.sha256(str(vault.resolve()).encode()).hexdigest()[:12]);registry=data_dir/'obsidian.json'
-        state=read(registry) if registry.exists() else {'vaults':{}}
-    vault_id=next((k for k,v in state.get('vaults',{}).items() if Path(v['path']).resolve()==vault.resolve()),None)
-    if vault_id is None:
-        vault_id=uuid.uuid4().hex[:16];state.setdefault('vaults',{})[vault_id]={'path':str(vault),'ts':int(time.time()*1000),'open':True};write(registry,state)
-    nonce=uuid.uuid4().hex;rel=(session.path/'录像.mp4').relative_to(vault).as_posix()
-    request_dir=vault/'.experience/requests';request_dir.mkdir(parents=True,exist_ok=True)
-    write(request_dir/(str(int(time.time()*1000))+'-'+nonce+'.json'),{'file':rel,'nonce':nonce,'created':int(time.time()*1000)})
-    url='obsidian://experience?'+urllib.parse.urlencode({'vault':vault_id,'file':rel,'nonce':nonce})
-    from review_runtime import find_obsidian
-    exe=find_obsidian(config().get('obsidian_exe'))
-    if exe:
-        progress('正在打开 Obsidian 同步回看，等待插件确认…')
-        subprocess.Popen([str(exe),'--user-data-dir='+str(data_dir),'--disable-gpu',url])
-        for _ in range(40):
-            time.sleep(0.25)
-            try:
-                ack=read(vault/'.experience/ack'/f'{nonce}.json')
-                if ack.get('nonce')==nonce:
-                    if ack.get('error'):break
-                    progress('已在 Obsidian 打开同步回看：'+session.meta['game']);return 'obsidian'
-            except (OSError,ValueError):pass
-    progress('Obsidian 未确认打开，正在打开本地浏览器同步回看…')
-    os.startfile(session.path/'独立回看.html')
-    progress('已请求打开独立回看网页。如浏览器未出现，请在资料文件夹双击“独立回看.html”。')
+def open_review(session, progress=lambda s: None):
+    """Portable browser entry; the desktop service owns native review windows."""
+    data = read(session.path / '录像.whisper.json')
+    make_player(session.path, session.meta, data['segments'])
+    os.startfile(session.path / '独立回看.html')
+    progress('已请求打开独立回看网页。')
     return 'browser-requested'
 def stamp(t):
     ms=round(t*1000);s,ms=divmod(ms,1000);m,s=divmod(s,60);h,m=divmod(m,60)
@@ -375,19 +348,16 @@ class Session:
         with zipfile.ZipFile(tmp,'w',compression=zipfile.ZIP_STORED,allowZip64=True) as z:
             for src in folder.rglob('*'):
                 if src.is_file() and not src.name.endswith(('.tmp','.pending.mp4','.lock')):
-                    rel=Path('场次')/folder.name/src.relative_to(folder);z.write(src,str(rel))
+                    rel=Path('场次')/folder.name/src.relative_to(folder)
+                    if src.name == '独立回看.html' and src.parent == folder:
+                        continue
+                    z.write(src,str(rel))
                     if src.suffix not in ['.md','.txt','.html']:hashes[rel.as_posix()]=sha256(src)
-            # A user's vault may contain unrelated plugin credentials. Ship only
-            # our audited review template, never the user's .obsidian directory.
-            review_files=('community-plugins.json','app.json','appearance.json',
-                'plugins/experience-opener/main.js','plugins/experience-opener/manifest.json',
-                'plugins/media-transcript/main.js','plugins/media-transcript/manifest.json',
-                'plugins/media-transcript/styles.css','plugins/media-transcript/LICENSE',
-                'plugins/media-transcript/data.json')
-            template=ROOT/'vault-template/.obsidian'
-            for relative in review_files:
-                src=template/relative
-                if src.is_file() and not src.is_symlink():z.write(src,'.obsidian/'+relative)
+            transcript = folder / '录像.whisper.json'
+            if transcript.is_file():
+                from review_runtime import render_player, review_payload
+                page = render_player(ROOT, review_payload(folder, self.meta, read(transcript)['segments']))
+                z.writestr((Path('场次') / folder.name / '独立回看.html').as_posix(), page)
             z.writestr('校验清单.json',json.dumps(hashes,ensure_ascii=False,indent=2))
             z.writestr('办公室打开说明.md',OFFICE)
         with zipfile.ZipFile(tmp) as z:
@@ -403,9 +373,17 @@ def valid_segments(segments,duration):
     for s in segments:
         if not (0<=s['start']<=s['end']<=duration+0.05 and s['start']>=last):raise RuntimeError('字幕时间轴校验失败。')
         last=s['start']
-OFFICE='''# 办公室回看\n\n完整解压 ZIP（含 .obsidian）到任意文件夹。在 Obsidian 中选择“打开本地仓库”，选择解压后的根目录，并启用已附带的 Media Transcript 和 Experience Opener 插件。打开场次内 录像.mp4；若出现普通视频，右键选择 Open in Media Transcript。\n\n也可以双击场次内“独立回看.html”，用本地浏览器并排回看与点击逐字稿，无需安装录制或转写引擎。\n\n在 复盘.md 写自己的复盘与 insight。引用场次 ID + 起止时间。仅传回改过的 Markdown；不要替换原录像或原始转写。跨场次分析另建 Markdown 文件。没有自动联网或云同步。\n\n更换家庭保存位置时，先把完整资料库复制过去，再在记录器设置里选择新目录。\n'''
-def make_player(p,meta,segments):
-    import html
-    data=json.dumps(segments,ensure_ascii=False).replace('<','\\u003c')
-    template=(ROOT/'player.html').read_text(encoding='utf-8')
-    (p/'独立回看.html').write_text(template.replace('%%TITLE%%',html.escape(meta['game'])).replace('%%ID%%',meta['id']).replace('%%DATA%%',data),encoding='utf-8')
+OFFICE = """# 办公室回看
+
+完整解压 ZIP，在记录器中选择资料库并打开场次回看，也可以双击场次内的“独立回看.html”。网页内已包含播放器资源，无需联网或安装录制、转写引擎。
+
+回看窗口支持多开、点击逐字稿定位录像、空格播放/暂停、方向键前后 15 秒。视频下方可打开资料文件夹并复制路径。直接用浏览器打开网页时，“打开所在文件夹”会复制路径，可粘贴到文件资源管理器。
+
+在“复盘.md”记录自己的复盘与 insight。引用场次 ID + 起止时间。保留原录像、原始转写与手写笔记；没有自动联网或云同步。
+
+迁移时复制完整资料库，再在记录器设置中选择新目录。可将场次文件夹路径交给 agent 分析录像、逐字稿与复盘。
+"""
+
+def make_player(p, meta, segments):
+    from review_runtime import render_player, review_payload
+    (p / '独立回看.html').write_text(render_player(ROOT, review_payload(p, meta, segments)), encoding='utf-8')

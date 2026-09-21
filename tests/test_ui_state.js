@@ -37,7 +37,7 @@ test('new preset is independent; editing and cancellation preserve every saved s
   const saved=JSON.stringify(state.saved);
   state.openDraft('new');assert.equal(state.editingId,null);assert.equal(state.draft.game,'');
   assert.equal(state.draft.transcription_provider,'later');assert.equal(state.draft.hotwords,'');
-  assert.equal(state.draft.obsidian_exe,'');assert.equal(state.draft.window,'');
+  assert.equal(state.draft.obsidian_exe,undefined);assert.equal(state.draft.window,'');
   state.updateDraft('game','Unsaved');state.cancelDraft();assert.equal(JSON.stringify(state.saved),saved);
   state.openDraft('edit');assert.equal(state.editingId,'one');assert.equal(state.draft.vault,state.saved.vault);assert.equal(state.draft.hotword_manual,'Saved vocabulary');assert.deepEqual(state.draft.hotword_files,[]);
   state.updateDraft('hotwords','Unsaved words');state.cancelDraft();state.openDraft('edit');
@@ -107,7 +107,7 @@ function fakeDOM() {
     for(const data of match[2].matchAll(/data-([\w-]+)="([^"]*)"/g))el.dataset[data[1]]=data[2];
     elements.set(el.id,el);
   }
-  const steps=[1,2,3].map(n=>{const el=new Element();el.dataset.step=String(n);return el;});
+  const steps=[0,1,2,3].map(n=>{const el=new Element();el.dataset.step=String(n);return el;});
   document={activeElement:null,documentElement:{dataset:{}},getElementById:id=>elements.get(id),
     querySelector:selector=>selector.startsWith('#')?elements.get(selector.slice(1)):null,
     querySelectorAll:selector=>selector==='[data-draft]'?[...elements.values()].filter(el=>el.dataset.draft):selector==='[data-step]'?steps:[],
@@ -232,4 +232,37 @@ test('actual file-first UI supports multi-select, cancel, failure, removal and s
   await f.run('finishWizard()');f.elements.get('settingsButton').onclick();assert.equal(f.run('store.draft.hotword_files.length'),1);assert.equal(f.run('store.draft.hotword_files[0].id'),'b');
   await f.elements.get('dictionaryDownload').onclick({preventDefault(){}});await settle();
   const link=f.calls.find(call=>call.name==='open_dictionary_site');assert.ok(link);assert.equal(link.args.length,0);
+});
+
+
+test('first-use method introduction advances without saving; device validation still gates later steps',async()=>{
+  const f=await fixture(firstUseVault(false));
+  assert.equal(f.run('step'),0);
+  assert.equal(f.elements.get('step0').classList.contains('hidden'),false);
+  assert.equal(f.elements.get('wizardNext').textContent,'开始设置');
+  f.elements.get('wizardNext').onclick();
+  assert.equal(f.run('step'),1);
+  f.elements.get('game').value='合成体验';f.elements.get('game').listeners.input();
+  f.elements.get('wizardBack').onclick();assert.equal(f.run('step'),0);
+  f.elements.get('wizardNext').onclick();assert.equal(f.run('store.draft.game'),'合成体验');
+  f.elements.get('wizardNext').onclick();assert.equal(f.run('step'),1);
+  assert.ok(f.elements.get('wizardError').textContent.includes('窗口'));
+  assert.equal(f.calls.some(call=>['save_preset','start_recording'].includes(call.name)),false);
+  f.elements.get('wizardCancel').onclick();assert.equal(f.run('store.draft'),null);
+  f.elements.get('methodButton').onclick();assert.equal(f.elements.get('actionDialog').open,true);
+  assert.equal(f.run('store.draft'),null);
+});
+
+test('editing a preset excludes the guide and Back cannot enter it; new presets retain the guide',async()=>{
+  const f=await fixture();f.elements.get('settingsButton').onclick();
+  assert.equal(f.run('step'),1);
+  assert.equal(f.run("document.querySelectorAll('[data-step]')[0].classList.contains('hidden')"),true);
+  assert.equal(f.elements.get('wizardBack').classList.contains('hidden'),true);
+  f.elements.get('wizardBack').onclick();assert.equal(f.run('step'),1);
+  f.elements.get('wizardNext').onclick();assert.equal(f.run('step'),2);
+  f.elements.get('wizardBack').onclick();assert.equal(f.run('step'),1);
+  f.elements.get('wizardCancel').onclick();
+  f.elements.get('newPresetButton').onclick();assert.equal(f.run('step'),0);
+  assert.equal(f.run("document.querySelectorAll('[data-step]')[0].classList.contains('hidden')"),false);
+  assert.equal(f.calls.some(call=>['save_preset','start_recording'].includes(call.name)),false);
 });
