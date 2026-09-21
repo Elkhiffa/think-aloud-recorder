@@ -8,6 +8,32 @@ import portable_config as config
 
 
 class PortablePresets(unittest.TestCase):
+    def test_fresh_versions_share_sibling_default_without_creating_database(self):
+        with TemporaryDirectory() as tmp:
+            parent = Path(tmp).resolve()
+            for version in ('recorder-0.2', 'recorder-0.3'):
+                root = parent / version
+                root.mkdir()
+                (root / 'portable.json').write_text('{}')
+                with patch.object(config, '_setup_obs'), patch.object(config, '_free_port', return_value=12345):
+                    config._initialize_locked(root, 'same-machine')
+                saved = config._read(root / 'config.json')
+                self.assertEqual(saved['vault'], str(parent / 'think-aloud-database'))
+                self.assertFalse((parent / 'think-aloud-database').exists())
+
+    def test_existing_config_and_presets_do_not_migrate_to_new_default(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / 'portable.json').write_text('{}')
+            saved = {'vault': '体验资料库', 'configured': True,
+                     'presets': {'old': {'vault': str(root / 'existing-custom'), 'configured': True}},
+                     '_portable_root': str(root), '_portable_machine': 'same-machine'}
+            config._write(root / 'config.json', saved)
+            with patch.object(config, '_setup_obs') as setup:
+                config._initialize_locked(root, 'same-machine')
+            setup.assert_not_called()
+            self.assertEqual(config._read(root / 'config.json'), saved)
+
     def test_all_internal_vaults_are_relative_without_mutating_live_settings(self):
         with TemporaryDirectory() as tmp:
             root=Path(tmp).resolve();(root/'portable.json').write_text('{}')

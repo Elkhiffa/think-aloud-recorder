@@ -51,6 +51,40 @@ test('polling and external preset changes do not overwrite an open draft',()=>{
   assert.equal(state.draft.hotwords,'Typing');assert.deepEqual(state.startPayload(),{});
 });
 
+function firstUseVault(exists=true){return snapshot({presets:[],active_preset_id:null,
+  config:{...snapshot().config,vault:'D:\\Shared\\think-aloud-database',configured:false},
+  default_vault:{path:'D:\\Shared\\think-aloud-database',exists,is_directory:exists,requires_confirmation:exists},
+  readiness:{ready:false,checking:false,errors:[{message:'请先完成设置'}]}});}
+
+test('existing sibling database requires explicit reuse, bound to the path and cleared on cancellation',async()=>{
+  const f=await fixture(firstUseVault());
+  f.run("store.updateDraft('game','New Game');store.updateDraft('window','window-id');store.updateDraft('mic','mic-id');setStep(3)");
+  assert.equal(f.elements.get('reuseVaultNotice').classList.contains('hidden'),false);
+  assert.equal(f.elements.get('wizardNext').disabled,true);assert.equal(f.calls.some(c=>c.name==='save_preset'),false);
+  f.elements.get('reuseVault').onclick();assert.equal(f.elements.get('wizardNext').disabled,false);
+  assert.equal(f.run('store.presetPayload().confirmed_vault'),'D:\\Shared\\think-aloud-database');
+  await f.run('poll()');assert.equal(f.elements.get('wizardNext').disabled,false);
+  f.elements.get('wizardCancel').onclick();f.elements.get('newPresetButton').onclick();f.run('setStep(3)');
+  assert.equal(f.elements.get('wizardNext').disabled,true);assert.equal(f.run('store.confirmedVault'),'');
+  f.data.chosenDirectory='D:\\Different Library';await f.elements.get('chooseVault').onclick();
+  assert.equal(f.run('store.draft.vault'),'D:\\Different Library');assert.equal(f.elements.get('reuseVaultNotice').classList.contains('hidden'),true);
+  assert.equal(f.elements.get('wizardNext').disabled,false);
+  assert.equal(f.run('store.presetPayload().confirmed_vault'),'D:\\Different Library');
+  assert.equal(f.calls.some(c=>c.name==='save_preset'),false);
+});
+
+test('folder appearing at save returns wizard to explicit reuse without silently retrying',async()=>{
+  const f=await fixture(firstUseVault(false));
+  f.run("store.updateDraft('game','New Game');store.updateDraft('window','window-id');store.updateDraft('mic','mic-id');setStep(3)");
+  assert.equal(f.elements.get('wizardNext').disabled,false);f.data.vaultRace=true;await f.run('finishWizard()');
+  assert.equal(f.elements.get('wizard').open,true);assert.equal(f.elements.get('wizardNext').disabled,true);
+  assert.equal(f.calls.filter(c=>c.name==='save_preset').length,1);
+  f.elements.get('reuseVault').onclick();await f.run('finishWizard()');
+  const saves=f.calls.filter(c=>c.name==='save_preset');assert.equal(saves.length,2);
+  assert.equal(saves[0].args[0].confirmed_vault,undefined);assert.equal(saves[1].args[0].confirmed_vault,'D:\\Shared\\think-aloud-database');
+  assert.equal(f.elements.get('wizard').open,false);
+});
+
 function fakeDOM() {
   const html=fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8');
   const elements=new Map();let document;
@@ -84,7 +118,7 @@ function fakeDOM() {
 async function settle(){for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}
 async function fixture(initial=snapshot()) {
   const {document,elements}=fakeDOM();const calls=[];const data={snapshot:initial};
-  const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_preset'){data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
+  const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='choose_directory')return {ok:true,data:{path:data.chosenDirectory||null}};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_preset'){if(data.vaultRace){data.vaultRace=false;data.snapshot.default_vault={...data.snapshot.default_vault,exists:true,is_directory:true,requires_confirmation:true};return {ok:false,code:'VAULT_REUSE_REQUIRED',error:'请确认使用已有资料库。'};}data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
   const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(){return 1;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},console});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/state.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/app.js'),'utf8'),context);
@@ -131,6 +165,42 @@ test('session dates use local minute precision and preserve readable invalid val
   assert.equal(f.run("formatDate('未记录时间')"),'未记录时间');
   assert.equal(f.run("formatDate('not-a-date')"),'not-a-date');
   assert.equal(f.run('formatDate(null)'),'—');
+});
+
+test('background transcription leaves Start and presets available; capture save and readiness still block',async()=>{
+  const jobs=[{id:'job-a',session_id:'a',game:'Game A',state:'running',detail:'Uploading microphone'},
+    {id:'job-b',session_id:'b',game:'Game B',state:'queued',detail:''}];
+  const sessions=[{id:'a',game:'Game A',state:'转写中',duration:60},{id:'b',game:'Game B',state:'待整理',duration:30}];
+  const f=await fixture(snapshot({background_jobs:jobs,sessions}));
+  assert.equal(f.elements.get('recordButton').disabled,false);assert.equal(f.elements.get('recordButtonText').textContent,'开始录制');
+  assert.equal(f.elements.get('presetSelect').disabled,false);assert.equal(f.elements.get('settingsButton').disabled,false);
+  assert.equal(f.elements.get('jobDetail').textContent,'');
+  assert.equal(f.elements.get('backgroundSummary').textContent,'1 段整理中 · 1 段排队');
+  assert.ok(f.elements.get('sessionList').innerHTML.includes('Uploading microphone'));
+  assert.ok(f.elements.get('sessionList').innerHTML.includes('等待整理'));
+  assert.equal(f.run("sessionActionBlocked('a','process')"),true);assert.equal(f.run("sessionActionBlocked('a','export')"),true);
+  assert.equal(f.run("sessionActionBlocked('a','folder')"),false);assert.equal(f.run("sessionActionBlocked('other','process')"),false);
+  f.elements.get('recordButton').onclick();await settle();assert.ok(f.calls.some(call=>call.name==='start_recording'));
+  f.data.snapshot.activity={busy:true,kind:'saving',status:'正在保存录像',detail:''};await f.run('poll()');
+  assert.equal(f.elements.get('recordButton').disabled,true);assert.equal(f.elements.get('recordButtonText').textContent,'正在保存…');
+  f.data.snapshot.activity={busy:false,kind:'idle'};f.data.snapshot.readiness={ready:false,checking:false,errors:[{message:'游戏窗口未打开'}]};await f.run('poll()');
+  assert.equal(f.elements.get('recordButton').disabled,true);assert.equal(f.elements.get('blockers').textContent,'游戏窗口未打开');
+});
+
+test('background progress and failures stay on their session without replacing current timer or Stop',async()=>{
+  const initial=snapshot({activity:{kind:'recording',busy:false,status:'录制中',active_id:'b',elapsed_seconds:18},
+    background_jobs:[{id:'job-a',session_id:'a',state:'running',detail:'Uploading A'}],
+    sessions:[{id:'a',game:'A',state:'转写中'},{id:'b',game:'B',state:'录制中'}]});
+  const f=await fixture(initial);
+  assert.equal(f.elements.get('recordButton').disabled,false);assert.equal(f.elements.get('recordButtonText').textContent,'结束并转写');
+  assert.equal(f.elements.get('homeTitle').textContent,'00:00:18');assert.equal(f.elements.get('jobDetail').textContent,'');
+  f.data.snapshot.background_jobs[0].detail='<Waiting for cloud>';await f.run('poll()');
+  assert.ok(f.elements.get('sessionList').innerHTML.includes('&lt;Waiting for cloud&gt;'));
+  f.data.snapshot.background_jobs=[];f.data.snapshot.sessions[0]={id:'a',game:'A',state:'失败',error:'Cloud failure'};await f.run('poll()');
+  assert.equal(f.elements.get('blockers').textContent,'');assert.equal(f.elements.get('recordButton').disabled,false);
+  assert.equal(f.elements.get('homeTitle').textContent,'00:00:18');assert.equal(f.elements.get('backgroundSummary').textContent,'');
+  assert.ok(f.elements.get('sessionList').innerHTML.includes('重试'));
+  f.elements.get('recordButton').onclick();await settle();assert.ok(f.calls.some(call=>call.name==='stop_recording'));
 });
 
 test('vocabulary files stay independent and removal preserves overlapping and manual words',()=>{

@@ -102,6 +102,11 @@ def _recording_settings(cfg):
         yield from (value for value in presets.values() if isinstance(value, dict))
 
 
+def default_vault_path(root):
+    """Sibling database survives replacing/versioning the application folder."""
+    return Path(root).resolve().parent / 'think-aloud-database'
+
+
 def initialize(root, identity=None):
     root = Path(root).resolve()
     if not (root / 'portable.json').is_file():
@@ -128,7 +133,7 @@ def initialize(root, identity=None):
 def _initialize_locked(root, identity):
     path = root / 'config.json'
     cfg = _read(path) if path.is_file() else {
-        'vault': '体验资料库', 'language': 'zh', 'preset': '均衡 1080p30',
+        'vault': str(default_vault_path(root)), 'language': 'zh', 'preset': '均衡 1080p30',
         'source': '游戏窗口', 'window': '', 'monitor': '', 'mic': 'default',
         'game': '自由探索', 'model': 'large-v3', 'device': 'cpu',
         'compute_type': 'float32', 'transcription_provider': 'later',

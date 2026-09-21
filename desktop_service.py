@@ -2,7 +2,8 @@
 
 The service never accepts arbitrary session paths, returns credentials, or starts
 capture with a synthetic source. UI polling is read-only; a single admitted job
-owns recorder mutations, including periodic health checks.
+owns OBS mutations, including periodic health checks. A separate serial queue
+owns per-session processing and never writes foreground recording activity.
 """
 from copy import deepcopy
 from pathlib import Path
@@ -21,7 +22,7 @@ import recorder
 from hotword_files import (merge_files, split_words, validate_words, compile_hotword_snapshots,
                            read_dictionary_snapshots, SOGOU_DICTIONARIES)
 from model_manager import ModelManager
-from portable_config import load_settings, stored_settings
+from portable_config import load_settings, stored_settings, default_vault_path
 from processing import process_isolated
 import secret_store
 
@@ -40,6 +41,10 @@ def ok(data=None):
     return {'ok': True, 'data': data}
 
 
+class VaultReuseRequired(ValueError):
+    pass
+
+
 class DesktopService:
     def __init__(self, root=None):
         self.root = Path(root or recorder.ROOT).resolve()
@@ -50,6 +55,9 @@ class DesktopService:
         self._startup_launch_attempted = False
         self._window = None
         self._job = None
+        self._background_jobs = {}
+        self._background_history = {}
+        self._background_thread = None
         self._active = None
         self._uncertain_ids = set()
         self._obs_uncertain = False
@@ -89,7 +97,10 @@ class DesktopService:
         return text[:3000]
 
     def _error(self, error):
-        return {'ok': False, 'error': self._safe_text(error)}
+        result = {'ok': False, 'error': self._safe_text(error)}
+        if isinstance(error, VaultReuseRequired):
+            result['code'] = 'VAULT_REUSE_REQUIRED'
+        return result
 
     def _progress(self, text, *, status=None):
         with self._lock:
@@ -131,6 +142,10 @@ class DesktopService:
                         self._activity['active_id'] = self._active.meta['id'] if self._active else None
                         if self._active is not None:
                             self._readiness.update(ready=False, checking=False)
+                        elif kind == 'saving':
+                            # Resume the next-recording CTA immediately after
+                            # native stop, rather than waiting for the 5s poll.
+                            self._request_readiness(invalidate=True)
 
             self._job = threading.Thread(target=work, daemon=True, name='desktop-' + kind)
             self._job.start()
@@ -201,6 +216,10 @@ class DesktopService:
 
     def _session_paths(self):
         vault = Path(self._cfg['vault']).resolve()
+        if self._first_default_vault(vault):
+            # Merely proposing a shared sibling folder is not permission to
+            # enumerate, recover or adopt another installation's sessions.
+            return {}
         base = vault / '场次'
         result = {}
         if base.resolve().parent != vault:
@@ -228,10 +247,29 @@ class DesktopService:
     def _session(self, ident):
         if not isinstance(ident, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', ident):
             raise ValueError('请从当前资料库选择有效场次。')
-        path = self._session_paths().get(ident)
+        path = self._visible_session_paths().get(ident)
         if path is None:
             raise ValueError('场次不存在、编号重复或不属于当前资料库。')
         return recorder.Session(path)
+
+    def _visible_session_paths(self):
+        """Current vault plus trusted paths already admitted to this app's queue."""
+        paths = self._session_paths()
+        ambiguous = set()
+        for job in [*self._background_jobs.values(), *self._background_history.values()]:
+            ident, path = job['session_id'], job['path']
+            if ident in paths and paths[ident] != path:
+                ambiguous.add(ident)
+            elif ident not in ambiguous and path.resolve() == path and (path / 'session.json').is_file():
+                paths[ident] = path
+        return {ident: path for ident, path in paths.items() if ident not in ambiguous}
+
+    def _background_for(self, path):
+        return next((job for job in self._background_jobs.values() if job['path'] == path.resolve()), None)
+
+    @staticmethod
+    def _job_summary(job):
+        return {key: job[key] for key in ('id', 'session_id', 'game', 'state', 'detail')}
 
     @staticmethod
     def _contained_file(session, name):
@@ -244,19 +282,24 @@ class DesktopService:
         try:
             with self._lock:
                 sessions = []
-                for ident, path in self._session_paths().items():
+                for ident, path in self._visible_session_paths().items():
                     try:
                         meta = recorder.read(path / 'session.json')
                         media = meta.get('media', {})
                         if not isinstance(media, dict):
                             media = {}
+                        background = self._background_for(path)
+                        result = self._background_history.get(str(path))
                         sessions.append(dict(id=ident, game=meta.get('game', ''),
                                              created=meta.get('created', ''), state=meta.get('state', ''),
                                              duration=media.get('duration', 0),
                                              segments=meta.get('segments', 0),
                                              warning=self._safe_text(meta.get('warning')),
                                              error=self._safe_text(meta.get('error')),
-                                             path=str(path), test=bool(meta.get('test'))))
+                                             path=str(path), test=bool(meta.get('test')),
+                                             in_current_vault=path.parent.parent == Path(self._cfg['vault']).resolve(),
+                                             background_job=self._job_summary(background) if background else None,
+                                             background_result=self._job_summary(result) if result else None))
                     except (OSError, ValueError, TypeError):
                         continue
                 sessions.sort(key=lambda item: item['created'], reverse=True)
@@ -271,8 +314,10 @@ class DesktopService:
                          'total_bytes', 'error', 'source', 'revision')}
                 model['error'] = self._safe_text(model.get('error'))
                 return ok(dict(config=self._public_config(), sessions=sessions,
+                               default_vault=self._default_vault(),
                                readiness=self._visible_readiness(),
                                presets=self._preset_list(), active_preset_id=self._cfg.get('active_preset_id'),
+                               background_jobs=[self._job_summary(job) for job in self._background_jobs.values()],
                                activity=activity, devices=deepcopy(self._devices), model=model,
                                capabilities=dict(cloud_key=self._has_key(),
                                    obsidian=self._obsidian_available(),
@@ -452,12 +497,13 @@ class DesktopService:
                       '本机保存的云端密钥无法读取或解密，请重新填写密钥。' if exists else '已选云端转写，但尚未保存本机 API Key。', 2)
             elif provider not in ('later', 'local', 'qwen'):
                 error('TRANSCRIPTION_INVALID', '请选择有效转写方式并保存设置。', 2)
-            try:
-                free = self._probe_location(cfg.get('vault', ''))
-                if free < 5 * 1024 ** 3:
-                    error('OUTPUT_SPACE_LOW', f'保存位置剩余 {free / 1024 ** 3:.1f} GB，不足录制所需的 5 GB。', 3)
-            except Exception:
-                error('OUTPUT_UNAVAILABLE', '保存位置无法访问或写入，请连接保存磁盘，或重新选择可写文件夹。', 3)
+            if has_setup:
+                try:
+                    free = self._probe_location(cfg.get('vault', ''))
+                    if free < 5 * 1024 ** 3:
+                        error('OUTPUT_SPACE_LOW', f'保存位置剩余 {free / 1024 ** 3:.1f} GB，不足录制所需的 5 GB。', 3)
+                except Exception:
+                    error('OUTPUT_UNAVAILABLE', '保存位置无法访问或写入，请连接保存磁盘，或重新选择可写文件夹。', 3)
         except Exception:
             error('READINESS_FAILED', '录制条件检查未完成，请重新检查后再开始。', 1)
         if not has_setup:
@@ -580,7 +626,14 @@ class DesktopService:
             instructions.write_text(recorder.OFFICE, encoding='utf-8')
 
     def _save(self, payload, preset_id=None, base=None):
+        if not isinstance(payload, dict):
+            raise ValueError('设置格式不正确。')
+        payload = dict(payload)
+        confirmed = payload.pop('confirmed_vault', None)
+        if confirmed is not None and (not isinstance(confirmed, str) or not Path(confirmed).is_absolute()):
+            raise ValueError('资料库复用确认必须对应所选文件夹的绝对路径。')
         cfg = self._validated_settings(payload, base)
+        self._prepare_first_vault(cfg['vault'], confirmed)
         self._install_vault(cfg['vault'])
         ident = preset_id or cfg.get('active_preset_id') or uuid.uuid4().hex
         cfg.setdefault('presets', {})[ident] = self._preset_snapshot(cfg)
@@ -589,6 +642,28 @@ class DesktopService:
         self._cfg = cfg
         self._readiness.update(ready=False, checking=True, checked_at=None)
         return self._public_config()
+
+    def _first_default_vault(self, vault):
+        return not self._cfg.get('presets') and Path(vault).resolve() == default_vault_path(self.root).resolve()
+
+    def _default_vault(self):
+        path = default_vault_path(self.root)
+        exists = path.exists()
+        return dict(path=str(path), exists=exists, is_directory=path.is_dir(),
+                    requires_confirmation=not bool(self._cfg.get('presets')) and exists)
+
+    def _prepare_first_vault(self, vault, confirmed):
+        if not self._first_default_vault(vault):
+            return
+        path = Path(vault)
+        if confirmed is not None and Path(confirmed).resolve() == path.resolve():
+            return
+        # Atomic creation also covers a folder appearing after the UI snapshot
+        # or between validation and save. No templates/config are written first.
+        try:
+            path.mkdir(exist_ok=False)
+        except FileExistsError:
+            raise VaultReuseRequired('默认资料库已存在。请确认复用此文件夹，或选择其他保存位置。') from None
 
     def save_settings(self, payload):
         with self._lock:
@@ -806,7 +881,7 @@ class DesktopService:
             if self._active is None:
                 return self._error('当前没有本应用接管的录制。')
             session = self._active
-            cfg = deepcopy(self._cfg)
+            cfg = deepcopy(session.meta['settings'])
 
         def work():
             try:
@@ -829,11 +904,10 @@ class DesktopService:
                 session.update(state='待整理')
                 self._progress('录像已保存。可选择转写方式后再整理。', status='待整理')
                 return
+            session.update(state='待整理')
             self._require_transcription(cfg)
-            with self._lock:
-                self._activity.update(kind='processing', status='正在整理')
-            process_isolated(session, self._progress)
-            self._progress('整理完成，原始录像与复盘已保留。', status='可回看')
+            self._enqueue_processing(session, cfg)
+            self._progress('录像已保存，已加入后台整理队列。可以开始下一段录制。', status='待开始')
         with self._lock:
             if self._active is not session:
                 return self._error('录制归属已变化，请查看当前场次状态。')
@@ -863,23 +937,122 @@ class DesktopService:
             if key in self._cfg:
                 cfg[key] = deepcopy(self._cfg[key])
         self._require_transcription(cfg)
+        self._check_unknown_submission(session)
+        return cfg
+
+    def _check_unknown_submission(self, session):
         for file in (session.path / '转写原始').glob('*/云端任务.json'):
             self._contained_file(session, str(file))
             job = recorder.read(file)
             if job.get('state') == 'SUBMITTING' and not job.get('task_id'):
                 raise RuntimeError('此场次存在结果不明的云端提交。请先恢复原任务编号，避免重复上传和计费。')
-        return cfg
+
+    def _enqueue_processing(self, session, cfg, restore=None):
+        """Admission runs under the operation lock; processing never holds it."""
+        with self._lock:
+            if self._background_for(session.path):
+                raise RuntimeError('此场次已在后台整理或排队，请等待当前任务结束。')
+            if self._active and self._active.path.resolve() == session.path.resolve():
+                raise RuntimeError('此场次仍在录制，请先结束录制。')
+            job = dict(id=uuid.uuid4().hex, session_id=session.meta['id'],
+                       game=session.meta.get('game', ''), path=session.path.resolve(),
+                       state='queued', detail='等待后台整理',
+                       settings=deepcopy(recorder.session_settings(cfg)))
+
+            @recorder.session_lock
+            def reserve(owned):
+                # The worker may have finished between discovery and locking.
+                owned.meta = recorder.read(owned.path / 'session.json')
+                if restore:
+                    from qwen_transcription import restore_task
+                    folder, task_id = self._cloud_recovery_target(owned, restore)
+                    restore_task(folder, task_id)
+                else:
+                    self._check_unknown_submission(owned)
+                owned.update(state='待整理', background_processing={
+                    **self._job_summary(job), 'settings': deepcopy(job['settings'])})
+
+            reserve(session)
+            self._background_history.pop(str(job['path']), None)
+            self._background_jobs[job['id']] = job
+            if self._background_thread is None:
+                self._background_thread = threading.Thread(target=self._process_queue,
+                    daemon=True, name='desktop-background-processing')
+                self._background_thread.start()
+            return ok({'queued': True, 'id': job['id'], 'session_id': job['session_id']})
+
+    def _process_queue(self):
+        while True:
+            with self._lock:
+                job = next(iter(self._background_jobs.values()), None)
+                if job is None:
+                    self._background_thread = None
+                    return
+                job.update(state='running', detail='正在准备整理')
+
+            def progress(text, **unused):
+                # Never let a UI callback interrupt child-process reaping, nor
+                # write foreground activity owned by a newer recording.
+                try:
+                    with self._lock:
+                        job['detail'] = self._safe_text(text)
+                except Exception:
+                    pass
+
+            failure = None
+            try:
+                with self._operation_lock:
+                    path = job['path']
+                    if path.resolve() != path or (path / 'session.json').resolve().parent != path:
+                        raise ValueError('后台场次路径已变化，已停止整理。')
+                    session = recorder.Session(path)
+                    if session.meta['id'] != job['session_id']:
+                        raise ValueError('后台场次归属已变化，已停止整理。')
+                    self._ensure_not_recording(session)
+                    self._require_transcription(job['settings'])
+                    self._check_unknown_submission(session)
+                process_isolated(session, progress, transcription_settings=deepcopy(job['settings']))
+                if recorder.read(path / 'session.json').get('state') != '可回看':
+                    raise RuntimeError('整理进程未确认完成，原始资料已保留。')
+            except Exception as error:
+                failure = self._safe_text(error)
+            try:
+                session = recorder.Session(job['path'])
+
+                @recorder.session_lock
+                def finish(owned):
+                    owned.meta = recorder.read(owned.path / 'session.json')
+                    if (owned.meta.get('background_processing') or {}).get('id') != job['id']:
+                        return
+                    changes = {'background_processing': None}
+                    if failure and owned.meta.get('state') != '可回看':
+                        changes.update(state='失败', error=failure)
+                    owned.update(**changes)
+
+                finish(session)
+            except Exception as error:
+                failure = failure or self._safe_text(error)
+            with self._lock:
+                job.update(state='failed' if failure else 'completed',
+                           detail=failure or '整理完成，原始录像与复盘已保留。')
+                self._background_history[str(job['path'])] = job
+                self._background_jobs.pop(job['id'], None)
 
     def process_session(self, id):
-        def work():
-            session = self._session(id)
-            cfg = self._processing_settings(session)
-            self._ensure_not_recording(session)
-            # Supplying settings always invokes the existing version-preservation
-            # mechanism, including retries after a previous failed refinement.
-            process_isolated(session, self._progress, transcription_settings=cfg)
-            self._progress('整理完成，已有逐字稿版本与复盘均已保留。', status='可回看')
-        return self._launch('processing', work, status='正在整理')
+        try:
+            with self._lock:
+                self._guard(allow_active=True)
+            with self._operation_lock:
+                with self._lock:
+                    self._guard(allow_active=True)
+                    session = self._session(id)
+                    if self._background_for(session.path):
+                        raise RuntimeError('此场次已在后台整理或排队，请等待当前任务结束。')
+                    cfg = self._processing_settings(session)
+                self._ensure_not_recording(session)
+                return self._enqueue_processing(session, cfg)
+        except Exception as error:
+            return self._error(error)
 
     def open_review(self, id, mode='obsidian'):
         if mode not in ('obsidian', 'html'):
@@ -887,12 +1060,15 @@ class DesktopService:
 
         def work():
             session = self._session(id)
+            with self._lock:
+                if self._background_for(session.path):
+                    raise RuntimeError('此场次仍在后台整理或排队，请等待整理结束后回看。')
             if mode == 'html':
                 file = self._contained_file(session, '独立回看.html')
                 os.startfile(file)
                 self._progress('已请求浏览器打开独立回看网页。', status='已请求打开')
             else:
-                self._install_vault(self._cfg['vault'])
+                self._install_vault(session.path.parent.parent)
                 result = recorder.open_review(session, self._progress)
                 if result == 'obsidian':
                     self._progress('Obsidian 插件已确认打开同步回看。', status='回看已打开')
@@ -903,6 +1079,9 @@ class DesktopService:
     def package_session(self, id):
         def work():
             session = self._session(id)
+            with self._lock:
+                if self._background_for(session.path):
+                    raise RuntimeError('此场次仍在后台整理或排队，请等待整理结束后打包。')
             self._ensure_not_recording(session)
             result = session.package()
             self._progress('已打包并校验：' + str(result), status='打包完成')
@@ -961,30 +1140,35 @@ class DesktopService:
     def recover_cloud_task(self, id, task_id):
         if not isinstance(task_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', task_id):
             return self._error('任务编号格式不正确。')
+        try:
+            with self._lock:
+                self._guard(allow_active=True)
+            with self._operation_lock:
+                with self._lock:
+                    self._guard(allow_active=True)
+                    session = self._session(id)
+                    # Restoring keeps the original cache fingerprint, independent
+                    # of the preset selected when this recovery was requested.
+                    cfg = deepcopy(session.meta['settings'])
+                    self._require_transcription(cfg)
+                self._ensure_not_recording(session)
+                return self._enqueue_processing(session, cfg, restore=task_id)
+        except Exception as error:
+            return self._error(error)
 
-        def work():
-            from qwen_transcription import restore_task
-            session = self._session(id)
-            self._ensure_not_recording(session)
-            if session.meta.get('settings', {}).get('transcription_provider') != 'qwen':
-                raise ValueError('此场次没有可恢复的 Qwen 转写任务。')
-            self._require_transcription(session.meta['settings'])
-            cache = session.meta.get('transcription_cache')
-            if not isinstance(cache, str) or not cache:
-                raise ValueError('此场次没有转写缓存，不能绑定云端任务。')
-            folder = (session.path / cache).resolve()
-            if not folder.is_relative_to((session.path / '转写原始').resolve()):
-                raise ValueError('转写缓存路径无效。')
-            job_file = self._contained_file(session, str(folder / '云端任务.json'))
-            job = recorder.read(job_file)
-            if job.get('task_id') and job['task_id'] != task_id:
-                raise ValueError('已保存的任务编号不同，已拒绝覆盖。')
-            # Preserve the exact recorded options/fingerprint: current settings
-            # could otherwise switch cache and accidentally submit another task.
-            recorder.session_lock(lambda owned: restore_task(folder, task_id))(session)
-            process_isolated(session, self._progress)
-            self._progress('已恢复查询原云端任务并完成整理。', status='可回看')
-        return self._launch('processing', work, status='正在恢复原云端任务')
+    def _cloud_recovery_target(self, session, task_id):
+        if session.meta.get('settings', {}).get('transcription_provider') != 'qwen':
+            raise ValueError('此场次没有可恢复的 Qwen 转写任务。')
+        cache = session.meta.get('transcription_cache')
+        if not isinstance(cache, str) or not cache:
+            raise ValueError('此场次没有转写缓存，不能绑定云端任务。')
+        folder = (session.path / cache).resolve()
+        if not folder.is_relative_to((session.path / '转写原始').resolve()):
+            raise ValueError('转写缓存路径无效。')
+        job = recorder.read(self._contained_file(session, str(folder / '云端任务.json')))
+        if job.get('task_id') and job['task_id'] != task_id:
+            raise ValueError('已保存的任务编号不同，已拒绝覆盖。')
+        return folder, task_id
 
     def model_action(self, action, path=None):
         with self._lock:
@@ -1043,6 +1227,8 @@ class DesktopService:
         with self._lock:
             self._obs_uncertain = active_unknown or (self._obs_uncertain and not connected)
             for ident, path in self._session_paths().items():
+                if self._background_for(path):
+                    continue
                 session = recorder.Session(path)
                 if recording_path == path:
                     if session.meta.get('test'):
@@ -1052,16 +1238,31 @@ class DesktopService:
                     self._uncertain_ids.discard(ident)
                     session.update(state='录制中', recording_uncertain=False)
                     self._progress('已接回 OBS 确认仍在进行的录制。', status='录制中')
-                elif session.meta.get('state') in SUSPECT_STATES | {'转写中'} or session.meta.get('recording_uncertain'):
+                elif (session.meta.get('state') in SUSPECT_STATES | {'转写中'}
+                      or session.meta.get('recording_uncertain') or session.meta.get('background_processing')):
                     uncertain = not connected and (session.meta.get('state') in SUSPECT_STATES or session.meta.get('recording_uncertain'))
                     if uncertain:
                         self._uncertain_ids.add(ident)
                     else:
                         self._uncertain_ids.discard(ident)
                     try:
-                        recorder.session_lock(lambda owned: owned.update(state='失败', recording_uncertain=bool(uncertain),
-                            error='上次操作中断，原始资料已保留。请恢复整理；连接不明时先刷新设备。'))(session)
-                        interrupted = True
+                        @recorder.session_lock
+                        def recover(owned):
+                            owned.meta = recorder.read(owned.path / 'session.json')
+                            if owned.meta.get('state') == '可回看':
+                                if owned.meta.get('background_processing'):
+                                    owned.update(background_processing=None)
+                                return False
+                            if owned.meta.get('background_processing'):
+                                owned.update(state='待整理', background_processing=None,
+                                    warning='上次后台整理已中断，原始资料已保留。请手动恢复整理；不会自动上传。')
+                                return True
+                            if owned.meta.get('state') in SUSPECT_STATES | {'转写中'} or owned.meta.get('recording_uncertain'):
+                                owned.update(state='失败', recording_uncertain=bool(uncertain),
+                                    error='上次操作中断，原始资料已保留。请恢复整理；连接不明时先刷新设备。')
+                                return True
+                            return False
+                        interrupted = recover(session) or interrupted
                     except RuntimeError:
                         self._progress('有场次仍由另一整理进程持有，已保留其状态。', status='场次正在后台整理')
                 elif connected:
@@ -1127,6 +1328,7 @@ class DesktopService:
         """Internal pywebview closing event handler; intentionally returns bool."""
         with self._lock:
             blocked = (self._activity['busy'] or self._active is not None or bool(self._uncertain_ids)
+                       or bool(self._background_jobs)
                        or self._obs_uncertain or self._dialog_open or self._readiness['checking']
                        or bool(self._readiness_thread and self._readiness_thread.is_alive()))
             if not blocked:

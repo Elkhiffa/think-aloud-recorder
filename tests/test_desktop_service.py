@@ -59,13 +59,17 @@ class DesktopServiceTests(unittest.TestCase):
         self.service._closed.set()
         self.wait()
 
-    def wait(self):
+    def wait(self, background=True):
         if self.service._job:
             self.service._job.join(5)
             self.assertFalse(self.service._job.is_alive(), 'synthetic job did not finish')
         if self.service._readiness_thread:
             self.service._readiness_thread.join(5)
             self.assertFalse(self.service._readiness_thread.is_alive(), 'synthetic readiness did not finish')
+        worker = self.service._background_thread
+        if background and worker:
+            worker.join(5)
+            self.assertFalse(worker.is_alive(), 'synthetic background worker did not finish')
 
     def session(self, ident='synthetic-1', **extra):
         path = self.vault / '场次' / (ident + ' fixture')
@@ -76,6 +80,135 @@ class DesktopServiceTests(unittest.TestCase):
         data.update(extra)
         bridge.recorder.write(path / 'session.json', data)
         return bridge.recorder.Session(path)
+
+    def fresh_shared_vault(self):
+        self.service.root = self.root / 'recorder-version'
+        self.service.root.mkdir()
+        self.vault = self.root / 'think-aloud-database'
+        self.service._cfg.update(vault=str(self.vault), configured=False, presets={}, active_preset_id=None)
+        return self.vault
+
+    def test_unconfirmed_default_is_not_scanned_recovered_or_probed(self):
+        candidate = self.fresh_shared_vault()
+        session = self.session(state='转写中')
+        before = (session.path / 'session.json').read_bytes()
+        real_read = bridge.recorder.read
+
+        def guarded_read(path):
+            if Path(path).resolve().is_relative_to(candidate):
+                raise AssertionError('unconfirmed shared database was read')
+            return real_read(path)
+
+        with patch.object(bridge.recorder, 'read', side_effect=guarded_read), \
+             patch.object(self.service, '_probe_location') as probe, \
+             patch.object(self.service, '_install_vault') as install:
+            self.service._startup()
+            self.service._update_readiness()
+            state = self.service.get_state()['data']
+        probe.assert_not_called()
+        install.assert_not_called()
+        self.assertEqual(state['sessions'], [])
+        self.assertEqual(state['default_vault'], dict(path=str(candidate), exists=True,
+                         is_directory=True, requires_confirmation=True))
+        self.assertEqual((session.path / 'session.json').read_bytes(), before)
+
+    def test_default_reuse_requires_matching_confirmation_and_never_persists_it(self):
+        candidate = self.fresh_shared_vault()
+        candidate.mkdir()
+        payload = {'name': 'First project', 'vault': str(candidate)}
+        with patch.object(self.service, '_install_vault') as install, \
+             patch.object(self.service, '_persist') as persist:
+            for confirmation in (None, str(self.root / 'other-directory')):
+                draft = dict(payload)
+                if confirmation is not None:
+                    draft['confirmed_vault'] = confirmation
+                result = self.service.save_preset(draft)
+                self.assertEqual(result.get('code'), 'VAULT_REUSE_REQUIRED', result)
+            install.assert_not_called()
+            persist.assert_not_called()
+        result = self.service.save_preset({**payload, 'confirmed_vault': str(candidate)})
+        self.assertTrue(result['ok'], result)
+        self.wait()
+        saved = bridge.recorder.read(self.service.root / 'config.json')
+        self.assertNotIn('confirmed_vault', json.dumps(saved))
+        self.assertNotIn('confirmed_vault', json.dumps(self.service.get_state()))
+        self.assertFalse(self.service.get_state()['data']['default_vault']['requires_confirmation'])
+        # Later preset creation/editing does not ask for first-run reuse again.
+        self.assertTrue(self.service.save_preset({'name': 'Second project'})['ok'])
+        self.wait()
+
+    def test_first_run_picker_cancel_or_alternate_does_not_touch_default(self):
+        candidate = self.fresh_shared_vault()
+        candidate.mkdir()
+        with patch.object(self.service, '_dialog', return_value=None):
+            self.assertEqual(self.service.choose_directory('vault')['data']['path'], None)
+        self.assertEqual(list(candidate.iterdir()), [])
+        self.assertFalse((self.service.root / 'config.json').exists())
+        alternate = self.root / 'chosen-library'
+        result = self.service.save_preset({'name': 'Other location', 'vault': str(alternate),
+                                          'confirmed_vault': str(alternate)})
+        self.assertTrue(result['ok'], result)
+        self.wait()
+        self.assertTrue(alternate.is_dir())
+        self.assertEqual(list(candidate.iterdir()), [])
+
+    def test_default_directory_appearing_after_snapshot_requires_confirmation(self):
+        candidate = self.fresh_shared_vault()
+        self.assertFalse(self.service.get_state()['data']['default_vault']['exists'])
+        candidate.mkdir()
+        result = self.service.save_preset({'name': 'First project'})
+        self.assertEqual(result.get('code'), 'VAULT_REUSE_REQUIRED', result)
+        self.assertEqual(list(candidate.iterdir()), [])
+        self.assertFalse((self.service.root / 'config.json').exists())
+
+    def test_default_atomic_creation_catches_last_moment_race(self):
+        candidate = self.fresh_shared_vault()
+        real_mkdir = Path.mkdir
+
+        def raced_mkdir(path, *args, **kwargs):
+            if path == candidate:
+                real_mkdir(path)
+            return real_mkdir(path, *args, **kwargs)
+
+        with patch.object(Path, 'mkdir', new=raced_mkdir), \
+             patch.object(self.service, '_install_vault') as install:
+            result = self.service.save_preset({'name': 'First project'})
+        self.assertEqual(result.get('code'), 'VAULT_REUSE_REQUIRED', result)
+        install.assert_not_called()
+        self.assertFalse((self.service.root / 'config.json').exists())
+
+    def test_new_default_created_only_on_save_and_rejects_file_or_permission_failure(self):
+        candidate = self.fresh_shared_vault()
+        state = self.service.get_state()['data']['default_vault']
+        self.assertEqual(state, dict(path=str(candidate), exists=False, is_directory=False, requires_confirmation=False))
+        self.assertFalse(candidate.exists())
+        real_mkdir = Path.mkdir
+
+        def denied_mkdir(path, *args, **kwargs):
+            if path == candidate:
+                raise PermissionError('synthetic parent is read-only')
+            return real_mkdir(path, *args, **kwargs)
+
+        with patch.object(Path, 'mkdir', new=denied_mkdir):
+            result = self.service.save_preset({'name': 'First project'})
+        self.assertFalse(result['ok'])
+        self.assertFalse(candidate.exists())
+        self.assertFalse((self.service.root / 'config.json').exists())
+        candidate.write_text('keep this existing file')
+        file_state = self.service.get_state()['data']['default_vault']
+        self.assertTrue(file_state['requires_confirmation'])
+        self.assertFalse(file_state['is_directory'])
+        self.assertFalse(self.service.save_preset({'name': 'First project', 'confirmed_vault': str(candidate)})['ok'])
+        self.assertEqual(candidate.read_text(), 'keep this existing file')
+
+    def test_missing_default_is_created_at_successful_first_save(self):
+        candidate = self.fresh_shared_vault()
+        self.assertFalse(candidate.exists())
+        result = self.service.save_preset({'name': 'First project'})
+        self.assertTrue(result['ok'], result)
+        self.wait()
+        self.assertTrue(candidate.is_dir())
+        self.assertEqual(self.service._cfg['vault'], str(candidate))
 
     def test_record_only_start_does_not_require_model_or_cloud(self):
         session = self.session(test=False)
@@ -204,13 +337,13 @@ class DesktopServiceTests(unittest.TestCase):
     def test_transcription_requires_opt_in_and_preserves_version_path(self):
         session = self.session(state='可回看')
         with patch.object(bridge, 'process_isolated') as process:
-            self.service.process_session(session.meta['id'])
+            result = self.service.process_session(session.meta['id'])
             self.wait()
             process.assert_not_called()
-            self.assertIn('仅录制', self.service.get_state()['data']['activity']['detail'])
+            self.assertIn('仅录制', result['error'])
             self.service._cfg['transcription_provider'] = 'local'
             self.model.resolve_model.return_value = self.root / 'model'
-            self.service.process_session(session.meta['id'])
+            result = self.service.process_session(session.meta['id'])
             self.wait()
         self.assertEqual(process.call_count, 1)
         self.assertEqual(process.call_args.kwargs['transcription_settings']['transcription_provider'], 'local')
@@ -221,10 +354,269 @@ class DesktopServiceTests(unittest.TestCase):
         self.service._cfg['transcription_provider'] = 'local'
         self.model.resolve_model.return_value = self.root / 'model'
         with patch.object(bridge, 'process_isolated') as process:
-            self.service.process_session(session.meta['id'])
+            result = self.service.process_session(session.meta['id'])
             self.wait()
         process.assert_not_called()
-        self.assertIn('结果不明', self.service.get_state()['data']['activity']['detail'])
+        self.assertIn('结果不明', result['error'])
+
+    def test_blocked_processing_allows_next_capture_and_serial_stop_queue(self):
+        self.service._cfg['transcription_provider'] = 'local'
+        self.model.resolve_model.return_value = self.root / 'model'
+        a, b = self.session('capture-a'), self.session('capture-b')
+        for session in (a, b):
+            session.meta['settings']['transcription_provider'] = 'local'
+            session.update(settings=session.meta['settings'])
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        calls, callbacks = [], []
+
+        def process(session, progress, transcription_settings):
+            calls.append(session.meta['id'])
+            callbacks.append(progress)
+            session.update(state='转写中')
+            if session.meta['id'] == 'capture-a':
+                entered.set()
+                self.assertTrue(release.wait(5))
+            session.update(state='可回看', segments=3)
+
+        with patch.object(bridge, 'process_isolated', side_effect=process), \
+             patch.object(a, 'stop'), patch.object(b, 'stop'), \
+             patch.object(bridge.recorder.Session, 'start', return_value=b):
+            try:
+                self.service._active = a
+                self.assertTrue(self.service.stop_recording()['ok'])
+                self.wait(background=False)
+                self.assertTrue(entered.wait(2))
+                self.assertFalse(self.service.get_state()['data']['activity']['busy'])
+                self.assertTrue(self.service.get_state()['data']['readiness']['ready'])
+                self.assertTrue(self.service.start_recording({})['ok'])
+                self.wait(background=False)
+                self.assertIs(self.service._active, b)
+                foreground = self.service.get_state()['data']['activity']
+                callbacks[0]('A uploading synthetic audio')
+                after_progress = self.service.get_state()['data']['activity']
+                self.assertEqual({k: v for k, v in after_progress.items() if k != 'elapsed_seconds'},
+                                 {k: v for k, v in foreground.items() if k != 'elapsed_seconds'})
+                self.assertTrue(self.service.stop_recording()['ok'])
+                self.wait(background=False)
+                state = self.service.get_state()['data']
+                self.assertFalse(state['activity']['busy'])
+                self.assertTrue(state['readiness']['ready'])
+                self.assertIsNone(self.service._active)
+                self.assertEqual([j['state'] for j in state['background_jobs']], ['running', 'queued'])
+                self.assertEqual(calls, ['capture-a'])
+                with patch.object(bridge.recorder, 'open_review') as review:
+                    self.assertTrue(self.service.open_review('capture-a')['ok'])
+                    self.wait(background=False)
+                    review.assert_not_called()
+                    self.assertIn('后台整理', self.service.get_state()['data']['activity']['detail'])
+                self.assertEqual(bridge.recorder.read(b.path / 'session.json')['state'], '待整理')
+                self.assertFalse(self.service.close_allowed())
+                self.service._recover()
+                self.assertEqual(bridge.recorder.read(a.path / 'session.json')['state'], '转写中')
+                self.assertEqual(bridge.recorder.read(b.path / 'session.json')['state'], '待整理')
+            finally:
+                release.set()
+                self.wait()
+        self.assertEqual(calls, ['capture-a', 'capture-b'])
+        state = self.service.get_state()['data']
+        self.assertEqual(state['background_jobs'], [])
+        self.assertTrue(all(s['background_result']['state'] == 'completed' for s in state['sessions']))
+
+    def test_queue_preserves_settings_and_outcomes_across_preset_vault_switch(self):
+        self.service._cfg['transcription_provider'] = 'local'
+        self.model.resolve_model.return_value = self.root / 'model'
+        a, b = self.session('old-a'), self.session('old-b')
+        a.meta['settings'].update(language='zh', hotwords='Alpha')
+        a.update(settings=a.meta['settings'])
+        b.meta['settings'].update(language='ja', hotwords='Beta')
+        b.update(settings=b.meta['settings'])
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        captured = []
+
+        def process(session, progress, transcription_settings):
+            captured.append((session.path, deepcopy(transcription_settings)))
+            if session.meta['id'] == 'old-a':
+                entered.set()
+                self.assertTrue(release.wait(5))
+                raise RuntimeError('synthetic A failure')
+            session.update(state='可回看')
+
+        with patch.object(bridge, 'process_isolated', side_effect=process):
+            try:
+                self.assertTrue(self.service.process_session('old-a')['ok'])
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(self.service.process_session('old-b')['ok'])
+                self.assertFalse(self.service.process_session('old-a')['ok'])
+                self.assertFalse(self.service.process_session('old-b')['ok'])
+                # A full saved preset switches both engine and vault while B waits.
+                changed = self.service.save_preset({'name': 'Other game',
+                    'vault': str(self.root / 'other-vault'), 'transcription_provider': 'later',
+                    'language': 'en', 'hotword_manual': 'Other terms'})
+                self.assertTrue(changed['ok'], changed)
+                self.wait(background=False)
+                self.assertEqual({s['id'] for s in self.service.get_state()['data']['sessions']}, {'old-a', 'old-b'})
+                self.assertTrue(all(not s['in_current_vault'] for s in self.service.get_state()['data']['sessions']))
+            finally:
+                release.set()
+                self.wait()
+        self.assertEqual([p for p, _ in captured], [a.path, b.path])
+        self.assertEqual([(c['language'], c['hotwords'], c['transcription_provider']) for _, c in captured],
+                         [('zh', 'Alpha', 'local'), ('ja', 'Beta', 'local')])
+        rows = {s['id']: s for s in self.service.get_state()['data']['sessions']}
+        self.assertEqual(rows['old-a']['background_result']['state'], 'failed')
+        self.assertIn('synthetic A failure', rows['old-a']['error'])
+        self.assertEqual(rows['old-b']['background_result']['state'], 'completed')
+        self.assertEqual(self.service._session('old-a').path, a.path)
+
+    def test_background_failure_does_not_overwrite_new_recording_activity(self):
+        self.service._cfg['transcription_provider'] = 'local'
+        self.model.resolve_model.return_value = self.root / 'model'
+        a, b = self.session('failure-a'), self.session('recording-b')
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def process(session, progress, **kwargs):
+            entered.set()
+            self.assertTrue(release.wait(5))
+            raise RuntimeError('synthetic transcription failed')
+
+        with patch.object(bridge, 'process_isolated', side_effect=process), \
+             patch.object(bridge.recorder.Session, 'start', return_value=b):
+            try:
+                self.assertTrue(self.service.process_session(a.meta['id'])['ok'])
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(self.service.start_recording({})['ok'])
+                self.wait(background=False)
+                before = self.service.get_state()['data']['activity']
+            finally:
+                release.set()
+                self.wait()
+        self.assertIs(self.service._active, b)
+        after = self.service.get_state()['data']['activity']
+        self.assertEqual({k: v for k, v in after.items() if k != 'elapsed_seconds'},
+                         {k: v for k, v in before.items() if k != 'elapsed_seconds'})
+        self.assertEqual(bridge.recorder.read(a.path / 'session.json')['state'], '失败')
+
+    def test_restart_leaves_persisted_queue_pending_without_auto_upload(self):
+        session = self.session(background_processing={'id': 'prior-job', 'state': 'queued',
+            'settings': {'transcription_provider': 'qwen'}})
+        with patch.object(bridge, 'process_isolated') as process:
+            self.service._recover()
+        process.assert_not_called()
+        restored = bridge.recorder.read(session.path / 'session.json')
+        self.assertEqual(restored['state'], '待整理')
+        self.assertIsNone(restored['background_processing'])
+        self.assertIn('不会自动上传', restored['warning'])
+
+    def test_stop_keeps_recording_owned_until_all_native_cleanup_returns(self):
+        session = self.session(state='录制中')
+        self.service._active = session
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def finishing_stop():
+            entered.set()
+            self.assertTrue(release.wait(5))
+
+        with patch.object(session, 'stop', side_effect=finishing_stop):
+            try:
+                self.assertTrue(self.service.stop_recording()['ok'])
+                self.assertTrue(entered.wait(2))
+                self.assertIs(self.service._active, session)
+                self.assertFalse(self.service.start_recording({})['ok'])
+                self.assertTrue(self.service.get_state()['data']['activity']['busy'])
+                self.assertEqual(self.service.get_state()['data']['background_jobs'], [])
+            finally:
+                release.set()
+                self.wait()
+        self.assertIsNone(self.service._active)
+
+    def test_duplicate_cloud_recovery_does_not_restore_or_queue_twice(self):
+        session = self.session(transcription_cache='转写原始/original')
+        session.meta['settings']['transcription_provider'] = 'qwen'
+        session.update(settings=session.meta['settings'])
+        cloud = session.path / '转写原始/original/云端任务.json'
+        bridge.recorder.write(cloud, {'state': 'SUBMITTING', 'fingerprint': 'same'})
+        entered, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def process(owned, progress, **kwargs):
+            entered.set()
+            self.assertTrue(release.wait(5))
+            owned.update(state='可回看')
+
+        from qwen_transcription import restore_task
+        with patch.object(bridge.secret_store, 'has_key', return_value=True), \
+             patch.object(bridge, 'process_isolated', side_effect=process) as process_mock, \
+             patch('qwen_transcription.restore_task', wraps=restore_task) as restore:
+            try:
+                self.assertTrue(self.service.recover_cloud_task(session.meta['id'], 'task-one')['ok'])
+                self.assertTrue(entered.wait(2))
+                self.assertFalse(self.service.recover_cloud_task(session.meta['id'], 'task-two')['ok'])
+                self.assertEqual(restore.call_count, 1)
+                self.assertEqual(bridge.recorder.read(cloud)['task_id'], 'task-one')
+            finally:
+                release.set()
+                self.wait()
+        self.assertEqual(process_mock.call_count, 1)
+
+    def test_progress_presentation_failure_cannot_abort_processing_or_release_queue(self):
+        self.service._cfg['transcription_provider'] = 'local'
+        self.model.resolve_model.return_value = self.root / 'model'
+        session = self.session()
+        safe_text = self.service._safe_text
+
+        def fail_presentation(text):
+            if text == 'unrenderable-progress':
+                raise RuntimeError('synthetic presentation failure')
+            return safe_text(text)
+
+        def process(owned, progress, **kwargs):
+            progress('unrenderable-progress')
+            owned.update(state='可回看', segments=4)
+
+        with patch.object(self.service, '_safe_text', side_effect=fail_presentation), \
+             patch.object(bridge, 'process_isolated', side_effect=process):
+            self.assertTrue(self.service.process_session(session.meta['id'])['ok'])
+            self.wait()
+        row = self.service.get_state()['data']['sessions'][0]
+        self.assertEqual(row['segments'], 4)
+        self.assertEqual(row['background_result']['state'], 'completed')
+
+    def test_external_worker_lock_rejects_queue_without_mutating_session(self):
+        import msvcrt
+        self.service._cfg['transcription_provider'] = 'local'
+        self.model.resolve_model.return_value = self.root / 'model'
+        session = self.session(state='转写中', background_processing={'id': 'external', 'state': 'running'})
+        original = deepcopy(session.meta)
+        with (session.path / '.processing.lock').open('a+b') as lock:
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            try:
+                self.assertFalse(self.service.process_session(session.meta['id'])['ok'])
+                self.service._recover()
+                self.assertEqual(bridge.recorder.read(session.path / 'session.json'), original)
+            finally:
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+        self.assertEqual(self.service.get_state()['data']['background_jobs'], [])
+
+    def test_recovery_rereads_completed_metadata_after_acquiring_lock(self):
+        session = self.session(state='转写中')
+        actual_lock = bridge.recorder.session_lock
+
+        def completing_lock(fn):
+            def complete_first(owned, *args, **kwargs):
+                bridge.recorder.Session(owned.path).update(state='可回看', completed=123, segments=7)
+                return fn(owned, *args, **kwargs)
+            return actual_lock(complete_first)
+
+        with patch.object(bridge.recorder, 'session_lock', side_effect=completing_lock):
+            self.service._recover()
+        meta = bridge.recorder.read(session.path / 'session.json')
+        self.assertEqual((meta['state'], meta['completed'], meta['segments']), ('可回看', 123, 7))
 
     def test_cloud_recovery_uses_original_settings_and_existing_cache(self):
         session = self.session(transcription_cache='转写原始/original')
@@ -238,7 +630,7 @@ class DesktopServiceTests(unittest.TestCase):
             self.assertTrue(self.service.recover_cloud_task(session.meta['id'], 'existing-task-id')['ok'])
             self.wait()
         process.assert_called_once()
-        self.assertEqual(process.call_args.kwargs, {})
+        self.assertEqual(process.call_args.kwargs['transcription_settings']['transcription_provider'], 'qwen')
         restored = bridge.recorder.read(job)
         self.assertEqual(restored['task_id'], 'existing-task-id')
         self.assertEqual(restored['fingerprint'], 'unchanged')
@@ -249,10 +641,10 @@ class DesktopServiceTests(unittest.TestCase):
         session.update(settings=session.meta['settings'])
         with patch.object(bridge.secret_store, 'has_key', return_value=True), \
              patch.object(bridge, 'process_isolated') as process:
-            self.service.recover_cloud_task(session.meta['id'], 'new-task')
+            result = self.service.recover_cloud_task(session.meta['id'], 'new-task')
             self.wait()
             process.assert_not_called()
-            self.assertIn('路径无效', self.service.get_state()['data']['activity']['detail'])
+            self.assertIn('路径无效', result['error'])
             session.update(transcription_cache='转写原始/original')
             job = session.path / '转写原始/original/云端任务.json'
             bridge.recorder.write(job, {'state': 'PENDING', 'task_id': 'old-task'})
