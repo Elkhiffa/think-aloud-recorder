@@ -57,7 +57,14 @@ install packages globally on a user's working computer.
    separate document and does not itself authorize republication.
    WebView2 browser runtime is a separate system prerequisite;
    the package does not claim to install it or bundle Obsidian.
-6. Copy the application's allowlisted source/assets/licenses into `<stage>`.
+6. Run `runtime/python.exe scripts/fetch_input_runtime.py --root <stage>` to
+   prepare the pinned official SDL2 2.32.10 x64 controller runtime. It downloads
+   binary/source archives into the stage build cache, validates fixed SHA256
+   values, and writes only `tools/input/SDL2.dll`, its provenance, and the exact
+   upstream zlib license. No global installation or PATH changes. Existing
+   differing files are preserved and cause a failure. Add the verified source
+   archive to a successor dependency-source manifest before packaging.
+7. Copy the application's allowlisted source/assets/licenses into `<stage>`.
    Model weights remain optional. Run the tests and native launcher checks below.
 
 ## Acquire source materials
@@ -158,3 +165,7 @@ runtime. No absolute developer-machine Python path is embedded.
   checks. Passing fixture tests does not establish these native/live results.
 - External Obsidian installation and provider/GPU behavior require their own real
   checks. A successful archive is not a claim of public release readiness.
+- Input recording uses the Windows Raw Input API and portable SDL2 controller
+  events. Synthetic focus/timing tests and a listener lifecycle smoke do not
+  establish physical Xbox/DualSense compatibility. Keep actual device findings
+  separate in `docs/input-capture-validation.md`.

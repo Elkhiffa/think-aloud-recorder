@@ -5,12 +5,12 @@
   else root.RecorderState = exported;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
-  const FIELDS = ['game','vault','preset','source','window','monitor','mic','language','hotwords','hotword_files','hotword_manual','transcription_provider'];
+  const FIELDS = ['game','vault','preset','source','window','monitor','mic','language','hotwords','hotword_files','hotword_manual','transcription_provider','record_inputs'];
   const clone = value => JSON.parse(JSON.stringify(value));
   const splitWords = text => String(text||'').replace(/^\uFEFF/,'').split(/[,，;；、\r\n]+/).map(word=>word.normalize('NFC').trim()).filter(Boolean);
   const vocabularyWords = draft => [...new Set([...(draft?.hotword_files||[]).flatMap(file=>file.words||[]),...splitWords(draft?.hotword_manual)].map(word=>word.normalize('NFC').trim()).filter(Boolean))];
   function defaults(vault='') {
-    return {game:'',vault,preset:'均衡 1080p30',source:'游戏窗口',window:'',monitor:'',mic:'',language:'zh',hotwords:'',hotword_files:[],hotword_manual:'',transcription_provider:'local'};
+    return {game:'',vault,preset:'均衡 1080p30',source:'游戏窗口',window:'',monitor:'',mic:'',language:'zh',hotwords:'',hotword_files:[],hotword_manual:'',transcription_provider:'local',record_inputs:false};
   }
   class State {
     constructor() { this.snapshot=null;this.connected=false;this.draft=null;this.editingId=null;this.step=1;this.requestPending=false;this.confirmedVault=''; }
@@ -37,6 +37,7 @@
       this.draft=defaults(this.snapshot?.suggested_vault||this.saved.vault||this.snapshot?.default_vault?.path||'');
       if(!this.editingId)this.draft.hotword_files=clone(this.snapshot?.default_hotword_files||[]);
       if(this.editingId) for(const key of FIELDS) if(this.saved[key]!==undefined)this.draft[key]=clone(this.saved[key]);
+      this.draft.record_inputs=this.draft.source==='游戏窗口'&&this.draft.record_inputs===true;
       // Legacy record-only presets remain intact until the user saves an explicit
       // transcription choice. Never silently turn an old preset into cloud use.
       if(!['local','qwen'].includes(this.draft.transcription_provider))this.draft.transcription_provider='';
@@ -47,7 +48,7 @@
       return this.draft;
     }
     cancelDraft() { this.draft=null;this.editingId=null;this.step=1;this.confirmedVault=''; }
-    updateDraft(key,value) { if(this.draft&&FIELDS.includes(key)){this.draft[key]=value;if(key==='hotwords')this.draft.hotword_manual=value;if(['hotwords','hotword_files','hotword_manual'].includes(key))this.syncVocabulary();} }
+    updateDraft(key,value) { if(this.draft&&FIELDS.includes(key)){this.draft[key]=key==='record_inputs'?value===true:value;if(this.draft.source!=='游戏窗口')this.draft.record_inputs=false;if(key==='hotwords')this.draft.hotword_manual=value;if(['hotwords','hotword_files','hotword_manual'].includes(key))this.syncVocabulary();} }
     syncVocabulary() { if(this.draft)this.draft.hotwords=vocabularyWords(this.draft).join('\n'); }
     addVocabularyFiles(files) { if(!this.draft)return 0;const ids=new Set(this.draft.hotword_files.map(file=>file.id));let count=0;for(const file of files||[]){if(!ids.has(file.id)){this.draft.hotword_files.push(clone(file));ids.add(file.id);count++;}}this.syncVocabulary();return count; }
     removeVocabularyFile(id) { if(this.draft){this.draft.hotword_files=this.draft.hotword_files.filter(file=>file.id!==id);this.syncVocabulary();} }

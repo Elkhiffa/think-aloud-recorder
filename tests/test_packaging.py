@@ -26,7 +26,8 @@ class PackagingTests(unittest.TestCase):
                      'runtime/Lib/site-packages/fixture-1.dist-info/METADATA',
                      'runtime/Lib/site-packages/fixture/config.json',
                      'tools/obs/bin/64bit/obs64.exe', 'tools/obs/data/locale/en-US.ini',
-                     'tools/obs/portable_mode.txt'):
+                     'tools/obs/portable_mode.txt', 'tools/input/SDL2.dll',
+                     'tools/input/provenance.json', 'licenses/SDL2-zlib.txt'):
             self.write(path, b'fixture dependency\n')
         self.sources = self.root / 'build/dependency-sources'
         self.sources.mkdir(parents=True)
@@ -34,7 +35,10 @@ class PackagingTests(unittest.TestCase):
         source.write_bytes(b'synthetic source archive, not a real release')
         self.source_manifest = {'schema': 1, 'redistribution_ready': False,
             'gaps': ['synthetic incomplete source fixture'], 'files': [
-                {'filename': source.name, 'bytes': source.stat().st_size, 'sha256': sha256(source)}]}
+                {'component': 'SDL2', 'filename': source.name, 'bytes': source.stat().st_size, 'sha256': sha256(source)}]}
+        self.write('tools/input/provenance.json', json.dumps({'version': 'synthetic',
+            'dll_sha256': sha256(self.root / 'tools/input/SDL2.dll'),
+            'assets': [{'name': source.name, 'sha256': sha256(source)}]}).encode())
         self.save_manifest()
 
     def tearDown(self):
@@ -136,6 +140,16 @@ class PackagingTests(unittest.TestCase):
     def test_modified_source_archive_rejected(self):
         (self.sources / 'fixture-sources.tar.gz').write_bytes(b'changed')
         with self.assertRaisesRegex(ValueError, 'source mismatch'):
+            self.make()
+
+    def test_controller_runtime_and_corresponding_source_must_match(self):
+        self.write('tools/input/SDL2.dll', b'changed runtime')
+        with self.assertRaisesRegex(ValueError, 'SDL2 differs'):
+            self.make()
+        self.write('tools/input/SDL2.dll', b'fixture dependency\n')
+        self.source_manifest['files'][0]['component'] = 'unrelated'
+        self.save_manifest()
+        with self.assertRaisesRegex(ValueError, 'Matching SDL2 source'):
             self.make()
 
     def test_source_path_traversal_rejected(self):

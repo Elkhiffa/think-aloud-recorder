@@ -551,6 +551,9 @@ async function reviewChecks(context, origin) {
     await screen(page, 'review-media-failure');
     throw new Error(`${error.message}\nSynthetic media diagnostic: ${JSON.stringify(evidence.reviewMediaDiagnostic)}`);
   }
+  // Media metadata is ready before the next rendered source-fit pass. Measure
+  // the settled layout, then prove user scrolling cannot change that geometry.
+  await page.evaluate(async()=>{for(let i=0;i<6;i++)await new Promise(requestAnimationFrame);});
   await check('synthetic video genuinely loads and review reports readiness', async () => {
     const readiness = await calls(page, 'ready'); assert.ok(readiness.some(call => call.args[0] === null));
     assert.equal(await page.locator('#testLabel').isVisible(), true);
@@ -589,7 +592,7 @@ async function reviewChecks(context, origin) {
     await page.locator('#search').press('ArrowLeft'); assert.equal(await page.locator('#search').inputValue(), '返回');
     await page.locator('#search').fill('');
     await unchangedBounds(page, '#copySplit', async () => { await page.locator('#copyPath').click(); await page.waitForFunction(() => document.querySelector('#copyLabel').textContent === 'copied!'); });
-    assert.equal((await calls(page, 'copy_path')).at(-1).args[0], 'folder');
+    assert.equal((await calls(page, 'copy_path')).at(-1).args[0], 'vault');
     await page.locator('#fileActionsToggle').focus(); await page.keyboard.press('ArrowDown');
     assert.equal(await page.locator('#fileActionsToggle').getAttribute('aria-expanded'), 'true');
     await assertInsideViewport(page, '#fileActions');

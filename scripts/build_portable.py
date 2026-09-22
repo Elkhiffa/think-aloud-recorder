@@ -21,9 +21,10 @@ ROOT_FILES = (
     'portable_entry.py', 'processing_worker.py', 'processing.py', 'qwen_transcription.py',
     'recorder.py', 'window_manager.py', 'review_runtime.py', 'scel_to_text.py', 'secret_store.py',
     'transcription_runtime.py', 'player.html', 'requirements-lock.txt',
+    'input_capture.py', 'input_capture_windows.py', 'input_capture_devices.py', 'session_metadata.py',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md',
-    'scripts/build_portable.py', 'scripts/fetch_runtime.py',
-    'vocabularies/uiux-terms.txt', 'docs/uiux-vocabulary.md',
+    'scripts/build_portable.py', 'scripts/fetch_runtime.py', 'scripts/fetch_input_runtime.py',
+    'vocabularies/uiux-terms.txt', 'docs/uiux-vocabulary.md', 'docs/input-capture-validation.md',
 )
 OPTIONAL_ROOT_FILES = ('README.md',)
 BLOCKED_PARTS = {'__pycache__', '.git', '.cache', 'cache', 'caches', 'logs', 'log',
@@ -69,6 +70,8 @@ def collect_files(root):
         add(relative)
     for relative in OPTIONAL_ROOT_FILES:
         add(relative, False)
+    for relative in ('tools/input/SDL2.dll', 'tools/input/provenance.json', 'licenses/SDL2-zlib.txt'):
+        add(relative)
     for dirname in ('licenses', 'ui', 'runtime', 'tools/obs'):
         base = root / dirname
         if not base.is_dir():
@@ -186,6 +189,14 @@ def build(root, outdir, source_dir=None, *, candidate=False, version='0.3.0', la
     expected_ffmpeg = sources.get('provenance', {}).get('ffmpeg_binary_sha256')
     if expected_ffmpeg and (ffmpeg_name not in files or sha256(files[ffmpeg_name]) != expected_ffmpeg):
         raise ValueError('Bundled FFmpeg differs from dependency-source provenance')
+    sdl = json.loads(files['tools/input/provenance.json'].read_text(encoding='utf-8'))
+    if sha256(files['tools/input/SDL2.dll']) != sdl.get('dll_sha256'):
+        raise ValueError('Bundled SDL2 differs from binary provenance')
+    source_assets = {item.get('name'): item.get('sha256') for item in sdl.get('assets', [])
+                     if str(item.get('name', '')).endswith('.tar.gz')}
+    if not any(item.get('component') == 'SDL2' and item.get('sha256') == source_assets.get(item.get('filename'))
+               and item.get('filename') in source_assets for item in sources['files']):
+        raise ValueError('Matching SDL2 source archive missing from dependency sources')
     generated = {
         'ExperienceRecorder.exe': launcher if launcher is not None else launcher_bytes(),
         'portable.json': json_bytes({'name': 'Experience Recorder', 'version': version,

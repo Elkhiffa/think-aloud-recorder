@@ -11,23 +11,15 @@
   <!-- Plyr 3.8.4 | %%LICENSE%% -->
   <div hidden aria-hidden="true">%%PLYR_SVG%%</div>
   <header class="review-header">
-    <div class="review-brand"><span class="review-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M4 16C4 10 7 7 13 6v4c-3 1-4 3-4 5h4v10H4Z"/><path d="M16 16c0-6 3-9 9-10v4c-3 1-4 3-4 5h4v10h-9Z"/><path d="M30 3h6v35l-3-4-3 4Z"/></svg></span><div><h1 id="title">%%TITLE%%</h1><p id="sessionInfo" class="session-info"></p></div><span id="testLabel" hidden>合成测试</span></div>
-    <div class="review-header-actions"><span class="review-wordmark">Think Aloud</span><button id="themeButton" class="theme-button" aria-label="切换深色模式" title="切换深色模式"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14a8 8 0 0 1-10-10 8.5 8.5 0 1 0 10 10Z"/></svg></button></div>
-  </header>
-  <main class="review-layout">
-    <section id="videoPane" class="video-column" aria-label="录像与资料">
-      <div class="video-slot"><video id="video" controls playsinline preload="metadata"></video></div>
-      <div class="file-card">
-        <div class="file-toolbar">
-          <button id="folder" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10H3V6Z"/></svg>打开文件夹</button>
-          <div class="copy-split" id="copySplit">
-            <button id="copyPath" data-copy="folder" title="复制当前片段的场次文件夹路径">
+    <div class="review-brand"><span class="review-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M4 16C4 10 7 7 13 6v4c-3 1-4 3-4 5h4v10H4Z"/><path d="M16 16c0-6 3-9 9-10v4c-3 1-4 3-4 5h4v10h-9Z"/><path d="M30 3h6v35l-3-4-3 4Z"/></svg></span><div class="review-session"><div class="session-title-row"><h1 id="title">%%TITLE%%</h1><button id="renameSession" class="rename-session" aria-label="编辑片段名" title="编辑片段名"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7l-3-3L5 16Z"/></svg></button></div><form id="renameForm" class="rename-form" hidden><label class="sr-only" for="sessionName">片段名称</label><input id="sessionName" maxlength="100" autocomplete="off"><button type="submit">保存</button><button type="button" id="cancelRename">取消</button></form><div class="session-meta-row"><p id="sessionInfo" class="session-info"></p><div class="copy-split" id="copySplit">
+            <button id="copyPath" data-copy="vault" title="复制资料库路径">
               <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
               <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
-              <span id="copyLabel" aria-live="polite">复制资料路径</span>
+              <span id="copyLabel" aria-live="polite">复制资料库路径</span>
             </button>
             <button id="fileActionsToggle" aria-label="选择要复制的路径" title="选择要复制的路径" aria-expanded="false" aria-controls="fileActions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
             <div class="file-actions" id="fileActions" hidden>
+              <button id="folder">打开场次文件夹</button>
               <button data-copy="folder">复制场次文件夹路径</button>
               <button data-copy="transcript">复制逐字稿路径（JSON）</button>
               <button data-copy="video">复制视频路径</button>
@@ -35,8 +27,19 @@
               <button data-document="notes">打开复盘文档</button>
               <button data-document="transcript">打开逐字稿文档</button>
             </div>
-          </div>
-        </div>
+          </div></div></div><span id="testLabel" hidden>合成测试</span></div>
+    <div class="review-header-actions"><span class="review-wordmark">Think Aloud</span><button id="themeButton" class="theme-button" aria-label="切换深色模式" title="切换深色模式"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14a8 8 0 0 1-10-10 8.5 8.5 0 1 0 10 10Z"/></svg></button></div>
+  </header>
+  <main class="review-layout">
+    <section id="videoPane" class="video-column" aria-label="录像与资料">
+      <div class="video-slot"><video id="video" controls playsinline preload="metadata"></video>
+
+      </div>
+      <section id="inputPanel" class="input-panel" aria-label="当前操作">
+        <div class="input-heading"><h2>当前操作</h2><div class="input-modes" aria-label="操作显示方式"><button data-input-mode="keys" aria-pressed="true">当前按键</button><button data-input-mode="device" aria-pressed="false">设备图</button><button data-input-mode="collapsed" aria-pressed="false">收起</button></div></div>
+        <div id="inputBody" class="input-body"><div class="input-meta"><span id="inputSource"></span><label id="deviceSelectLabel" hidden><span class="sr-only">显示设备</span><select id="deviceSelect"><option value="auto">自动切换</option><option value="keyboard">键盘 + 鼠标</option><option value="xbox">Xbox</option><option value="dualsense">DualSense</option></select></label></div><div id="currentKeys" class="current-keys"></div><div id="deviceView" class="device-view" hidden></div><p id="inputState" class="input-state"></p></div>
+      </section>
+      <div class="file-card">
         <p id="status" role="status">正在加载录像…</p>
       </div>
     </section>
@@ -45,13 +48,15 @@
          aria-orientation="vertical" aria-valuemin="0" aria-valuemax="100" aria-valuenow="59"
          title="拖动调整比例，双击或按 Enter 重新适配视频；选中后可用方向键微调。"></div>
     <aside id="transcriptPane" class="transcript" aria-label="口述逐字稿">
-      <div class="transcript-heading"><h2>口述逐字稿 <span id="lineCount"></span></h2><button id="follow" aria-pressed="true">跟随播放：开</button></div>
-      <label class="search-label"><span class="sr-only">搜索逐字稿</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="搜索逐字稿" autocomplete="off"></label>
+      <div class="transcript-heading"><div class="review-tabs" role="tablist" aria-label="回看记录"><button id="inputTab" role="tab" aria-selected="true" aria-controls="inputTimelinePanel">操作时间轴</button><button id="transcriptTab" role="tab" aria-selected="false" aria-controls="lines">原话</button></div><button id="follow" aria-pressed="true">跟随播放：开</button></div>
+      <section id="inputTimelinePanel" class="input-timeline-panel" role="tabpanel" aria-labelledby="inputTab"><div class="timeline-column-headings"><span title="滚轮调整时间轴缩放">时间</span><span>原话</span><span>方向</span><span>指向</span><span>按键</span></div><div id="inputTimeline" class="input-timeline" tabindex="0" aria-label="操作时间轴，点击时间刻度或空白处定位，纵向拖动调整进度；内容区滚轮调整进度，时间刻度区滚轮调整缩放"><div id="timelineTicks" class="timeline-ticks"></div><div id="timelineSpeech" class="timeline-speech"></div><div id="timelineInputs" class="timeline-inputs"></div><div id="timelineGaps" class="timeline-gaps"></div><div id="timelinePlayhead" class="timeline-playhead"><time></time></div></div><div class="timeline-footer"><span id="timelineState"></span><span id="timelineScale" title="时间刻度区滚轮缩放"></span></div></section>
+      <label id="transcriptSearch" class="search-label" hidden><span class="sr-only">搜索逐字稿</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="搜索逐字稿" autocomplete="off"><span id="lineCount"></span></label>
       <p class="sr-only" id="transcriptHint">点击原话定位视频。自动转写的文字可能需要校对。</p>
-      <div id="lines" tabindex="0" aria-label="逐字稿列表" aria-describedby="transcriptHint" title="点击原话，播放对应的视频"></div>
+      <div id="lines" tabindex="0" role="tabpanel" aria-labelledby="transcriptTab" aria-label="逐字稿列表" aria-describedby="transcriptHint" title="点击原话，播放对应的视频" hidden></div>
       <p id="empty" hidden>没有匹配的原话。</p>
     </aside>
   </main>
+  <div id="quotePopover" class="quote-popover" role="dialog" aria-label="原话全文" hidden><div class="quote-popover-heading"><time id="quoteTime"></time><button id="quoteClose" aria-label="关闭原话">×</button></div><p id="quoteText"></p></div>
   <script id="review-data" type="application/json">%%DATA%%</script>
   <script>%%PLYR_JS%%</script>
   <script>%%JS%%</script>

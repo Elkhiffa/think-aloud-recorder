@@ -32,6 +32,46 @@ test('saved identifiers and model capability never substitute for backend readin
   state.accept(snapshot());state.requestPending=true;assert.equal(state.canStart,false);
 });
 
+test('operation capture is opt-in, saved per preset, and cleared on full-screen selection',()=>{
+  const state=new State();state.accept(snapshot());state.openDraft('new');
+  assert.equal(state.draft.record_inputs,false);
+  state.updateDraft('record_inputs',true);assert.equal(state.presetPayload().record_inputs,true);
+  state.updateDraft('source','整个显示器');assert.equal(state.draft.record_inputs,false);
+  state.updateDraft('record_inputs',true);assert.equal(state.draft.record_inputs,false);
+  state.updateDraft('source','游戏窗口');assert.equal(state.draft.record_inputs,false);
+  state.cancelDraft();assert.equal(state.saved.record_inputs,undefined);
+  state.accept(snapshot({config:{...snapshot().config,record_inputs:true}}));state.openDraft('edit');
+  assert.equal(state.draft.record_inputs,true);
+  state.accept(snapshot({config:{...snapshot().config,source:'整个显示器',record_inputs:true}}));state.openDraft('edit');
+  assert.equal(state.draft.record_inputs,false,'legacy inconsistent settings cannot activate screen-wide capture');
+});
+
+test('wizard explains input capture boundary and does not enable it while selecting devices',async()=>{
+  const f=await fixture();f.elements.get('settingsButton').onclick();
+  const toggle=f.elements.get('recordInputs');assert.equal(toggle.checked,false);assert.equal(toggle.disabled,false);
+  toggle.checked=true;toggle.onchange();assert.equal(f.run('store.draft.record_inputs'),true);
+  const source=f.elements.get('source');source.value='整个显示器';source.listeners.change();
+  assert.equal(toggle.disabled,true);assert.equal(toggle.checked,false);
+  assert.match(f.elements.get('inputRecordingHint').textContent,/改为“游戏窗口”/);
+  source.value='游戏窗口';source.listeners.change();assert.equal(toggle.disabled,false);assert.equal(toggle.checked,false);
+  assert.equal(f.calls.some(call=>call.name==='start_recording'),false);
+});
+
+test('playable processing session allows review and naming but keeps reprocessing blocked',async()=>{
+  const sessions=[{id:'pending-text',game:'Game',session_name:'Door <attempt>',state:'转写中',can_review:true},{id:'no-video',game:'Game',state:'转写中',can_review:false}];
+  const f=await fixture(snapshot({sessions,background_jobs:sessions.map(s=>({session_id:s.id,state:'running'}))}));
+  assert.equal(f.run("sessionActionBlocked('pending-text','review')"),false);
+  assert.equal(f.run("sessionActionBlocked('pending-text','rename')"),false);
+  assert.equal(f.run("sessionActionBlocked('pending-text','process')"),true);
+  assert.equal(f.run("sessionActionBlocked('no-video','review')"),true);
+  const html=f.elements.get('sessionList').innerHTML;
+  assert.ok(html.includes('Door &lt;attempt&gt;'));assert.ok(html.includes('data-session-action="rename"'));
+  assert.ok(html.includes('data-session-action="review" data-id="pending-text"'));
+  assert.ok(!html.includes('data-session-action="review" data-id="no-video"'));
+  f.elements.get('search').value='door';f.elements.get('search').oninput();
+  assert.ok(!f.elements.get('sessionList').innerHTML.includes('data-id="no-video"'));
+});
+
 test('new preset is independent; editing and cancellation preserve every saved setting',()=>{
   const state=new State();state.accept(snapshot());
   const saved=JSON.stringify(state.saved);

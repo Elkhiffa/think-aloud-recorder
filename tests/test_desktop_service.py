@@ -409,7 +409,7 @@ class DesktopServiceTests(unittest.TestCase):
                     result = self.service.open_review('capture-a')
                     self.assertFalse(result['ok'])
                     review.assert_not_called()
-                    self.assertIn('后台整理', result['error'])
+                    self.assertIn('场次文件不存在', result['error'])
                 self.assertEqual(bridge.recorder.read(b.path / 'session.json')['state'], '待整理')
                 self.assertFalse(self.service.close_allowed())
                 self.service._recover()
@@ -655,6 +655,7 @@ class DesktopServiceTests(unittest.TestCase):
 
     def test_review_does_not_replace_recording_activity(self):
         old = self.session(state='可回看')
+        (old.path / '录像.mp4').write_bytes(b'synthetic published video placeholder')
         active = self.session('new-recording', state='录制中')
         self.service._active = active
         before = dict(self.service._activity)
@@ -666,6 +667,63 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertEqual(self.service._activity, before)
         self.assertFalse(self.service.open_review(active.meta['id'])['ok'])
         self.service._active = None
+
+    def test_pending_review_and_rename_are_independent_of_background_processing(self):
+        session = self.session(state='转写中')
+        (session.path / '录像.mp4').write_bytes(b'synthetic published video placeholder')
+        self.service._background_jobs['j'] = dict(id='j', session_id=session.meta['id'], game='Synthetic',
+            path=session.path.resolve(), state='running', detail='synthetic pending transcription')
+        self.addCleanup(self.service._background_jobs.clear)
+        self.service.set_review_opener(MagicMock(return_value={'ready': True}))
+        self.assertTrue(self.service.open_review(session.meta['id'])['ok'])
+        self.assertTrue(self.service.rename_session(session.meta['id'], '自定义场次')['ok'])
+        session.update(step='new processing progress')
+        state = self.service.get_state()['data']['sessions'][0]
+        self.assertTrue(state['can_review'])
+        self.assertEqual(state['session_name'], '自定义场次')
+        self.assertEqual(self.service._cfg['game'], self.config['game'])
+
+    def test_record_inputs_requires_boolean_and_window_source(self):
+        for payload in ({'record_inputs': 'true'}, {'record_inputs': 1},
+                        {'record_inputs': True, 'source': '整个显示器'}):
+            self.assertFalse(self.service.save_settings(payload)['ok'])
+        validated = self.service._validated_settings({'record_inputs': True, 'source': '游戏窗口'})
+        self.assertTrue(validated['record_inputs'])
+
+    def test_legacy_preset_never_inherits_another_presets_input_opt_in(self):
+        first=self.service._cfg['active_preset_id']
+        self.service._cfg['record_inputs']=True
+        self.service._cfg['presets'][first]['record_inputs']=True
+        old=deepcopy(self.service._cfg['presets'][first])
+        old.pop('record_inputs',None)
+        old.update(game='Legacy',name='Legacy')
+        self.service._cfg['presets']['old']=old
+        self.assertTrue(self.service.select_preset('old')['ok'])
+        self.wait()
+        self.assertIs(self.service._cfg['record_inputs'],False)
+        self.assertIs(self.service._cfg['presets']['old']['record_inputs'],False)
+        self.assertIs(self.service.get_state()['data']['config']['record_inputs'],False)
+
+    def test_loading_legacy_and_monitor_presets_defaults_input_recording_off(self):
+        for source,value in [('游戏窗口',None),('整个显示器',True)]:
+            cfg=self.service._cfg
+            cfg['record_inputs']=True
+            selected=deepcopy(cfg['presets'][cfg['active_preset_id']])
+            selected['source']=source
+            if value is None:selected.pop('record_inputs',None)
+            else:selected['record_inputs']=value
+            cfg['presets']['legacy-input']=selected
+            cfg['active_preset_id']='legacy-input'
+            self.service._initialize_presets()
+            self.assertIs(cfg['record_inputs'],False)
+            self.assertIs(cfg['presets']['legacy-input']['record_inputs'],False)
+
+    def test_new_preset_without_input_field_does_not_inherit_current_opt_in(self):
+        self.service._cfg['record_inputs']=True
+        result=self.service.save_preset({'name':'New without opt-in','game':'New without opt-in'})
+        self.assertTrue(result['ok'],result)
+        self.wait()
+        self.assertIs(self.service._cfg['record_inputs'],False)
 
     def test_idle_readiness_never_prevents_exit(self):
         self.service._readiness.update(checking=True)
@@ -940,6 +998,7 @@ class DesktopServiceTests(unittest.TestCase):
         with patch.object(bridge.recorder, 'client', return_value=client), patch.object(session, 'stop') as stop:
             self.service._inspect_recording()
         stop.assert_not_called()
+        client.disconnect.assert_called_once()
         self.assertIsNone(self.service._active)
         self.assertEqual(bridge.recorder.Session(session.path).meta['state'], '失败')
 

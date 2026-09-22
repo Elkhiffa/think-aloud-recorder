@@ -30,10 +30,10 @@ import secret_store
 
 PUBLIC_KEYS = ('game', 'vault', 'preset', 'source', 'window', 'monitor', 'mic',
                'language', 'hotwords', 'hotword_files', 'hotword_manual',
-               'transcription_provider', 'configured')
+               'transcription_provider', 'record_inputs', 'configured')
 EDITABLE_KEYS = set(PUBLIC_KEYS) - {'configured'}
 PRESET_KEYS = ('preset', 'source', 'window', 'monitor', 'mic', 'language', 'hotwords',
-               'hotword_files', 'hotword_manual')
+               'hotword_files', 'hotword_manual', 'record_inputs')
 SUSPECT_STATES = {'录制中', '启动中', '保存中'}
 READINESS_MAX_AGE = 15
 
@@ -76,6 +76,7 @@ class DesktopService:
         self._readiness = dict(ready=False, checking=True, errors=[], checked_at=None)
         self._cfg = load_settings(self.root)
         self._cfg.setdefault('transcription_provider', 'later')
+        self._cfg.setdefault('record_inputs', False)
         self._cfg.pop('obsidian_exe', None)
         self._initialize_presets()
         self._model = ModelManager(self.root)
@@ -162,6 +163,7 @@ class DesktopService:
 
     def _public_config(self):
         result = {key: deepcopy(self._cfg.get(key, '')) for key in PUBLIC_KEYS}
+        result['record_inputs'] = self._cfg.get('record_inputs') is True and self._cfg.get('source') == '游戏窗口'
         result['vault'] = str(Path(self._cfg['vault']).resolve())
         result['configured'] = bool(self._cfg.get('configured'))
         result['games'] = {
@@ -172,6 +174,7 @@ class DesktopService:
         return result
 
     def _initialize_presets(self):
+        self._normalize_input_choice(self._cfg)
         self._normalize_hotword_config(self._cfg)
         migrated = 'presets' not in self._cfg
         if migrated:
@@ -181,18 +184,27 @@ class DesktopService:
                 self._cfg['presets']['legacy'] = self._preset_snapshot(self._cfg)
                 self._cfg['active_preset_id'] = 'legacy'
         for value in self._cfg['presets'].values():
+            self._normalize_input_choice(value)
             self._normalize_hotword_config(value)
             if value.get('vault') and not Path(value['vault']).is_absolute():
                 value['vault'] = str((self.root / value['vault']).resolve())
         ident = self._cfg.get('active_preset_id')
         selected = self._cfg['presets'].get(ident)
         if selected:
+            self._cfg['record_inputs'] = False
             self._cfg.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
         else:
             self._cfg['active_preset_id'] = None
             self._cfg['configured'] = False
+            self._cfg['record_inputs'] = False
         if migrated and (self.root / 'config.json').exists():
             self._persist(self._cfg)
+
+    @staticmethod
+    def _normalize_input_choice(cfg):
+        # Capture is opt-in for this exact preset, never inherited from another
+        # active preset or from a value saved before this setting existed.
+        cfg['record_inputs'] = cfg.get('record_inputs') is True and cfg.get('source') == '游戏窗口'
 
     @staticmethod
     def _normalize_hotword_config(cfg):
@@ -207,6 +219,7 @@ class DesktopService:
     @staticmethod
     def _preset_snapshot(cfg):
         return {**{key: deepcopy(cfg.get(key, '')) for key in PUBLIC_KEYS},
+                'record_inputs': cfg.get('record_inputs') is True and cfg.get('source') == '游戏窗口',
                 'name': cfg.get('game') or '自由探索'}
 
     def _persist(self, cfg):
@@ -300,6 +313,9 @@ class DesktopService:
                         background = self._background_for(path)
                         result = self._background_history.get(str(path))
                         sessions.append(dict(id=ident, game=meta.get('game', ''),
+                                             session_name=meta.get('session_name', ''),
+                                             can_review=(path / '录像.mp4').is_file() and (path / '录像.mp4').resolve().parent == path.resolve()
+                                                 and not bool(self._active and self._active.path.resolve() == path.resolve()),
                                              created=meta.get('created', ''), state=meta.get('state', ''),
                                              duration=media.get('duration', 0),
                                              segments=meta.get('segments', 0),
@@ -354,8 +370,8 @@ class DesktopService:
             try:
                 # The existing client connects before considering a launch and
                 # never launches another instance after a readiness failure.
-                client = recorder.client(launch=True, progress=self._progress)
-                client.disconnect()
+                with recorder.obs_connection(launch=True, progress=self._progress):
+                    pass
             except Exception:
                 # The following actual probe supplies the actionable readiness
                 # error. Routine checks never repeat this automatic launch.
@@ -518,6 +534,11 @@ class DesktopService:
                 except Exception:
                     error('OBS_UNAVAILABLE', '无法连接录制引擎。请打开录制预设并刷新设备 / 设置 OBS。', 1)
             provider = cfg.get('transcription_provider', 'later')
+            if cfg.get('record_inputs'):
+                from input_capture import capture_readiness
+                capture = capture_readiness(cfg, self.root)
+                if not capture['ready']:
+                    error('INPUT_CAPTURE_UNAVAILABLE', capture['error'], 1)
             if provider == 'local' and not self._model.resolve_model():
                 error('LOCAL_MODEL_MISSING', '已选本地转写，但模型缺失、已移动或校验失效；请导入 / 下载模型，或改用 Qwen 转写。', 2)
             elif provider == 'qwen' and not self._has_key():
@@ -584,17 +605,21 @@ class DesktopService:
     def _validated_settings(self, payload, base=None):
         if not isinstance(payload, dict) or set(payload) - EDITABLE_KEYS:
             raise ValueError('设置包含不支持的字段。')
-        if any(not isinstance(value, str) for key, value in payload.items() if key != 'hotword_files'):
+        if any(not isinstance(value, str) for key, value in payload.items() if key not in ('hotword_files', 'record_inputs')):
             raise ValueError('设置格式不正确。')
         updated = deepcopy(self._cfg if base is None else base)
         updated.update(deepcopy(payload))
+        if type(updated.get('record_inputs', False)) is not bool:
+            raise ValueError('操作记录选项必须为开启或关闭。')
+        if updated.get('record_inputs') and updated.get('source') != '游戏窗口':
+            raise ValueError('操作记录仅支持指定游戏窗口，请选择窗口录制或关闭操作记录。')
         updated['vault'] = self._validate_vault(updated.get('vault'))
         for key, allowed in [('preset', recorder.PRESETS), ('source', ['游戏窗口', '整个显示器']),
                              ('language', ['zh', 'en', 'ja', '']),
                              ('transcription_provider', ['later', 'local', 'qwen'])]:
             if updated.get(key) not in allowed:
                 raise ValueError('设置选项无效：' + key)
-        for key in EDITABLE_KEYS - {'hotwords', 'hotword_files', 'hotword_manual'}:
+        for key in EDITABLE_KEYS - {'hotwords', 'hotword_files', 'hotword_manual', 'record_inputs'}:
             value = updated.get(key, '')
             if not isinstance(value, str) or len(value) > 4096 or any(ord(char) < 32 for char in value):
                 raise ValueError('设置文本包含无效内容：' + key)
@@ -706,8 +731,10 @@ class DesktopService:
                     raise ValueError('要编辑的预设不存在。')
                 ident = preset_id or uuid.uuid4().hex
                 base = deepcopy(self._cfg)
+                base['record_inputs'] = False
                 if preset_id:
                     selected = base['presets'][preset_id]
+                    self._normalize_input_choice(selected)
                     base.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
                 elif not {'hotword_files', 'hotword_manual', 'hotwords'}.intersection(payload):
                     # Only an omitted new-preset choice receives bundled defaults.
@@ -736,6 +763,8 @@ class DesktopService:
                     raise ValueError('请选择有效的录制预设。')
                 cfg = deepcopy(self._cfg)
                 selected = cfg['presets'][id]
+                self._normalize_input_choice(selected)
+                cfg['record_inputs'] = False
                 cfg.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
                 cfg['active_preset_id'] = id
                 self._persist(cfg)
@@ -917,12 +946,13 @@ class DesktopService:
                 session.stop()
             except Exception:
                 # Keep the active handle unless OBS proves this recording ended.
+                session.finish_inputs(interrupted=True,error='停止录制时连接中断，操作采集已停止。')
                 try:
-                    client = recorder.client(False)
-                    if not client.get_record_status().output_active:
-                        with self._lock:
-                            self._active = None
-                        session.update(state='失败', error='录制已停止，但保存校验尚未完成。原文件已保留，请恢复整理。')
+                    with recorder.obs_connection(False) as client:
+                        if not client.get_record_status().output_active:
+                            with self._lock:
+                                self._active = None
+                            session.update(state='失败', error='录制已停止，但保存校验尚未完成。原文件已保留，请恢复整理。')
                 except Exception:
                     pass
                 raise
@@ -950,11 +980,15 @@ class DesktopService:
                     or session.meta.get('recording_uncertain')):
                 raise RuntimeError('尚无法确认上次录制已结束。请刷新设备重新连接 OBS，再恢复整理。')
             return
-        if client.get_record_status().output_active:
-            directory = Path(client.send('GetRecordDirectory').record_directory).resolve()
-            if directory == session.path.resolve():
-                raise RuntimeError('此场次仍在录制，请先结束录制。')
-        self._uncertain_ids.discard(session.meta['id'])
+        try:
+            if client.get_record_status().output_active:
+                directory = Path(client.send('GetRecordDirectory').record_directory).resolve()
+                if directory == session.path.resolve():
+                    raise RuntimeError('此场次仍在录制，请先结束录制。')
+            self._uncertain_ids.discard(session.meta['id'])
+        finally:
+            try:client.disconnect()
+            except Exception:pass
 
     def _processing_settings(self, session):
         # A display name is not a preset identity. Historical language/vocabulary
@@ -1090,10 +1124,9 @@ class DesktopService:
                 if self._closed.is_set() or self._exit_pending:
                     raise RuntimeError('记录器正在关闭。')
                 session = self._session(id)
-                if self._background_for(session.path):
-                    raise RuntimeError('此场次仍在后台整理或排队，请等待整理结束后回看。')
                 if self._active and self._active.path == session.path:
                     raise RuntimeError('此场次仍在录制，请先结束并保存。')
+                self._contained_file(session, '录像.mp4')
                 opener = self._review_opener
                 if opener is None:
                     raise RuntimeError('回看窗口尚未就绪。')
@@ -1109,6 +1142,19 @@ class DesktopService:
 
     def set_review_opener(self, opener):
         self._review_opener = opener
+
+    def rename_session(self, id, name):
+        try:
+            with self._lock:
+                if self._closed.is_set() or self._exit_pending:
+                    raise RuntimeError('记录器正在关闭。')
+                session = self._session(id)
+                if self._active and self._active.path.resolve() == session.path.resolve():
+                    raise RuntimeError('请先结束本场次录制，再修改场次名称。')
+            from session_metadata import rename_session
+            return ok(rename_session(session.path, name))
+        except Exception as error:
+            return self._error(error)
 
     def package_session(self, id):
         def work():
@@ -1235,19 +1281,19 @@ class DesktopService:
         interrupted = False
         active_unknown = False
         try:
-            client = recorder.client(False)
-            recording = client.get_record_status()
-            if recording.output_active:
-                # A positive status alone cannot establish whose recording this
-                # is. Do not classify other sessions as stopped until its output
-                # directory is also known.
-                active_unknown = True
-                directory = client.send('GetRecordDirectory').record_directory
-                if not isinstance(directory, str) or not directory or not Path(directory).is_absolute():
-                    raise ValueError('OBS 未返回可确认的录制目录。')
-                recording_path = Path(directory).resolve()
-                active_unknown = False
-            connected = True
+            with recorder.obs_connection(False) as client:
+                recording = client.get_record_status()
+                if recording.output_active:
+                    # A positive status alone cannot establish whose recording this
+                    # is. Do not classify other sessions as stopped until its output
+                    # directory is also known.
+                    active_unknown = True
+                    directory = client.send('GetRecordDirectory').record_directory
+                    if not isinstance(directory, str) or not directory or not Path(directory).is_absolute():
+                        raise ValueError('OBS 未返回可确认的录制目录。')
+                    recording_path = Path(directory).resolve()
+                    active_unknown = False
+                connected = True
         except Exception:
             pass
         with self._lock:
@@ -1260,6 +1306,10 @@ class DesktopService:
                     if session.meta.get('test'):
                         self._progress('OBS 正在录制合成测试场次，未接管或停止它。')
                         continue
+                    if self._active and self._active.path.resolve() == path.resolve():
+                        session = self._active
+                    else:
+                        session.finish_inputs(interrupted=True,error='上次操作采集已中断，恢复录像连接不会重新开启采集。')
                     self._active = session
                     self._uncertain_ids.discard(ident)
                     session.update(state='录制中', recording_uncertain=False)
@@ -1284,6 +1334,9 @@ class DesktopService:
                                     warning='上次后台整理已中断，原始资料已保留。请手动恢复整理；不会自动上传。')
                                 return True
                             if owned.meta.get('state') in SUSPECT_STATES | {'转写中'} or owned.meta.get('recording_uncertain'):
+                                active = self._active
+                                capture_owner = active if active and active.path.resolve() == owned.path.resolve() else owned
+                                capture_owner.finish_inputs(interrupted=True,error='上次录制或操作采集已中断。')
                                 owned.update(state='失败', recording_uncertain=bool(uncertain),
                                     error='上次操作中断，原始资料已保留。请恢复整理；连接不明时先刷新设备。')
                                 return True
@@ -1323,24 +1376,30 @@ class DesktopService:
         if session is None:
             return
         try:
-            client = recorder.client(False)
-            state = client.get_record_status()
+            with recorder.obs_connection(False) as client:
+                before = time.perf_counter()
+                state = client.get_record_status()
+                after = time.perf_counter()
+                directory = Path(client.send('GetRecordDirectory').record_directory).resolve() if state.output_active else None
         except Exception:
+            session.finish_inputs(interrupted=True,error='与录制引擎的连接中断，操作采集已停止。')
             self._progress('无法连接 OBS，录像可能仍在继续。正在重连，请勿重复开始。', status='录制连接中断')
             return
         if not state.output_active:
+            session.finish_inputs(interrupted=True,error='OBS 录制意外停止。')
             session.update(state='失败', error='OBS 录制意外停止。原录像已保留，请选择恢复整理。')
             with self._lock:
                 self._active = None
             self._progress(session.meta['error'], status='录制已中断')
             return
-        directory = Path(client.send('GetRecordDirectory').record_directory).resolve()
         if directory != session.path.resolve():
+            session.finish_inputs(interrupted=True,error='录制归属已变化，操作采集已停止。')
             session.update(state='失败', error='OBS 已切换到其他录制目录。本场次原文件已保留，未停止其他录制。')
             with self._lock:
                 self._active = None
             self._progress(session.meta['error'], status='录制归属已变化')
             return
+        session.observe_input_clock(state, before, after)
         if shutil.disk_usage(session.path).free < 2 * 1024 ** 3:
             session.stop()
             session.update(state='待整理', warning='磁盘剩余空间不足 2 GB，已停止并保存录像。')
@@ -1380,6 +1439,8 @@ class DesktopService:
         if not self._closed.is_set():
             return {'status': 'close_not_accepted'}
         with self._shutdown_lock:
+            if self._active is not None:
+                self._active.finish_inputs(interrupted=True,error='应用已关闭，操作采集已停止。')
             if self._obs_shutdown_result is None:
                 with self._operation_lock:
                     self._obs_shutdown_result = recorder.shutdown_owned_obs(self.root)

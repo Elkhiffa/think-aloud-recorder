@@ -88,11 +88,13 @@ async function geometry(page) {
     const rect = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
     const video = document.querySelector('video'), pane = document.querySelector('#videoPane'), layout = document.querySelector('.review-layout');
     const number = value => parseFloat(value) || 0, style = getComputedStyle(layout), paneStyle = getComputedStyle(pane);
-    const slot = rect('.video-slot'), file = rect('.file-card');
+    const slot = rect('.video-slot'), file = rect('.file-card'), input = rect('#inputPanel'), copy = rect('#copySplit');
+    const fileVisible = getComputedStyle(document.querySelector('.file-card')).display !== 'none';
     return { viewport: { width: innerWidth, height: innerHeight }, video: rect('video'), slot, pane: rect('#videoPane'), text: rect('#transcriptPane'), lines: rect('#lines'), file,
       source: [video.videoWidth, video.videoHeight], orientation: document.querySelector('#reviewSplitter').getAttribute('aria-orientation'),
       available: layout.getBoundingClientRect().width - number(style.paddingLeft) - number(style.paddingRight) - number(style.getPropertyValue('--splitter-size')),
-      gap: number(paneStyle.rowGap), objectFit: getComputedStyle(video).objectFit,
+      input, copy, header: rect('.review-header'), fileVisible, gap: number(paneStyle.rowGap), objectFit: getComputedStyle(video).objectFit,
+      reservedHeight: input.height + (fileVisible ? file.height : 0) + number(paneStyle.rowGap) * (fileVisible ? 2 : 1),
       documentScroll: document.scrollingElement.scrollTop, documentWidth: document.documentElement.scrollWidth,
       status: document.querySelector('#status').textContent, lineScroll: document.querySelector('#lines').scrollTop };
   });
@@ -103,12 +105,16 @@ function ratioCheck(g) {
   close(g.video.width, g.slot.width, 'video width matches its slot'); close(g.video.height, g.slot.height, 'video height matches its slot');
   close(g.slot.y, g.pane.y, 'slot is top-aligned'); assert.equal(g.objectFit, 'contain');
   assert.ok(g.file.bottom <= g.pane.bottom + 1, 'file controls remain in their pane');
+  assert.ok(g.input.bottom <= g.pane.bottom + 1, 'operation panel remains within its pane');
+  assert.ok(g.input.top >= g.slot.bottom, 'operation panel stays below the video');
+  assert.ok(g.copy.left >= g.header.left - 1 && g.copy.right <= g.header.right + 1 && g.copy.top >= g.header.top - 1 && g.copy.bottom <= g.header.bottom + 1, 'copy controls remain in the header');
+  assert.ok(g.copy.bottom <= g.slot.top, 'copy controls never cover the video');
   assert.ok(g.documentWidth <= g.viewport.width + 1, 'no document horizontal overflow');
 }
 function fittedCheck(g) {
   ratioCheck(g);
-  const desired = Math.max(240, Math.min(g.available - 320, (g.pane.height - g.file.height - g.gap) * g.source[0] / g.source[1]));
-  close(g.pane.width, desired, 'columns fit the actual source and measured toolbar'); assert.ok(g.text.width >= 319, 'text retains a readable initial width');
+  const desired = Math.max(240, Math.min(g.available - 320, (g.pane.height - g.reservedHeight) * g.source[0] / g.source[1]));
+  close(g.pane.width, desired, 'columns fit the actual source after reserving operation panel and visible status'); assert.ok(g.text.width >= 319, 'text retains a readable initial width');
 }
 async function screen(page, name) { await page.screenshot({ path: path.join(output, name + '.png'), animations: 'disabled' }); evidence.screenshots.push(name + '.png'); }
 async function openPage(context, source, options = {}) {
@@ -190,7 +196,7 @@ async function run(context) {
       return after;
     } finally { await page.close(); }
   });
-  await check('portrait toolbar wrapping settles without resize oscillation', async () => {
+  await check('portrait controls and reserved input panel settle across compact breakpoints without resize oscillation', async () => {
     const page = await openPage(context, 'portrait'), samples = [];
     try {
       for (let height = 650; height <= 880; height += 10) {
@@ -201,9 +207,15 @@ async function run(context) {
         });
         assert.ok(Math.max(...frames) - Math.min(...frames) < .5, 'consecutive rendered frames stay stable');
         if (height === 700) await screen(page, 'portrait-wrapped-controls-1000x700');
-        samples.push({ height, paneWidth: g.pane.width, slotWidth: g.slot.width, slotHeight: g.slot.height, toolbarHeight: g.file.height });
+        samples.push({ height, paneWidth: g.pane.width, slotWidth: g.slot.width, slotHeight: g.slot.height, inputHeight: g.input.height, reservedHeight: g.reservedHeight });
       }
-      assert.ok(new Set(samples.map(sample => sample.toolbarHeight)).size > 1, 'test crosses real wrap boundaries');
+      assert.ok(new Set(samples.map(sample => sample.inputHeight)).size > 1, 'test crosses the real compact operation-panel breakpoint');
+      const before = await geometry(page);
+      for (const mode of ['collapsed', 'device', 'keys']) {
+        await page.locator(`[data-input-mode="${mode}"]`).click(); await settle(page);
+        const after = await geometry(page); fittedCheck(after);
+        for (const key of ['x','y','width','height']) close(before.slot[key], after.slot[key], `input mode ${mode} preserves slot.${key}`);
+      }
       return samples;
     } finally { await page.close(); }
   });

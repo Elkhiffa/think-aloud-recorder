@@ -27,6 +27,7 @@ EXPECTED_EXPORTS = {
     'stop_recording': [],
     'process_session': ['id'],
     'open_review': ['id'],
+    'rename_session': ['id', 'name'],
     'package_session': ['id'],
     'open_folder': ['id'],
     'open_raw': ['id'],

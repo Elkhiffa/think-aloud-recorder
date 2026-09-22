@@ -64,6 +64,10 @@ class ObsLifecycleTests(unittest.TestCase):
             self.connection.disconnect.assert_called_once()
             return 0
         self.process.wait.side_effect = wait_after_disconnect
+        def close_after_disconnect(process):
+            self.connection.disconnect.assert_called_once()
+            return True
+        self.native_close.side_effect=close_after_disconnect
         result = recorder.shutdown_owned_obs(self.root)
         self.assertEqual(result, {'status': 'closed'})
         self.native_close.assert_called_once_with(self.process)

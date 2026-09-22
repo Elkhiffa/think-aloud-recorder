@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from hotword_files import (BUNDLED_DICTIONARY, bundled_dictionary_snapshots,
+from hotword_files import (BUNDLED_DICTIONARY, MAX_WORDS, bundled_dictionary_snapshots,
                            compile_hotword_snapshots, read_words)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,10 +13,12 @@ class BundledVocabularyTests(unittest.TestCase):
     def test_shipped_terms_cover_uiux_and_fit_both_transcription_providers(self):
         words = read_words(ROOT / BUNDLED_DICTIONARY, qwen=True)
         self.assertGreaterEqual(len(words), 80)
-        self.assertLessEqual(len(words), 180)
+        self.assertLessEqual(len(words), MAX_WORDS)
         self.assertEqual(len(words), len(set(words)))
         self.assertTrue({'UI', 'UX', '心智模型', '认知负荷', '下拉菜单', '焦点',
-                         '禁用状态', '操作反馈', '技能冷却'}.issubset(words))
+                         '禁用状态', '操作反馈', '技能冷却', '页签', '选中态',
+                         '激活', '禁用', '失焦', '限时', '分段控件', '表单项',
+                         '焦点环', '倒计时'}.issubset(words))
         files = bundled_dictionary_snapshots(ROOT)
         self.assertEqual(len(files), 1)
         self.assertEqual(files[0]['name'], BUNDLED_DICTIONARY.name)
