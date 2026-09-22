@@ -22,6 +22,8 @@ const root = path.resolve(__dirname, '..');
 const output = path.resolve(process.env.TAR_UI_OUTPUT || path.join(root, 'work', 'visual-acceptance'));
 const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 const clone = value => JSON.parse(JSON.stringify(value));
+const bundledWords = read('vocabularies/uiux-terms.txt').split(/\r?\n/).map(word=>word.trim()).filter(word=>word&&!word.startsWith('#'));
+const bundledVocabulary = {id:'bundled-uiux-browser-fixture',name:'uiux-terms.txt',words:bundledWords};
 const words = [
   '这是合成测试：这个入口很显眼，但我没找到返回的地方。',
   '这是合成测试：我猜这个标记表示任务还没完成。',
@@ -44,6 +46,7 @@ function snapshot(overrides = {}) {
     },
     presets: [{ id: 'synthetic-one', name: '示例游戏 · 合成测试', vault: 'D:\\synthetic-only\\think-aloud-database' }],
     active_preset_id: 'synthetic-one',
+    default_hotword_files: [bundledVocabulary],
     suggested_vault: 'D:\\synthetic-only\\think-aloud-database',
     readiness: { ready: true, checking: false, errors: [], checked_at: 123 },
     activity: { busy: false, kind: 'idle', status: '待开始', detail: '' },
@@ -201,6 +204,47 @@ async function makeSyntheticVideo(browser, origin) {
     });
     media = Buffer.from(bytes);
   } finally { await page.close(); }
+}
+
+async function vocabularyChecks(context, origin) {
+  const page=await context.newPage(); await bridge(page);
+  await page.goto(origin+'/ui/index.html'); await page.locator('#settingsButton').waitFor();
+  await check('new presets visibly select bundled UIUX words; preview is read-only and removable',async()=>{
+    await page.locator('#newPresetButton').click();await page.locator('#wizardNext').click();
+    await page.locator('#game').fill('词库验收 · 合成预设');
+    await page.locator('#target').selectOption('synthetic-window');await page.locator('#mic').selectOption('synthetic-mic');
+    await page.locator('#wizardNext').click();await page.locator('#providerQwen').click();
+    assert.equal(await page.locator('#vocabularySummary').innerText(),'UI/UX 已选');
+    await page.locator('#advancedSettings summary').first().click();
+    assert.equal(await page.locator('#hotwordFiles li').count(),1);
+    await page.locator('[data-view-vocabulary]').click();
+    assert.equal(await page.locator('.vocabulary-words li').count(),bundledWords.length);
+    assert.match(await page.locator('#actionBody').innerText(),/心智模型/);
+    assert.equal((await calls(page,'save_preset')).length,0);
+    await screen(page,'vocabulary-preview-light-1240x900');
+    await page.getByRole('button',{name:'关闭',exact:true}).click();
+    assert.equal(await page.locator('#wizard').isVisible(),true);
+    await page.locator('[data-remove-vocabulary]').click();
+    assert.equal(await page.locator('#vocabularySummary').innerText(),'未选词库');
+    await page.locator('#wizardCancel').click();
+  });
+  await check('compact dark vocabulary preview scrolls independently and returns to the draft',async()=>{
+    await page.setViewportSize({width:820,height:620});await theme(page,'dark');
+    await page.locator('#newPresetButton').click();await page.locator('#wizardNext').click();
+    await page.locator('#game').fill('第二个合成预设');
+    await page.locator('#target').selectOption('synthetic-window');await page.locator('#mic').selectOption('synthetic-mic');
+    await page.locator('#wizardNext').click();await page.locator('#providerQwen').click();
+    await page.locator('#advancedSettings summary').first().click();
+    await page.locator('[data-view-vocabulary]').click();
+    await page.locator('#actionBody').evaluate(node=>node.scrollTop=node.scrollHeight);
+    assert.ok(await page.locator('#actionBody').evaluate(node=>node.scrollTop>0));
+    await assertInsideViewport(page,'#actionDialog');await noHorizontalOverflow(page);
+    await screen(page,'vocabulary-preview-dark-820x620');
+    await page.getByRole('button',{name:'关闭',exact:true}).click();
+    await page.locator('#wizardCancel').click();
+    assert.equal((await calls(page,'save_preset')).length,0);
+  });
+  await page.close();
 }
 
 async function homeChecks(context, origin) {
@@ -556,9 +600,9 @@ async function reviewChecks(context, origin) {
   });
   await check('review divider works by keyboard without scrolling the document', async () => {
     const initial = Number(await page.locator('#reviewSplitter').getAttribute('aria-valuenow'));
-    await page.locator('#reviewSplitter').focus(); await page.keyboard.press('ArrowRight');
+    await page.locator('#reviewSplitter').focus(); await page.keyboard.press('ArrowLeft');
     const after = Number(await page.locator('#reviewSplitter').getAttribute('aria-valuenow'));
-    assert.ok(after > initial); assert.ok((await calls(page, 'save_layout')).length > 0);
+    assert.ok(after < initial); assert.ok((await calls(page, 'save_layout')).length > 0);
     await page.keyboard.press('Enter'); await noHorizontalOverflow(page);
     assert.equal(await page.evaluate(() => document.scrollingElement.scrollTop), 0);
     await theme(page, 'dark'); await screen(page, 'review-dark-1240x900');
@@ -597,7 +641,7 @@ async function main() {
       evidence.errors.push(`Blocked non-fixture request: ${route.request().url()}`); return route.abort();
     });
     context.on('page', page => page.on('pageerror', error => evidence.errors.push(error.message)));
-    for (const [name, task] of [['recorder scenarios', homeChecks], ['first launch scenario', firstUseChecks], ['device setup scenarios', deviceSetupChecks], ['review scenarios', reviewChecks]]) {
+    for (const [name, task] of [['recorder scenarios', homeChecks], ['first launch scenario', firstUseChecks], ['device setup scenarios', deviceSetupChecks], ['vocabulary scenarios', vocabularyChecks], ['review scenarios', reviewChecks]]) {
       await check(name, () => task(context, origin));
     }
     await check('no browser exceptions or unexpected network requests', () => assert.deepEqual(evidence.errors, []));

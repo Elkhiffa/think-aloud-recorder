@@ -15,7 +15,14 @@
     const min=firstMin*scale/available,max=Math.max(min,1-secondMin*scale/available);
     return {min,max,value:Math.max(min,Math.min(max,Number.isFinite(requested)?requested:0.5))};
   }
-  if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds};return;}
+  function sourceFit({available,height,videoWidth,videoHeight,chromeHeight=0,chromeWidth=0,videoMin=240,textMin=320}) {
+    if(![available,height,videoWidth,videoHeight].every(value=>Number.isFinite(value)&&value>0))return null;
+    const aspect=videoWidth/videoHeight,slotHeight=Math.max(0,height-chromeHeight);
+    const bounds=splitBounds(available,videoMin,textMin,(slotHeight*aspect+chromeWidth)/available);
+    const width=available*bounds.value,slotWidth=Math.min(Math.max(0,width-chromeWidth),slotHeight*aspect);
+    return {...bounds,width,slotWidth,slotHeight:slotWidth/aspect};
+  }
+  if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds,sourceFit};return;}
   const data=JSON.parse(document.getElementById('review-data').textContent);
   const $=id=>document.getElementById(id),video=$('video'),lines=$('lines'),segments=data.segments;
   function setTheme(value){
@@ -84,15 +91,49 @@
         return sum+child.getBoundingClientRect().height+number(css.marginTop)+number(css.marginBottom);
       },0);
   }
+  function horizontalInsets(element){
+    const style=getComputedStyle(element);
+    return number(style.paddingLeft)+number(style.paddingRight)+number(style.borderLeftWidth)+number(style.borderRightWidth);
+  }
+  function applySplit(value){
+    layout.style.setProperty('--video-share',value+'fr');
+    layout.style.setProperty('--text-share',(1-value)+'fr');
+  }
+  function sizeVideoSlot(){
+    const aspect=video.videoWidth/video.videoHeight;
+    const hasSource=Number.isFinite(aspect)&&aspect>0;
+    videoSlot.classList.toggle('source-aspect',hasSource);
+    if(!hasSource){videoSlot.style.removeProperty('width');videoSlot.style.removeProperty('height');return;}
+    const rect=videoPane.getBoundingClientRect();
+    const height=Math.max(0,rect.height-fixedHeight(videoPane,videoSlot));
+    const width=Math.min(Math.max(0,rect.width-horizontalInsets(videoPane)),height*aspect);
+    videoSlot.style.width=width+'px';videoSlot.style.height=width/aspect+'px';
+  }
   function renderSplit(){
     const mode=axis(),vertical=mode==='rows',rect=layout.getBoundingClientRect(),style=getComputedStyle(layout);
     const before=number(vertical?style.paddingTop:style.paddingLeft),after=number(vertical?style.paddingBottom:style.paddingRight);
     const divider=number(style.getPropertyValue('--splitter-size'));
     const available=Math.max(0,(vertical?rect.height:rect.width)-before-after-divider);
-    const bounds=splitBounds(available,vertical?fixedHeight(videoPane,videoSlot)+72:240,
+    let bounds=splitBounds(available,vertical?fixedHeight(videoPane,videoSlot)+72:240,
       vertical?fixedHeight(textPane,lines)+32:220,shares[mode]);
-    layout.style.setProperty('--video-share',bounds.value+'fr');
-    layout.style.setProperty('--text-share',(1-bounds.value)+'fr');
+    if(!vertical&&!touched.has(mode)&&video.videoWidth>0&&video.videoHeight>0&&available>0){
+      // Auto fit reserves 320 px for readable transcript rows; manual bounds stay 220 px.
+      // Measure at each candidate width: wrapped file controls consume real height.
+      // Starting wide and only narrowing avoids a two-state wrap/unwrap feedback loop.
+      let value=bounds.max;
+      for(let pass=0;pass<8;pass++){
+        applySplit(value);
+        const fit=sourceFit({available,height:videoPane.getBoundingClientRect().height,
+          videoWidth:video.videoWidth,videoHeight:video.videoHeight,
+          chromeHeight:fixedHeight(videoPane,videoSlot),chromeWidth:horizontalInsets(videoPane)});
+        if(!fit)break;
+        const next=Math.min(value,fit.value);
+        if((value-next)*available<0.25){value=next;break;}
+        value=next;
+      }
+      bounds={...bounds,value};shares[mode]=value;
+    }
+    applySplit(bounds.value);sizeVideoSlot();
     splitter.setAttribute('aria-orientation',vertical?'horizontal':'vertical');
     splitter.setAttribute('aria-valuemin',Math.round(bounds.min*100));
     splitter.setAttribute('aria-valuemax',Math.round(bounds.max*100));
@@ -104,7 +145,6 @@
   }
   function scheduleSplit(){if(frame===null)frame=root.requestAnimationFrame(()=>{frame=null;renderSplit();});}
   async function saveShare(mode){
-    touched.add(mode);
     try{
       if(data.desktop){await root.pywebview?.api?.save_layout(mode,shares[mode]);}
       else localStorage.setItem(storageKey,JSON.stringify(shares));
@@ -143,7 +183,7 @@
   });
   for(const name of ['pointerup','pointercancel','lostpointercapture'])splitter.addEventListener(name,finishDrag);
   root.addEventListener('blur',()=>finishDrag());
-  function resetSplit(){const mode=axis();shares[mode]=defaults[mode];renderSplit();saveShare(mode);}
+  function resetSplit(){const mode=axis();touched.delete(mode);shares[mode]=defaults[mode];renderSplit();saveShare(mode);}
   splitter.addEventListener('dblclick',resetSplit);
   splitter.addEventListener('keydown',event=>{
     if(event.altKey||event.ctrlKey||event.metaKey||event.isComposing)return;
@@ -151,6 +191,7 @@
     if(![back,forward,'Home','End','Enter'].includes(event.key))return;
     event.preventDefault();event.stopPropagation();
     if(event.key==='Enter'){resetSplit();return;}
+    touched.add(m.mode);
     const step=event.shiftKey?0.1:0.02;
     shares[m.mode]=event.key==='Home'?m.min:event.key==='End'?m.max:
       Math.max(m.min,Math.min(m.max,m.value+(event.key===back?-step:step)));
@@ -203,7 +244,8 @@
   lines.addEventListener('keydown',event=>{if(['PageDown','PageUp','Home','End','ArrowDown','ArrowUp'].includes(event.key))setFollow(false);});
   function filter(){const query=$('search').value.trim().toLocaleLowerCase();let count=0;nodes.forEach((node,i)=>{node.hidden=!segments[i].text.toLocaleLowerCase().includes(query);if(!node.hidden)count++;});$('lineCount').textContent=count+' 条';$('empty').hidden=count>0;$('empty').textContent=segments.length?'没有匹配的原话。':'没有识别出语音，可以继续查看录像。';}
   $('search').oninput=filter;filter();video.addEventListener('timeupdate',sync);
-  video.addEventListener('loadedmetadata',()=>{ready=true;mediaError=null;status('');if(pendingSeek!==null){seek(pendingSeek);pendingSeek=null;}reportReady();});
+  video.addEventListener('loadedmetadata',()=>{ready=true;mediaError=null;status('');scheduleSplit();if(pendingSeek!==null){seek(pendingSeek);pendingSeek=null;}reportReady();});
+  video.addEventListener('resize',scheduleSplit);
   video.addEventListener('error',()=>{ready=true;mediaError='录像无法加载，请检查录像.mp4 是否存在，并将资料包完整解压后打开。';status(mediaError,true);reportReady();});
   root.addEventListener('pywebviewready',reportReady);
   video.src=data.video;

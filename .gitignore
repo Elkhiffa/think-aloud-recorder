@@ -9,6 +9,8 @@
 /build/
 /work/
 /config.json
+/vocabularies/*
+!/vocabularies/uiux-terms.txt
 *.lock
 __pycache__/
 *.pyc

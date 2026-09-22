@@ -322,6 +322,33 @@ test('provider console opens without sending typed secrets or saving the preset'
   assert.equal(f.elements.get('cloudKey').value,'synthetic-unsaved-not-a-real-key');
 });
 
+test('bundled UIUX defaults seed only new drafts and explicit removal survives editing',()=>{
+  const bundled={id:'uiux-default',name:'uiux-terms.txt',words:['心智模型','用户界面']};
+  const state=new State();state.accept(snapshot({default_hotword_files:[bundled]}));
+  state.openDraft('new');assert.equal(state.draft.hotwords,'心智模型\n用户界面');
+  state.draft.hotword_files[0].words.push('仅草稿');assert.equal(bundled.words.length,2);
+  assert.equal(state.snapshot.default_hotword_files[0].words.length,2);
+  state.removeVocabularyFile(bundled.id);assert.equal(state.draft.hotwords,'');
+  const payload=state.presetPayload();assert.deepEqual(payload.hotword_files,[]);
+  state.accept(snapshot({default_hotword_files:[bundled],config:{...snapshot().config,...payload}}));
+  state.openDraft('edit');assert.deepEqual(state.draft.hotword_files,[]);
+  state.openDraft('new');assert.equal(state.draft.hotwords,'心智模型\n用户界面');
+  state.cancelDraft();state.accept(snapshot({default_hotword_files:[bundled]}));
+  state.openDraft('edit');assert.equal(state.draft.hotwords,'Saved vocabulary');
+});
+
+test('vocabulary preview shows selected snapshot safely without saving or external actions',async()=>{
+  const bundled={id:'uiux-default',name:'uiux-terms.txt',words:['心智模型','<script>unsafe</script>']};
+  const f=await fixture(snapshot({default_hotword_files:[bundled]}));
+  f.elements.get('newPresetButton').onclick();
+  assert.equal(f.elements.get('vocabularySummary').textContent,'UI/UX 已选');
+  f.elements.get('hotwordFiles').onclick({target:{closest:selector=>selector==='[data-view-vocabulary]'?{dataset:{viewVocabulary:bundled.id}}:null}});
+  assert.equal(f.elements.get('actionDialog').open,true);
+  assert.match(f.elements.get('actionBody').innerHTML,/心智模型/);
+  assert.match(f.elements.get('actionBody').innerHTML,/&lt;script&gt;unsafe&lt;\/script&gt;/);
+  assert.ok(!f.calls.some(call=>['save_preset','open_folder','start_recording'].includes(call.name)));
+});
+
 test('entering device setup focuses the name input, but polling never steals user focus',async()=>{
   const f=await fixture();f.elements.get('settingsButton').onclick();
   assert.equal(f.run('document.activeElement.id'),'game');

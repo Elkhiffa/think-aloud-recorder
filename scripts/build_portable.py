@@ -23,6 +23,7 @@ ROOT_FILES = (
     'transcription_runtime.py', 'player.html', 'requirements-lock.txt',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md',
     'scripts/build_portable.py', 'scripts/fetch_runtime.py',
+    'vocabularies/uiux-terms.txt', 'docs/uiux-vocabulary.md',
 )
 OPTIONAL_ROOT_FILES = ('README.md',)
 BLOCKED_PARTS = {'__pycache__', '.git', '.cache', 'cache', 'caches', 'logs', 'log',

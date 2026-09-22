@@ -35,6 +35,7 @@
       this.confirmedVault='';
       this.editingId=mode==='edit'?this.activeId:null;
       this.draft=defaults(this.snapshot?.suggested_vault||this.saved.vault||this.snapshot?.default_vault?.path||'');
+      if(!this.editingId)this.draft.hotword_files=clone(this.snapshot?.default_hotword_files||[]);
       if(this.editingId) for(const key of FIELDS) if(this.saved[key]!==undefined)this.draft[key]=clone(this.saved[key]);
       // Legacy record-only presets remain intact until the user saves an explicit
       // transcription choice. Never silently turn an old preset into cloud use.

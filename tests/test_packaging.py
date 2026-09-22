@@ -58,6 +58,8 @@ class PackagingTests(unittest.TestCase):
             'config.json', 'portable.json', '.env', 'secret.dpapi', 'state/models.json',
             'state/cloud-task.json', 'models/large-v3/model.bin', 'recordings/recording.mkv',
             'vault/secret.md', '体验资料库/secret.md', 'logs/app.log', 'custom-hotwords.txt',
+            'vocabularies/personal.txt', 'vocabularies/personal.scel',
+            'vocabularies/user/uiux-terms.txt', 'vocabularies/user/private.txt',
             'tools/obs/config/obs-studio/global.ini', 'tools/obs/config/obs-studio/basic/profiles/x/service.json',
             'tools/obs/bin/64bit/logs/secret.txt', 'tools/obs/bin/64bit/.env',
             'tools/obs/bin/64bit/crashes/dump.dmp', 'tools/obsidian/Obsidian.exe',
@@ -81,6 +83,23 @@ class PackagingTests(unittest.TestCase):
             self.assertIn('runtime/Lib/site-packages/fixture-1.dist-info/licenses/LICENSE', names)
             self.assertIn('runtime/Lib/site-packages/fixture/config.json', names)
             self.assertEqual(json.loads(archive.read('portable.json'))['models'], 'optional')
+
+    def test_only_fixed_bundled_vocabulary_is_packaged_with_exact_bytes(self):
+        bundled = '用户体验\nUX\n交互设计\n'.encode('utf-8')
+        self.write('vocabularies/uiux-terms.txt', bundled)
+        self.write('vocabularies/personal.txt', b'private personal words')
+        self.write('vocabularies/user/uiux-terms.txt', b'private nested words')
+        result = self.make()
+        with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
+            vocabulary_names = [name for name in archive.namelist() if name.startswith('vocabularies/')]
+            self.assertEqual(vocabulary_names, ['vocabularies/uiux-terms.txt'])
+            self.assertEqual(archive.read(vocabulary_names[0]), bundled)
+
+    def test_missing_bundled_vocabulary_fails_before_build_output(self):
+        (self.root / 'vocabularies/uiux-terms.txt').rename(self.root / 'vocabularies/renamed.txt')
+        with self.assertRaisesRegex(ValueError, 'Missing package input: vocabularies/uiux-terms.txt'):
+            self.make()
+        self.assertFalse((self.base / 'out').exists())
 
     def test_same_inputs_create_identical_archives(self):
         first = self.make('one')

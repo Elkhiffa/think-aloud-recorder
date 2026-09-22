@@ -20,7 +20,8 @@ from websocket import WebSocketException
 
 import recorder
 from hotword_files import (merge_files, split_words, validate_words, compile_hotword_snapshots,
-                           read_dictionary_snapshots, SOGOU_DICTIONARIES)
+                           read_dictionary_snapshots, bundled_dictionary_snapshots,
+                           SOGOU_DICTIONARIES)
 from model_manager import ModelManager
 from portable_config import load_settings, stored_settings, default_vault_path
 from processing import process_isolated
@@ -48,6 +49,7 @@ class VaultReuseRequired(ValueError):
 class DesktopService:
     def __init__(self, root=None):
         self.root = Path(root or recorder.ROOT).resolve()
+        self._default_hotword_files = bundled_dictionary_snapshots(self.root)
         self._lock = threading.RLock()
         self._operation_lock = threading.RLock()
         self._readiness_thread = None
@@ -320,6 +322,7 @@ class DesktopService:
                 model['error'] = self._safe_text(model.get('error'))
                 return ok(dict(config=self._public_config(), sessions=sessions, closing=self._exit_pending,
                                default_vault=self._default_vault(),
+                               default_hotword_files=deepcopy(self._default_hotword_files),
                                readiness=self._visible_readiness(),
                                presets=self._preset_list(), active_preset_id=self._cfg.get('active_preset_id'),
                                background_jobs=[self._job_summary(job) for job in self._background_jobs.values()],
@@ -704,6 +707,11 @@ class DesktopService:
                 if preset_id:
                     selected = base['presets'][preset_id]
                     base.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
+                elif not {'hotword_files', 'hotword_manual', 'hotwords'}.intersection(payload):
+                    # Only an omitted new-preset choice receives bundled defaults.
+                    # Explicit removal and all existing presets keep their snapshots.
+                    base['hotword_files'] = deepcopy(self._default_hotword_files)
+                    base['hotword_manual'] = ''
                 data = self._save(payload, ident, base)
                 self._devices = {'mic': [], 'window': [], 'monitor': []}
                 self._device_defaults = {'monitor': '', 'mic': ''}
@@ -820,8 +828,10 @@ class DesktopService:
 
     def choose_hotword_files(self):
         try:
+            directory = self.root / 'vocabularies'
+            options = {'directory': str(directory)} if directory.is_dir() else {}
             paths = self._dialog('file', allow_multiple=True,
-                                 file_types=('Hotword dictionaries (*.txt;*.scel)',))
+                                 file_types=('Hotword dictionaries (*.txt;*.scel)',), **options)
             return ok({'files': read_dictionary_snapshots(paths)})
         except Exception as error:
             return self._error(error)

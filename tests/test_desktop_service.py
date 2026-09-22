@@ -1249,6 +1249,112 @@ class DesktopServiceTests(unittest.TestCase):
                                        file_types=('Hotword dictionaries (*.txt;*.scel)',))
         return result
 
+    def restart_with_bundled_vocabulary(self, config=None):
+        directory = self.root / 'vocabularies'
+        directory.mkdir(exist_ok=True)
+        (directory / 'uiux-terms.txt').write_text('用户体验\nUX\n交互设计', encoding='utf-8')
+        self.shutdown()
+        with patch.object(bridge, 'load_settings', return_value=deepcopy(config or self.config)):
+            self.service = bridge.DesktopService(self.root)
+        self.wait()
+        return self.service.get_state()['data']['default_hotword_files']
+
+    def test_bundled_defaults_seed_new_presets_without_inheriting_existing_manual_terms(self):
+        defaults = self.restart_with_bundled_vocabulary({**self.config, 'hotwords': 'Saved manual term'})
+        self.assertEqual(defaults[0]['words'], ['用户体验', 'UX', '交互设计'])
+        before = deepcopy(self.service._cfg)
+        self.assertEqual(before['hotword_files'], [])
+        self.assertEqual(before['hotword_manual'], 'Saved manual term')
+        self.assertFalse((self.root / 'config.json').exists())
+
+        result = self.service.save_preset({'name': 'New UI review'})
+        self.assertTrue(result['ok'], result)
+        self.wait()
+        self.assertEqual(result['data']['config']['hotword_files'], defaults)
+        self.assertEqual(result['data']['config']['hotword_manual'], '')
+        self.assertEqual(result['data']['config']['hotwords'], '用户体验\nUX\n交互设计')
+        self.assertEqual(self.service._cfg['presets']['legacy'], before['presets']['legacy'])
+
+    def test_new_preset_explicit_empty_manual_and_legacy_choices_do_not_add_defaults(self):
+        defaults = self.restart_with_bundled_vocabulary()
+        self.assertTrue(defaults)
+        for payload, expected_manual in [
+            ({'hotword_manual': 'Typed manual term'}, 'Typed manual term'),
+            ({'hotwords': 'Legacy text'}, 'Legacy text'),
+            ({'hotword_files': [], 'hotword_manual': ''}, ''),
+        ]:
+            with self.subTest(payload=payload):
+                result = self.service.save_preset({'name': 'Explicit choice', **payload})
+                self.assertTrue(result['ok'], result)
+                self.wait()
+                self.assertEqual(result['data']['config']['hotword_files'], [])
+                self.assertEqual(result['data']['config']['hotword_manual'], expected_manual)
+
+        self.assertTrue(self.service.save_preset({'name': 'Defaults enabled'})['ok'])
+        self.wait()
+        self.assertEqual(self.service._cfg['hotword_files'], defaults)
+        empty = self.service.save_preset({'name': 'Explicit empty list', 'hotword_files': []})
+        self.assertTrue(empty['ok'], empty)
+        self.wait()
+        self.assertEqual(empty['data']['config']['hotword_files'], [])
+
+    def test_removed_bundled_default_stays_removed_after_edit_and_reload(self):
+        defaults = self.restart_with_bundled_vocabulary()
+        result = self.service.save_preset({'name': 'UI review'})
+        self.assertTrue(result['ok'], result)
+        self.wait()
+        ident = result['data']['id']
+        removed = self.service.save_preset({'name': 'UI review', 'hotword_files': [],
+                                           'hotword_manual': 'Keep my term'}, ident)
+        self.assertTrue(removed['ok'], removed)
+        self.wait()
+        edited = self.service.save_preset({'name': 'Renamed review'}, ident)
+        self.assertTrue(edited['ok'], edited)
+        self.wait()
+        saved = bridge.recorder.read(self.root / 'config.json')
+        self.restart_with_bundled_vocabulary(saved)
+        self.assertEqual(self.service._cfg['hotword_files'], [])
+        self.assertEqual(self.service._cfg['hotword_manual'], 'Keep my term')
+        self.assertEqual(self.service._cfg['presets'][ident]['hotword_files'], [])
+        self.assertEqual(self.service.get_state()['data']['default_hotword_files'], defaults)
+        self.assertTrue(self.service.save_preset({'name': 'Another new review'})['ok'])
+        self.wait()
+        self.assertEqual(self.service._cfg['hotword_files'], defaults)
+        self.assertEqual(self.service._cfg['hotword_manual'], '')
+        self.assertEqual(self.service._cfg['presets'][ident]['hotword_files'], [])
+        self.assertEqual(self.service._cfg['presets'][ident]['hotword_manual'], 'Keep my term')
+
+    def test_bundled_default_state_and_preset_snapshots_are_independently_owned(self):
+        defaults = self.restart_with_bundled_vocabulary()
+        expected = deepcopy(defaults)
+        self.assertEqual(set(defaults[0]), {'id', 'name', 'words'})
+        self.assertNotIn(str(self.root), json.dumps(defaults, ensure_ascii=False))
+        defaults[0]['words'].append('Snapshot caller mutation')
+        defaults[0]['name'] = 'Changed.txt'
+        self.assertEqual(self.service.get_state()['data']['default_hotword_files'], expected)
+        result = self.service.save_preset({'name': 'Default ownership'})
+        self.assertTrue(result['ok'], result)
+        self.wait()
+        result['data']['config']['hotword_files'][0]['words'].append('Save response mutation')
+        (self.root / 'vocabularies/uiux-terms.txt').write_text('Later disk edit', encoding='utf-8')
+        state = self.service.get_state()['data']
+        self.assertEqual(state['default_hotword_files'], expected)
+        self.assertEqual(state['config']['hotword_files'], expected)
+
+    def test_dictionary_picker_starts_in_vocabulary_directory_without_returning_paths(self):
+        directory = self.root / 'vocabularies'
+        directory.mkdir()
+        file = directory / 'personal.txt'
+        file.write_text('Personal term', encoding='utf-8')
+        with patch.object(self.service, '_dialog', return_value=(str(file),)) as dialog:
+            result = self.service.choose_hotword_files()
+        dialog.assert_called_once_with('file', allow_multiple=True,
+                                       file_types=('Hotword dictionaries (*.txt;*.scel)',),
+                                       directory=str(directory))
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['data']['files'][0]['name'], 'personal.txt')
+        self.assertNotIn(str(self.root), json.dumps(result, ensure_ascii=False))
+
     def test_dictionary_multiselect_returns_only_name_content_and_stable_id(self):
         first, second = self.root / '术语.txt', self.root / 'Other.txt'
         first.write_text('角色名\n共享词\n角色名', encoding='utf-8')

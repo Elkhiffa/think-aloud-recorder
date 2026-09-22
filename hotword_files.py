@@ -13,6 +13,7 @@ MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_DICTIONARY_FILES = 128
 MAX_MANUAL_CHARS = 128000
 SOGOU_DICTIONARIES = 'https://pinyin.sogou.com/dict/'
+BUNDLED_DICTIONARY = Path('vocabularies/uiux-terms.txt')
 
 
 def split_words(text):
@@ -143,6 +144,19 @@ def read_dictionary_snapshots(paths):
         files.append(dict(id=dictionary_id(words), name=path.name, words=words))
     # Enforce the combined vocabulary limit as well as each source file limit.
     return compile_hotword_snapshots(files, '', qwen=False)['hotword_files']
+
+
+def bundled_dictionary_snapshots(root):
+    """Fresh defaults from the shipped file, never a scan of personal dictionaries.
+
+    An incomplete installation must not invent active terms or prevent existing
+    presets from loading. Release validation requires this file separately.
+    """
+    try:
+        files = read_dictionary_snapshots([Path(root) / BUNDLED_DICTIONARY])
+        return compile_hotword_snapshots(files, '', qwen=True)['hotword_files']
+    except (OSError, ValueError):
+        return []
 
 
 def dictionary_search_url(game):

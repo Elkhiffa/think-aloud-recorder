@@ -141,9 +141,32 @@ async function finishWizard(){if(saving||store.requestPending)return;for(let i=1
 $('#chooseVault').onclick=async()=>{const result=await action('choose_directory',['vault']);if(result.ok&&result.data?.path&&store.draft){store.updateDraft('vault',result.data.path);store.confirmVault();$('#vault').value=result.data.path;renderSummary();renderVaultChoice();renderControls();}};
 function renderVaultChoice(){if(!store.draft)return;const info=store.snapshot?.default_vault||{},same=store.defaultVaultSelected,exists=same&&info.requires_confirmation===true;show('reuseVaultNotice',exists);show('reuseVault',exists&&store.needsVaultConfirmation&&info.is_directory!==false);setText('reuseVaultMessage',info.is_directory===false?'该位置已有同名文件，请选择其他文件夹。':store.needsVaultConfirmation?'发现已有同名资料库。是否使用它并保留其中的录像和笔记？':'将使用已有资料库，保留其中的录像和笔记。');setText('chooseVault',exists?'选择其他位置':'选择');setText('vaultHint',same?'默认保存在软件父级的 think-aloud-database，更新版本后可继续使用。':'每场体验分别保存，不覆盖已有录像或笔记。');}
 $('#reuseVault').onclick=()=>{if(!store.canConfigure||!store.draft||store.snapshot?.default_vault?.is_directory===false)return;store.confirmVault();renderVaultChoice();renderControls();};
-function renderVocabulary(){if(!store.draft)return;const files=store.draft.hotword_files||[],signature=JSON.stringify(files);if(signature!==vocabularySignature){vocabularySignature=signature;$('#hotwordFiles').innerHTML=files.map(file=>`<li><div class="vocabulary-file-info"><span class="vocabulary-file-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</span><span class="field-note">${file.words.length} 个词</span></div><button class="icon-button" data-remove-vocabulary="${escapeHTML(file.id)}" aria-label="移除词库 ${escapeHTML(file.name)}" title="移除词库">${icon('close')}</button></li>`).join('');}show('hotwordFiles',files.length>0);const manualCount=new Set(RecorderState.splitWords(store.draft.hotword_manual)).size,total=RecorderState.vocabularyWords(store.draft).length;setText('vocabularyCount',total?`${files.length?'已选 '+files.length+' 份词库 · ':''}合并后 ${total} 个词`:'尚未选择词库');setText('manualWordCount',manualCount?manualCount+' 个词':'可选');show('vocabularyStorage',files.length>0);}
+function renderVocabulary(){
+ if(!store.draft)return;
+ const files=store.draft.hotword_files||[],signature=JSON.stringify(files);
+ if(signature!==vocabularySignature){
+  vocabularySignature=signature;
+  $('#hotwordFiles').innerHTML=files.map(file=>`<li><div class="vocabulary-file-info"><span class="vocabulary-file-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</span><span class="field-note">${file.words.length} 个词</span></div><button type="button" class="text-button vocabulary-view" data-view-vocabulary="${escapeHTML(file.id)}" aria-label="查看词库 ${escapeHTML(file.name)}">查看</button><button type="button" class="icon-button" data-remove-vocabulary="${escapeHTML(file.id)}" aria-label="移除词库 ${escapeHTML(file.name)}" title="移除词库">${icon('close')}</button></li>`).join('');
+ }
+ show('hotwordFiles',files.length>0);
+ const manualCount=new Set(RecorderState.splitWords(store.draft.hotword_manual)).size,total=RecorderState.vocabularyWords(store.draft).length;
+ const hasDefault=files.some(file=>(store.snapshot?.default_hotword_files||[]).some(bundled=>bundled.id===file.id));
+ setText('vocabularySummary',hasDefault?'UI/UX 已选':files.length?'已选 '+files.length+' 份词库':total?'已添加词条':'未选词库');
+ setText('vocabularyCount',total?`${files.length?'已选 '+files.length+' 份词库 · ':''}合并后 ${total} 个词`:'尚未选择词库');
+ setText('manualWordCount',manualCount?manualCount+' 个词':'可选');show('vocabularyStorage',files.length>0);
+}
 $('#chooseHotwordFiles').onclick=async()=>{const result=await action('choose_hotword_files');if(result.ok&&store.draft&&result.data?.files?.length){const count=store.addVocabularyFiles(result.data.files);renderVocabulary();renderControls();notify(count?'已加入 '+count+' 份词库，完成设置后生效。':'这些词库已在列表中。');}};
-$('#hotwordFiles').onclick=event=>{const button=event.target.closest('[data-remove-vocabulary]');if(!button||!store.canConfigure||saving||!store.draft)return;store.removeVocabularyFile(button.dataset.removeVocabulary);renderVocabulary();renderControls();$('#chooseHotwordFiles').focus();};
+$('#hotwordFiles').onclick=event=>{
+ if(!store.draft)return;
+ const view=event.target.closest('[data-view-vocabulary]');
+ if(view?.dataset.viewVocabulary){
+  const file=store.draft.hotword_files.find(item=>item.id===view.dataset.viewVocabulary);if(!file)return;
+  showDialog(file.name,`<p>${file.words.length} 个词 · 当前预设选用的词条</p><ul class="vocabulary-words" aria-label="词库词条">${file.words.map(word=>'<li>'+escapeHTML(word)+'</li>').join('')}</ul><p>词条用于辅助识别，不会替换原话。移除词库只影响当前预设，不删除原文件。</p>`);
+  return;
+ }
+ const button=event.target.closest('[data-remove-vocabulary]');if(!button||!store.canConfigure||saving)return;
+ store.removeVocabularyFile(button.dataset.removeVocabulary);renderVocabulary();renderControls();$('#chooseHotwordFiles').focus();
+};
 $('#dictionaryDownload').onclick=event=>{event.preventDefault();if(!store.connected||store.requestPending||saving)return;action('open_dictionary_site');};
 $('#verifyCloud').onclick=async()=>{setText('cloudFeedback','正在验证已保存的密钥…');await action('verify_cloud_key',[],'','verify');};
 $('#modelLocation').onclick=async()=>{const result=await action('choose_directory',['download']);if(result.ok&&result.data?.path){downloadDirectory=result.data.path;setText('downloadDestination','下载到 '+downloadDirectory+'。关闭设置后下载会继续。');}};
