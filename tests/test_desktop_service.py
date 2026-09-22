@@ -693,6 +693,111 @@ class DesktopServiceTests(unittest.TestCase):
                 release.set()
                 self.wait()
 
+    def test_engine_shutdown_requires_accepted_close_and_is_idempotent(self):
+        with patch.object(bridge.recorder, 'shutdown_owned_obs', return_value={'status': 'closed'}) as shutdown:
+            self.assertEqual(self.service.shutdown(), {'status': 'close_not_accepted'})
+            shutdown.assert_not_called()
+            self.service._obs_uncertain = True
+            self.assertFalse(self.service.close_allowed())
+            self.assertEqual(self.service.shutdown(), {'status': 'close_not_accepted'})
+            shutdown.assert_not_called()
+            self.service._obs_uncertain = False
+            self.assertTrue(self.service.close_allowed())
+            self.assertEqual(self.service.shutdown(), {'status': 'closed'})
+            self.assertEqual(self.service.shutdown(), {'status': 'closed'})
+            shutdown.assert_called_once_with(self.root)
+
+    def test_engine_shutdown_waits_until_an_admitted_idle_operation_finishes(self):
+        entered, release = threading.Event(), threading.Event()
+        def operation():
+            with self.service._operation_lock:
+                entered.set()
+                release.wait(3)
+        worker = threading.Thread(target=operation)
+        worker.start()
+        self.assertTrue(entered.wait(1))
+        try:
+            with patch.object(bridge.recorder, 'shutdown_owned_obs', return_value={'status': 'closed'}) as shutdown:
+                self.assertTrue(self.service.close_allowed())
+                cleanup = threading.Thread(target=self.service.shutdown)
+                cleanup.start()
+                self.assertTrue(cleanup.is_alive())
+                shutdown.assert_not_called()
+                release.set()
+                worker.join(1)
+                cleanup.join(1)
+                self.assertFalse(cleanup.is_alive())
+                shutdown.assert_called_once_with(self.root)
+        finally:
+            release.set()
+            worker.join(1)
+
+    def test_background_work_close_confirmation_waits_before_any_obs_shutdown(self):
+        from window_manager import WindowManager
+        class Event:
+            def __iadd__(self, handler):
+                self.handler = handler
+                return self
+        window = MagicMock()
+        window.events.closing = Event()
+        window.events.closed = Event()
+        manager = WindowManager(self.service, MagicMock())
+        manager.bind_main(window)
+        window.create_confirmation_dialog.return_value = True
+        window.destroy.side_effect = lambda: window.events.closed.handler()
+        cleaned = threading.Event()
+        def shutdown(root):
+            self.assertTrue(self.service._closed.is_set())
+            self.assertEqual(self.service._background_jobs, {})
+            cleaned.set()
+            return {'status': 'closed'}
+        with patch.object(bridge.recorder, 'shutdown_owned_obs', side_effect=shutdown) as stop_obs:
+            self.service._background_jobs['synthetic-processing'] = {'state': 'running'}
+            try:
+                self.assertFalse(manager.close_main())
+                deadline = time.monotonic() + 2
+                while not self.service._exit_pending and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(self.service._exit_pending)
+                self.assertFalse(self.service._closed.is_set())
+                stop_obs.assert_not_called()
+                window.destroy.assert_not_called()
+                window.create_confirmation_dialog.assert_called_once_with('关闭记录器',
+                    '还有场次正在整理或排队，完成后可以安全关闭。'
+                    '\n\n结束当前录制，并等待保存和整理完成后关闭此窗口？已打开的回看窗口会继续保留。')
+                with self.service._lock:
+                    self.service._background_jobs.clear()
+                self.assertTrue(cleaned.wait(2))
+                manager._shutdown_thread.join(1)
+                stop_obs.assert_called_once_with(self.root)
+                window.destroy.assert_called_once()
+            finally:
+                self.service._background_jobs.clear()
+
+    def test_background_work_close_cancel_keeps_window_and_obs(self):
+        from window_manager import WindowManager
+        window = MagicMock()
+        manager = WindowManager(self.service, MagicMock())
+        manager.main = window
+        confirmed = threading.Event()
+        def cancel(*args):
+            confirmed.set()
+            return False
+        window.create_confirmation_dialog.side_effect = cancel
+        with patch.object(bridge.recorder, 'shutdown_owned_obs') as stop_obs:
+            self.service._background_jobs['synthetic-processing'] = {'state': 'running'}
+            try:
+                self.assertFalse(manager.close_main())
+                self.assertTrue(confirmed.wait(1))
+                self.assertFalse(self.service._closed.is_set())
+                self.assertFalse(self.service._exit_pending)
+                self.assertIn('synthetic-processing', self.service._background_jobs)
+                window.destroy.assert_not_called()
+                stop_obs.assert_not_called()
+                self.assertIsNone(manager._shutdown_thread)
+            finally:
+                self.service._background_jobs.clear()
+
     def test_close_waits_for_queued_work_and_refuses_new_jobs(self):
         self.service._background_jobs['synthetic'] = {'state': 'running'}
         done = threading.Event()

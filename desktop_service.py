@@ -52,6 +52,8 @@ class DesktopService:
         self._default_hotword_files = bundled_dictionary_snapshots(self.root)
         self._lock = threading.RLock()
         self._operation_lock = threading.RLock()
+        self._shutdown_lock = threading.Lock()
+        self._obs_shutdown_result = None
         self._readiness_thread = None
         self._dialog_open = False
         self._startup_launch_attempted = False
@@ -1372,6 +1374,16 @@ class DesktopService:
             if self._background_jobs:
                 return '还有场次正在整理或排队，完成后可以安全关闭。'
             return '当前操作尚未完成，需要等到资料安全保存后关闭。'
+
+    def shutdown(self):
+        """Native-only cleanup after accepted close; idle probes finish first."""
+        if not self._closed.is_set():
+            return {'status': 'close_not_accepted'}
+        with self._shutdown_lock:
+            if self._obs_shutdown_result is None:
+                with self._operation_lock:
+                    self._obs_shutdown_result = recorder.shutdown_owned_obs(self.root)
+            return dict(self._obs_shutdown_result)
 
     def finish_for_close(self):
         with self._lock:

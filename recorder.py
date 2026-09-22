@@ -6,7 +6,8 @@ import av
 import imageio_ffmpeg
 import obsws_python as obs
 from obsws_python.error import OBSSDKRequestError
-import functools,msvcrt
+import functools,msvcrt,threading
+import psutil
 
 ROOT=Path(__file__).resolve().parent
 FFMPEG=imageio_ffmpeg.get_ffmpeg_exe()
@@ -14,6 +15,9 @@ HIDDEN=0x08000000 if os.name=='nt' else 0
 PRESETS={'均衡 1080p30':(1920,1080,30),'流畅 1080p60':(1920,1080,60),'省空间 720p30':(1280,720,30)}
 SESSION_SETTING_KEYS=('game','language','preset','source','window','monitor','mic',
     'model','device','compute_type','transcription_provider','hotwords','qwen_region','qwen_model')
+_obs_process_lock=threading.RLock()
+_owned_obs={}
+_obs_closed_roots=set()
 
 def session_settings(cfg):
     """Session exports contain their own recording choices, not other presets."""
@@ -80,13 +84,25 @@ def wait_obs_ready(r,timeout=45,progress=lambda s:None):
             time.sleep(min(.2,remaining))
 
 def client(launch=True,progress=lambda s:None):
+    # Keep the original process handle, and serialize launch/close so reconnects
+    # cannot create duplicate children or race an accepted application close.
+    with _obs_process_lock:
+        if ROOT.resolve() in _obs_closed_roots:
+            raise RuntimeError('记录器正在关闭，录制引擎不再接受新连接。')
+        return _connect_obs(launch,progress)
+
+def _connect_obs(launch,progress):
     c=config()
     try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=8)
     except Exception:
         if not launch:raise
         progress('正在启动录制引擎，请稍候…')
         exe=ROOT/'tools/obs/bin/64bit/obs64.exe'
-        subprocess.Popen([str(exe),'--portable','--multi','--profile','Experience','--collection','Experience','--minimize-to-tray','--disable-shutdown-check'],cwd=exe.parent,creationflags=HIDDEN)
+        root=ROOT.resolve()
+        owned=_owned_obs.get(root)
+        if owned is None or owned['process'].poll() is not None:
+            process=subprocess.Popen([str(exe),'--portable','--multi','--profile','Experience','--collection','Experience','--minimize-to-tray','--disable-shutdown-check'],cwd=exe.parent,creationflags=HIDDEN)
+            _owned_obs[root]=dict(process=process,exe=exe.resolve(),port=c['port'],password=c['password'])
         for _ in range(45):
             time.sleep(1)
             try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=2);break
@@ -99,6 +115,103 @@ def client(launch=True,progress=lambda s:None):
         except Exception:pass
         raise
     return r
+
+def _owned_obs_identity(owned,connection=None):
+    """A live original child handle plus image, parent and exact TCP peer proof."""
+    process=owned['process']
+    if process.poll() is not None:return False
+    child=psutil.Process(process.pid)
+    if child.ppid()!=os.getpid() or Path(child.exe()).resolve()!=owned['exe']:return False
+    if connection is not None:
+        sock=connection.base_client.ws.sock
+        local,peer=sock.getsockname(),sock.getpeername()
+        if not any(tuple(item.laddr)==tuple(peer) and tuple(item.raddr)==tuple(local)
+                   and item.status==psutil.CONN_ESTABLISHED
+                   for item in child.net_connections(kind='tcp')):
+            return False
+    return process.poll() is None
+
+def _request_obs_window_close(process):
+    """Send normal WM_CLOSE only to this live child's OBS main window; never kill."""
+    if os.name!='nt' or process.poll() is not None:return False
+    import ctypes
+    from ctypes import wintypes
+    user32=ctypes.WinDLL('user32',use_last_error=True)
+    callback_type=ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM)
+    user32.EnumWindows.argtypes=(callback_type,wintypes.LPARAM)
+    user32.EnumWindows.restype=wintypes.BOOL
+    user32.GetWindowThreadProcessId.argtypes=(wintypes.HWND,ctypes.POINTER(wintypes.DWORD))
+    user32.GetWindowTextW.argtypes=(wintypes.HWND,wintypes.LPWSTR,ctypes.c_int)
+    user32.PostMessageW.argtypes=(wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM)
+    user32.PostMessageW.restype=wintypes.BOOL
+    windows=[]
+    def visit(hwnd,_):
+        pid=wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd,ctypes.byref(pid))
+        if pid.value==process.pid:
+            title=ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd,title,len(title))
+            if title.value.startswith('OBS '):windows.append(hwnd)
+        return True
+    user32.EnumWindows(callback_type(visit),0)
+    if len(windows)!=1 or process.poll() is not None:return False
+    # Recheck the HWND owner immediately before posting, after enumeration.
+    pid=wintypes.DWORD()
+    user32.GetWindowThreadProcessId(windows[0],ctypes.byref(pid))
+    return pid.value==process.pid and bool(user32.PostMessageW(windows[0],0x0010,0,0))
+
+def shutdown_owned_obs(root):
+    """After accepted app close, gracefully exit only our verified idle child.
+
+    No process enumeration/adoption, saved PID, kill, output stop, or launch.
+    Missing identity/status evidence leaves OBS untouched, including old orphans.
+    Returned reasons are fixed codes and never include connection credentials.
+    """
+    root=Path(root).resolve()
+    with _obs_process_lock:
+        _obs_closed_roots.add(root)
+        owned=_owned_obs.get(root)
+        if owned is None:return {'status':'not_owned'}
+        process=owned['process']
+        if process.poll() is not None:
+            _owned_obs.pop(root,None)
+            return {'status':'already_exited'}
+        connection=None
+        try:
+            if not _owned_obs_identity(owned):return {'status':'identity_unverified'}
+            connection=obs.ReqClient(host='127.0.0.1',port=owned['port'],password=owned['password'],timeout=2)
+            if not _owned_obs_identity(owned,connection):return {'status':'endpoint_unverified'}
+            # An OBS started by us may subsequently be used from its own UI.
+            # Missing fields, disconnection and active auxiliary outputs are unsafe.
+            for request in ('get_record_status','get_stream_status'):
+                if getattr(getattr(connection,request)(),'output_active',None) is not False:
+                    return {'status':'output_active_or_unknown'}
+            # Disabled replay buffers have no status object (OBS returns 604).
+            # The output inventory covers every instantiated output, including
+            # replay buffers, virtual cameras and outputs created by plugins.
+            outputs=connection.get_output_list().outputs
+            if not isinstance(outputs,list) or any(not isinstance(item,dict)
+                    or item.get('outputActive') is not False for item in outputs):
+                return {'status':'output_active_or_unknown'}
+            if (connection.get_profile_list().current_profile_name!='Experience'
+                    or connection.get_scene_collection_list().current_scene_collection_name!='Experience'):
+                return {'status':'configuration_changed'}
+            if not _owned_obs_identity(owned,connection):return {'status':'identity_unverified'}
+            if not _request_obs_window_close(process):return {'status':'close_not_requested'}
+            # Release our WebSocket before waiting for OBS to stop its server.
+            # Holding it open can delay the child's otherwise normal exit.
+            connection.disconnect()
+            connection=None
+            try:process.wait(timeout=8)
+            except subprocess.TimeoutExpired:return {'status':'close_unconfirmed'}
+            _owned_obs.pop(root,None)
+            return {'status':'closed'}
+        except Exception:
+            return {'status':'unverified'}
+        finally:
+            if connection is not None:
+                try:connection.disconnect()
+                except Exception:pass
 def ensure_idle(r):
     recording,streaming=wait_obs_ready(r)
     if recording.output_active: raise RuntimeError('OBS 已在录制，未覆盖或停止它。请先处理当前场次。')

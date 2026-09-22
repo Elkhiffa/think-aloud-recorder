@@ -8,11 +8,22 @@ class WindowManager:
         self.webview = webview
         self._lock = threading.RLock()
         self._closing = False
+        self._shutdown_thread = None
         self._viewers = {}
 
     def bind_main(self, window):
         self.main = window
         window.events.closing += self.close_main
+        window.events.closed += self._main_closed
+
+    def _main_closed(self):
+        # Review windows do not need OBS. Finish engine cleanup even while they
+        # remain open; a non-daemon worker also survives the last window closing.
+        with self._lock:
+            if self._shutdown_thread is None:
+                self._shutdown_thread = threading.Thread(target=self.service.shutdown,
+                    name='owned-obs-shutdown', daemon=False)
+                self._shutdown_thread.start()
 
     def close_main(self):
         # Native close events must not wait on dialogs or worker completion.

@@ -31,6 +31,7 @@ class DesktopShellTests(unittest.TestCase):
                 self.handler = handler
                 return self
         window.events.closing = Event()
+        window.events.closed = Event()
         with patch.dict('sys.modules', {'webview': webview, 'desktop_service': service_module}), \
                 patch.object(app, 'instance_lock', return_value=nullcontext()):
             self.assertEqual(app.main(), 0)
@@ -40,6 +41,7 @@ class DesktopShellTests(unittest.TestCase):
         self.assertFalse(kwargs['frameless'])
         self.assertEqual(webview.start.call_args.kwargs['gui'], 'edgechromium')
         service_module.DesktopService.return_value.set_window.assert_called_once_with(window)
+        service_module.DesktopService.return_value.shutdown.assert_called_once_with()
 
 
 if __name__ == '__main__':

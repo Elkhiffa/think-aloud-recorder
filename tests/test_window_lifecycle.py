@@ -15,6 +15,7 @@ class LifecycleTests(unittest.TestCase):
     def setup_manager(self):
         service, window = Mock(), Mock()
         window.events.closing = Event()
+        window.events.closed = Event()
         manager = WindowManager(service, Mock())
         manager.bind_main(window)
         return manager, service, window
@@ -54,6 +55,28 @@ class LifecycleTests(unittest.TestCase):
         manager._confirm_close()
         window.destroy.assert_not_called()
         service.finish_for_close.assert_not_called()
+
+    def test_closed_main_cleans_engine_once_while_review_windows_remain(self):
+        manager, service, window = self.setup_manager()
+        other = Mock()
+        manager._viewers['review'] = other
+        completed = threading.Event()
+        service.shutdown.side_effect = completed.set
+        window.events.closed.handler()
+        self.assertTrue(completed.wait(1))
+        window.events.closed.handler()
+        manager._shutdown_thread.join(1)
+        service.shutdown.assert_called_once_with()
+        self.assertFalse(manager._shutdown_thread.daemon)
+        other.destroy.assert_not_called()
+
+    def test_rejected_main_close_does_not_schedule_engine_cleanup(self):
+        manager, service, window = self.setup_manager()
+        service.close_allowed.return_value = False
+        window.create_confirmation_dialog.return_value = False
+        self.assertFalse(manager.close_main())
+        self.assertIsNone(manager._shutdown_thread)
+        service.shutdown.assert_not_called()
 
 
 if __name__ == '__main__':
