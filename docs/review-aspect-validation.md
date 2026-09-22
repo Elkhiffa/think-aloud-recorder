@@ -35,4 +35,4 @@
 
 机器可读几何证据与截图保存在忽略的 `work/review-aspect/acceptance.json` 及同目录 PNG。重新运行会刷新这些合成证据；可以通过 `TAR_ASPECT_OUTPUT` 指定其他输出目录，通过 `PLAYWRIGHT_MODULE` 指向现有 Playwright。
 
-以上证明浏览器内实际布局与交互，不等同于原生 WebView2 窗口、打包应用、OBS 或用户安装验收。未修改用户安装、未提交或推送。
+以上证明浏览器内实际布局与交互，不等同于原生 WebView2 窗口、打包应用、OBS 或用户安装验收。测试视频和逐字稿均为合成数据。
