@@ -51,7 +51,11 @@ leaves Start disabled until setup has been saved. Finishing setup saves valid
 choices even if their selected device later becomes unavailable.
 
 Before enabling Start, the backend checks the saved configuration. When blocked,
-show specific red text adjacent to the disabled Start button: chosen window or
+show specific red text above the disabled Start button in the same slot that
+otherwise shows readiness. Ready and blocked messages are mutually exclusive;
+pending requests and device checks have their own truthful status. Historical
+operation failures must not replace a subsequently recovered ready state; show
+these as transient notices. Examples of blockers: chosen window or
 process unavailable, microphone disconnected, local model missing, cloud key
 missing/unreadable, output folder inaccessible or insufficient space, or OBS
 unavailable/busy. Backend state is authoritative. Never infer device availability
@@ -104,4 +108,14 @@ Concurrency acceptance: while A's processing is deliberately blocked, start and
 stop B; B queues without another processor, A's progress/failure cannot change B's
 capture activity, and each task retains its admitted preset and output directory.
 
-The method guide is also available from the home header without opening a configuration draft. Editing an existing preset starts at devices; Back can return to the guide without clearing the draft. The four speaking prompts are labelled excerpts, not a required sequence. Number only the actual setup steps. Use warm paper surfaces, a restrained green accent, 15–16 px body/action text and 13–14 px supporting text. In review, align timestamps with their original words; very narrow transcript panes can put the timestamp above the words. Reduce spacing rather than text size on small windows. Main and review surfaces offer light and dark themes.
+The method guide is also available from the home header without opening a configuration draft. Editing an existing preset starts at devices and Back cannot enter the guide; a new preset includes the guide. The four speaking prompts are labelled excerpts, not a required sequence. Number only the actual setup steps. Use warm paper surfaces, a restrained brick-red accent, 15–16 px body/action text and 13–14 px supporting text. In review, align timestamps with their original words; very narrow transcript panes can put the timestamp above the words. Reduce spacing rather than text size on small windows. Main and review surfaces offer light and dark themes.
+
+Visual identity: warm white `#FCFAF5`, parchment recording band `#EDE7DB`, ink
+`#292722`, brick-red actions `#B64B37`, thin warm-gray borders and 5–6 px control
+corners. Use the original quote/bookmark mark with a serif Think Aloud wordmark;
+Chinese controls remain clear sans-serif. Recording and experience-list headings
+share 22 px / 600. The screen contains the actual application window only, without
+design-board captions or state-example panels. Wizard overlays show the real home
+beneath them, with one scrolling body and fixed header, step rail and footer.
+Selected transcript rows use a pale warm fill, red timestamp and a red separator
+between time and words; reserve its space in unselected rows to prevent shifting.

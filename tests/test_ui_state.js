@@ -266,3 +266,58 @@ test('editing a preset excludes the guide and Back cannot enter it; new presets 
   assert.equal(f.run("document.querySelectorAll('[data-step]')[0].classList.contains('hidden')"),false);
   assert.equal(f.calls.some(call=>['save_preset','start_recording'].includes(call.name)),false);
 });
+
+test('readiness and specific blockers replace each other in the same live status slot',async()=>{
+  const f=await fixture();
+  assert.equal(f.elements.get('homeStatus').textContent,'准备就绪');
+  assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
+  f.data.snapshot.readiness={ready:false,checking:false,errors:[
+    {message:'未找到游戏窗口，请先打开游戏。',step:1},
+    {message:'云端密钥缺失，请重新配置。',step:2},
+  ]};
+  await f.run('poll()');
+  assert.equal(f.elements.get('recordButton').disabled,true);
+  assert.equal(f.elements.get('homeStatus').classList.contains('hidden'),true);
+  assert.equal(f.elements.get('homeStatus').textContent,'');
+  assert.equal(f.elements.get('blockers').classList.contains('hidden'),false);
+  assert.equal(f.elements.get('blockers').textContent,'未找到游戏窗口，请先打开游戏。\n云端密钥缺失，请重新配置。');
+  f.data.snapshot.readiness={ready:true,checking:false,errors:[]};await f.run('poll()');
+  assert.equal(f.elements.get('recordButton').disabled,false);
+  assert.equal(f.elements.get('homeStatus').textContent,'准备就绪');
+  assert.equal(f.elements.get('homeStatus').classList.contains('hidden'),false);
+  assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
+  assert.equal(f.elements.get('blockers').textContent,'');
+});
+
+test('pending requests and device refresh never advertise ready above a disabled Start',async()=>{
+  const f=await fixture();
+  f.run('store.requestPending=true;renderControls()');
+  assert.equal(f.elements.get('recordButton').disabled,true);
+  assert.equal(f.elements.get('homeStatus').textContent,'正在处理请求…');
+  f.run('store.requestPending=false');
+  f.data.snapshot.activity={busy:true,kind:'devices',status:'正在刷新设备'};await f.run('poll()');
+  assert.equal(f.elements.get('recordButton').disabled,true);
+  assert.equal(f.elements.get('homeStatus').textContent,'正在检查录制条件');
+  f.data.snapshot.activity={busy:false,kind:'idle'};f.data.snapshot.closing=true;await f.run('poll()');
+  assert.equal(f.elements.get('recordButton').disabled,true);
+  assert.equal(f.elements.get('homeStatus').textContent,'正在安全关闭');
+  assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
+});
+
+test('a historical operation error cannot replace fresh ready status after recovery',async()=>{
+  const f=await fixture(snapshot({activity:{busy:false,kind:'idle',status:'操作未完成',detail:'旧的密钥验证失败'}}));
+  assert.equal(f.elements.get('recordButton').disabled,false);
+  assert.equal(f.elements.get('homeStatus').textContent,'准备就绪');
+  assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
+  assert.equal(f.elements.get('blockers').textContent,'');
+  assert.ok(f.elements.get('toast').textContent.includes('旧的密钥验证失败'));
+});
+
+test('provider console opens without sending typed secrets or saving the preset',async()=>{
+  const f=await fixture();f.elements.get('settingsButton').onclick();
+  f.elements.get('cloudKey').value='synthetic-unsaved-not-a-real-key';
+  await f.elements.get('bailianConsole').onclick({preventDefault(){}});await settle();
+  assert.deepEqual(f.calls.find(call=>call.name==='open_bailian_console').args,[]);
+  assert.equal(f.calls.some(call=>['save_cloud_key','save_preset'].includes(call.name)),false);
+  assert.equal(f.elements.get('cloudKey').value,'synthetic-unsaved-not-a-real-key');
+});

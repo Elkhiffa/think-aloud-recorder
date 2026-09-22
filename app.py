@@ -4,7 +4,7 @@ import sys
 from contextlib import contextmanager
 
 BRIDGE_METHODS = ('get_state', 'refresh_devices', 'save_settings', 'save_preset', 'select_preset', 'choose_directory',
-                  'import_hotwords', 'choose_hotword_files', 'open_dictionary_site',
+                  'import_hotwords', 'choose_hotword_files', 'open_dictionary_site', 'open_bailian_console',
                   'start_recording', 'stop_recording',
                   'process_session', 'open_review', 'package_session', 'open_folder',
                   'open_raw', 'save_cloud_key', 'verify_cloud_key', 'recover_cloud_task',
@@ -49,7 +49,7 @@ def run_window(root):
     window = webview.create_window(
         'Think Aloud · 体验记录器', url=(root / 'ui' / 'index.html').as_uri(),
         js_api=DesktopAPI(service), width=1240, height=960, min_size=(820, 620),
-        frameless=False, background_color='#fafbf7', text_select=True,
+        frameless=False, background_color='#fcfaf5', text_select=True,
     )
     from window_manager import WindowManager
     windows = WindowManager(service, webview)

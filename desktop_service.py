@@ -798,6 +798,15 @@ class DesktopService:
         except Exception:
             return self._error('未能请求浏览器打开搜狗词库下载页。')
 
+    def open_bailian_console(self):
+        """Open only the fixed provider console; never pass credentials or state."""
+        try:
+            if not webbrowser.open('https://bailian.console.aliyun.com/'):
+                raise RuntimeError('未能请求浏览器打开百炼控制台。')
+            return ok({'requested': True})
+        except Exception:
+            return self._error('未能请求浏览器打开百炼控制台。')
+
     def _require_transcription(self, cfg, allow_later=False):
         provider = cfg.get('transcription_provider', 'later')
         if provider == 'later':

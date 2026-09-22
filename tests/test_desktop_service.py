@@ -1424,6 +1424,16 @@ class DesktopServiceTests(unittest.TestCase):
         with patch.object(bridge.webbrowser, 'open', return_value=False):
             self.assertFalse(self.service.open_dictionary_site()['ok'])
 
+    def test_bailian_console_opens_only_fixed_url_and_reports_failure(self):
+        self.service._cfg['game'] = 'Private project name'
+        with patch.object(bridge.webbrowser, 'open', return_value=True) as browser:
+            self.assertEqual(self.service.open_bailian_console(), {'ok': True, 'data': {'requested': True}})
+        browser.assert_called_once_with('https://bailian.console.aliyun.com/')
+        with patch.object(bridge.webbrowser, 'open', return_value=False):
+            self.assertFalse(self.service.open_bailian_console()['ok'])
+        with patch.object(bridge.webbrowser, 'open', side_effect=OSError('synthetic failure')):
+            self.assertFalse(self.service.open_bailian_console()['ok'])
+
 
 if __name__ == '__main__':
     unittest.main()

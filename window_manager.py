@@ -48,7 +48,7 @@ class WindowManager:
                 payload['title'] + ' · ' + payload['id'] + ' · 回看', url=page.as_uri(),
                 js_api=api, width=1180, height=780, min_size=(560, 540),
                 frameless=False, resizable=True, text_select=True,
-                background_color='#fafbf7')
+                background_color='#fcfaf5')
             with self._lock:
                 self._viewers[window.uid] = window
 

@@ -22,6 +22,7 @@ EXPECTED_EXPORTS = {
     'import_hotwords': ['current_text'],
     'choose_hotword_files': [],
     'open_dictionary_site': [],
+    'open_bailian_console': [],
     'start_recording': ['payload'],
     'stop_recording': [],
     'process_session': ['id'],
