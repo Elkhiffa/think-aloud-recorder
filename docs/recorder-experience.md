@@ -11,13 +11,21 @@ The experience list is always visible and has its own scroll region; its heading
 track diagrams, permanent engine checklist, model cards or navigation sidebar.
 
 First use opens a four-step setup wizard:
-1. Explain think-aloud recording with observation, interpretation, planned action and reflection examples. Natural pauses, uncertainty and changing one's mind are welcome. Advance without saving or starting recording.
+1. Prominently show the core sequence: start recording → experience and speak thoughts → review and analyze problems. Then explain think-aloud recording with observation, interpretation, planned action and reflection examples. Natural pauses, uncertainty and changing one's mind are welcome. Advance without saving or starting recording.
 2. Preset name, target window/display and microphone. Suggest the game/project
    name as the preset name. Explain that a preset saves the recording settings;
    the same game and devices normally need setup only once. Select it to record,
    use the gear to edit it, or create another preset for a different configuration.
-   Actual devices are loaded.
-3. Recording quality and transcription: record only, local model, or Qwen.
+   Actual devices are loaded. Focus the preset-name input on entering this step,
+   without repeatedly stealing focus during polling. If every device list is
+   empty, label the action “设置 OBS”; only after that explicit refresh succeeds,
+   select the verified primary display and default microphone in the current
+   draft. If either cannot be verified, leave it empty and request manual selection.
+   A subsequent ordinary refresh preserves manual device choices.
+3. Recording quality and transcription: local model or Qwen as parallel tabs,
+   with the local option initially selected for new drafts. Legacy record-only
+   presets remain unchanged until explicitly saved; editing one requires selecting
+   a transcription option. No download or upload starts merely by selecting a tab.
    Model import/download and token entry appear only for their chosen mode.
    Language and vocabulary are optional advanced fields.
    Vocabulary is file-first: select multiple TXT/SCEL dictionaries, see filenames
@@ -60,7 +68,12 @@ process unavailable, microphone disconnected, local model missing, cloud key
 missing/unreadable, output folder inaccessible or insufficient space, or OBS
 unavailable/busy. Backend state is authoritative. Never infer device availability
 from merely saved values. Recheck on launch, periodically while idle, after saving,
-and immediately before recording. A manual recheck is secondary, shown when needed.
+and immediately before recording. Keep the home free of duplicate recheck/edit
+links; configuration is available through its gear. The status slot has a fixed
+three-line height with independent overflow scrolling, so single/multiple errors,
+checking and ready states cannot move the controls, folder or session list. Reset
+its scroll when the error changes; overflowing status can receive keyboard focus.
+The complete saved-folder button has a subtle fill and ends at the gear's right edge.
 
 Recording shows actual elapsed time and changes the same primary action to Stop
 and save / Stop and transcribe. Disallow changing capture settings during recording

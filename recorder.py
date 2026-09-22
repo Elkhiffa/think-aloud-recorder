@@ -112,6 +112,62 @@ def add(r,name,kind,settings,enabled=True):
     if name in existing: r.set_input_settings(name,settings,True)
     else:r.create_input('Experience',name,kind,settings,enabled)
 def tracks(r,name,nums):r.set_input_audio_tracks(name,{str(i):i in nums for i in range(1,7)})
+def primary_monitor_ids():
+    """Read Windows' primary monitor identity; callers must match actual OBS items.
+
+    OBS monitor properties use the display-interface ID on current releases and
+    the display name on some older ones. Neither list order nor OBS' placeholder
+    default (for example ``DUMMY``) identifies the primary display.
+    """
+    if os.name != 'nt':
+        return ()
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', wintypes.RECT),
+                        ('rcWork', wintypes.RECT), ('dwFlags', wintypes.DWORD),
+                        ('szDevice', wintypes.WCHAR * 32)]
+
+        class DisplayDevice(ctypes.Structure):
+            _fields_ = [('cb', wintypes.DWORD), ('DeviceName', wintypes.WCHAR * 32),
+                        ('DeviceString', wintypes.WCHAR * 128), ('StateFlags', wintypes.DWORD),
+                        ('DeviceID', wintypes.WCHAR * 128), ('DeviceKey', wintypes.WCHAR * 128)]
+
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE, wintypes.HDC,
+                                          ctypes.POINTER(wintypes.RECT), ctypes.c_ssize_t)
+        user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.POINTER(wintypes.RECT),
+                                               callback_type, ctypes.c_ssize_t]
+        user32.EnumDisplayMonitors.restype = wintypes.BOOL
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MonitorInfo)]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+        user32.EnumDisplayDevicesW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
+                                               ctypes.POINTER(DisplayDevice), wintypes.DWORD]
+        user32.EnumDisplayDevicesW.restype = wintypes.BOOL
+        primary = []
+
+        @callback_type
+        def visit(monitor, _dc, _rect, _data):
+            info = MonitorInfo()
+            info.cbSize = ctypes.sizeof(info)
+            if user32.GetMonitorInfoW(monitor, ctypes.byref(info)) and info.dwFlags & 1:
+                primary.append(info.szDevice)
+            return True
+
+        if not user32.EnumDisplayMonitors(None, None, visit, 0) or len(primary) != 1 or not primary[0]:
+            return ()
+        display = DisplayDevice()
+        display.cb = ctypes.sizeof(display)
+        # EDD_GET_DEVICE_INTERFACE_NAME, read-only; never change display settings.
+        if user32.EnumDisplayDevicesW(primary[0], 0, ctypes.byref(display), 1) and display.DeviceID:
+            return (display.DeviceID, primary[0])
+        return (primary[0],)
+    except Exception:
+        # Optional default suggestions must not prevent device enumeration.
+        return ()
+
 def devices(progress=lambda s:None):
     r=client(progress=progress);ensure_idle(r)
     add(r,'设置：麦克风','wasapi_input_capture',{'device_id':'default'},False)

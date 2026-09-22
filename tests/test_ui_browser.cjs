@@ -92,6 +92,7 @@ const server = http.createServer((request, response) => {
   if (url.pathname === '/fixture') { response.setHeader('Content-Type', 'text/html'); response.end('<!doctype html><title>Synthetic fixture generator</title>'); return; }
   if (url.pathname === '/review') { response.setHeader('Content-Type', 'text/html; charset=utf-8'); response.end(reviewHTML()); return; }
   if (url.pathname === '/synthetic.webm' && media) {
+    evidence.mediaRequests ||= []; evidence.mediaRequests.push({ range: request.headers.range || null, bytes: media.length });
     response.setHeader('Content-Type', 'video/webm'); response.setHeader('Accept-Ranges', 'bytes');
     const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range || '');
     if (range) {
@@ -149,11 +150,17 @@ async function calls(page, method) {
 async function bridge(page, state = snapshot(), requestedTheme = 'light') {
   await page.addInitScript(({ state, imported, requestedTheme }) => {
     localStorage.setItem('recorder-theme', requestedTheme);
-    window.__syntheticFixture = { snapshot: state, imported, calls: [], layout: null };
+    window.__syntheticFixture = { snapshot: state, imported, calls: [], layout: null, polls: 0, refreshSequence: 0, refreshSnapshot: null };
     window.pywebview = { api: new Proxy({}, { get: (_, method) => async (...args) => {
       const fixture = window.__syntheticFixture;
-      if (method === 'get_state') return { ok: true, data: JSON.parse(JSON.stringify(fixture.snapshot)) };
+      if (method === 'get_state') { fixture.polls++; return { ok: true, data: JSON.parse(JSON.stringify(fixture.snapshot)) }; }
       fixture.calls.push({ method, args });
+      if (method === 'refresh_devices') {
+        const id = fixture.refreshSequence++ ? `fixture-refresh-${fixture.refreshSequence}` : 'fixture-refresh';
+        if (fixture.refreshSnapshot) Object.assign(fixture.snapshot, JSON.parse(JSON.stringify(fixture.refreshSnapshot)));
+        fixture.snapshot.device_refresh = { id, state: 'succeeded' };
+        return { ok: true, accepted: true, data: { refresh_id: id } };
+      }
       if (method === 'choose_hotword_files') return { ok: true, data: { files: fixture.imported } };
       if (method === 'get_layout') return { ok: true, data: fixture.layout };
       if (method === 'save_layout') { fixture.layout = { ...fixture.layout, [args[0]]: args[1] }; return { ok: true }; }
@@ -168,8 +175,10 @@ async function makeSyntheticVideo(browser, origin) {
   try {
     await page.goto(origin + '/fixture');
     const bytes = await page.evaluate(async () => {
-      const canvas = document.createElement('canvas'); canvas.width = 960; canvas.height = 540;
-      const ctx = canvas.getContext('2d'), stream = canvas.captureStream(10), chunks = [];
+      const canvas = document.createElement('canvas'); canvas.width = 960; canvas.height = 540; document.body.append(canvas);
+      const ctx = canvas.getContext('2d'), stream = canvas.captureStream(0), chunks = [];
+      const track = stream.getVideoTracks()[0];
+      if (typeof track.requestFrame !== 'function') throw new Error('This browser cannot explicitly capture synthetic canvas frames.');
       const format = ['video/webm;codecs=vp8', 'video/webm'].find(value => MediaRecorder.isTypeSupported(value));
       if (!format) throw new Error('This installed browser cannot encode the synthetic WebM fixture.');
       const recorder = new MediaRecorder(stream, { mimeType: format });
@@ -183,10 +192,12 @@ async function makeSyntheticVideo(browser, origin) {
         ctx.font = '24px sans-serif'; ctx.fillText('Generated test pattern - no game or microphone capture', 64, 264);
         ctx.fillStyle = '#b64b37'; ctx.fillRect(64, 325, 32 + frame * 25, 8);
       }
-      draw(0); recorder.start();
-      for (let frame = 1; frame <= 20; frame++) { await new Promise(resolve => setTimeout(resolve, 100)); draw(frame); }
+      draw(0); const started = new Promise(resolve => { recorder.onstart = resolve; }); recorder.start(); await started;
+      for (let frame = 1; frame <= 20; frame++) { draw(frame); track.requestFrame(); await new Promise(resolve => setTimeout(resolve, 100)); }
       recorder.stop(); await stopped; stream.getTracks().forEach(track => track.stop());
-      return Array.from(new Uint8Array(await new Blob(chunks, { type: format }).arrayBuffer()));
+      const result = new Uint8Array(await new Blob(chunks, { type: format }).arrayBuffer());
+      if (result.length < 1000) throw new Error(`Synthetic MediaRecorder fixture has no usable video frames (${result.length} bytes).`);
+      return Array.from(result);
     });
     media = Buffer.from(bytes);
   } finally { await page.close(); }
@@ -241,6 +252,59 @@ async function homeChecks(context, origin) {
       await page.waitForFunction(() => !document.querySelector('#recordButton').disabled);
     }
   });
+  await check('home recovery duplicates are absent and the full address hot area ends at the gear', async () => {
+    assert.equal(await page.locator('#recoveryActions,#recheckButton,#fixSettingsButton').count(), 0);
+    const address = await box(page, '#openVault'), gear = await box(page, '#settingsButton');
+    closeEnough(address.x + address.width, gear.x + gear.width, 'address right edge equals gear');
+    const background = await page.locator('#openVault').evaluate(node => getComputedStyle(node).backgroundColor);
+    assert.notEqual(background, 'rgba(0, 0, 0, 0)'); assert.notEqual(background, 'transparent');
+    await page.locator('#openVault').click({ position: { x: address.width - 8, y: address.height / 2 } });
+    assert.equal((await calls(page, 'open_folder')).length, 1, 'right edge of address is an active folder button');
+  });
+  for (const viewport of [{ width: 1240, height: 900 }, { width: 820, height: 620 }]) {
+    for (const requestedTheme of ['light', 'dark']) {
+      await check(`stable home geometry across wrapped error and checking states (${requestedTheme} ${viewport.width})`, async () => {
+        await page.setViewportSize(viewport); await theme(page, requestedTheme);
+        const selectors = ['#recordButton', '#presetSelect', '#settingsButton', '#openVault', '.session-section'];
+        const baseline = Object.fromEntries(await Promise.all(selectors.map(async selector => [selector, await box(page, selector)])));
+        const states = [
+          { name: 'ready', readiness: snapshot().readiness },
+          { name: 'one-line', readiness: { ready: false, checking: false, errors: [{ message: '麦克风未连接。' }] } },
+          { name: 'two-lines', readiness: { ready: false, checking: false, errors: [{ message: '已选云端转写，但尚未保存本机 API Key。' }] } },
+          { name: 'many-lines', readiness: { ready: false, checking: false, errors: ['设置的游戏窗口尚未打开。', '所选麦克风未连接，请检查连接。', '尚未保存本机 API Key。', '保存位置当前不可写，请检查目录。', '这些内容全部来自合成测试。'].map(message => ({ message })) } },
+          { name: 'checking', readiness: { ready: false, checking: true, errors: [] } },
+          { name: 'ready-again', readiness: snapshot().readiness },
+        ];
+        const measured = [];
+        try {
+          for (const state of states) {
+            await patchSnapshot(page, { readiness: state.readiness });
+            await page.waitForFunction(state => {
+              const expected = state.readiness.errors.map(item => item.message).join('\n');
+              return document.querySelector('#blockers').textContent === expected &&
+                document.querySelector('#recordButton').disabled === !state.readiness.ready &&
+                (!state.readiness.checking || document.querySelector('#homeStatus').textContent === '正在检查录制条件');
+            }, state);
+            const current = Object.fromEntries(await Promise.all(selectors.map(async selector => [selector, await box(page, selector)])));
+            for (const selector of selectors) for (const key of ['x', 'y', 'width', 'height']) closeEnough(current[selector][key], baseline[selector][key], `${state.name} ${selector}.${key}`);
+            if (state.name === 'many-lines') {
+              assert.equal(await page.locator('#statusSlot').getAttribute('tabindex'), '0', 'overflow details are keyboard reachable');
+              const scroll = await page.locator('#statusSlot').evaluate(node => { node.scrollTop = node.scrollHeight; return { top: node.scrollTop, full: node.scrollHeight, visible: node.clientHeight }; });
+              assert.ok(scroll.full > scroll.visible && scroll.top > 0, 'all long errors remain available in internal scrolling');
+              await unchangedBounds(page, '#recordButton', async () => { await page.locator('#statusSlot').evaluate(node => { node.scrollTop = 0; }); });
+              await screen(page, `home-errors-${requestedTheme}-${viewport.width}x${viewport.height}`);
+            }
+            measured.push({ state: state.name, bounds: current });
+          }
+          return measured;
+        } finally {
+          await patchSnapshot(page, { readiness: snapshot().readiness });
+          await page.waitForFunction(() => !document.querySelector('#recordButton').disabled);
+        }
+      });
+    }
+  }
+  await page.setViewportSize({ width: 1240, height: 900 }); await theme(page, 'light');
   await check('compact home wraps complete long storage paths', async () => {
     await page.setViewportSize({ width: 820, height: 620 });
     const longPath = 'D:\\synthetic-only\\' + '很长的示例项目名称和归档位置\\'.repeat(8) + 'think-aloud-database';
@@ -261,13 +325,24 @@ async function homeChecks(context, origin) {
     assert.equal(await page.locator('#wizardTitle').innerText(), '记录方法');
     assert.equal(await page.locator('.wizard-steps .step:visible').count(), 4);
     assert.equal(await page.locator('.method-card').count(), 4);
+    const flow = page.locator('#methodContent .method-flow');
+    assert.match(await flow.innerText(), /开始录制[\s\S]*体验 \+ 说出想法[\s\S]*回看 \+ 分析问题/);
+    assert.ok((await box(page, '#methodContent .method-flow')).y < (await box(page, '#methodContent .method-lead')).y, 'core method precedes all examples and supporting copy');
     await screen(page, 'wizard-method-light-1240x900');
     await page.locator('#wizardNext').click();
     assert.equal(await page.locator('#wizardTitle').innerText(), '游戏与设备');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'game', 'name field receives focus on entering the device step');
     assert.equal(await page.locator('#target option[value="synthetic-window"]').count(), 1);
     assert.equal(await page.locator('#mic option[value="synthetic-mic"]').count(), 1);
     assert.equal((await calls(page, 'refresh_devices')).length, 0);
     await page.locator('#game').fill('未保存的合成预设');
+    const polls = await page.evaluate(() => window.__syntheticFixture.polls);
+    await page.waitForFunction(before => window.__syntheticFixture.polls > before, polls);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'game', 'polling preserves the name caret');
+    await page.locator('#source').focus();
+    const laterPolls = await page.evaluate(() => window.__syntheticFixture.polls);
+    await page.waitForFunction(before => window.__syntheticFixture.polls > before, laterPolls);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'source', 'polling does not steal focus back to the name field');
     await page.locator('#target').selectOption('synthetic-window'); await page.locator('#mic').selectOption('synthetic-mic');
     await screen(page, 'wizard-devices-light-1240x900');
     await page.locator('#wizardNext').click(); assert.equal(await page.locator('#wizardTitle').innerText(), '录制与转写');
@@ -312,6 +387,32 @@ async function homeChecks(context, origin) {
     await page.locator('[data-remove-vocabulary="synthetic-game"]').click();
     assert.equal(await page.locator('#hotwordFiles li').count(), 2);
   });
+  await check('transcription uses exactly two accessible tabs with click and keyboard selection', async () => {
+    assert.equal(await page.locator('#transcription_provider').count(), 0);
+    assert.equal(await page.getByText('仅保存录制，稍后整理', { exact: true }).count(), 0);
+    assert.equal(await page.locator('#providerTabs [role=tab]').count(), 2);
+    assert.equal(await page.locator('#providerQwen').getAttribute('aria-selected'), 'true');
+    await page.locator('#providerLocal').click();
+    assert.equal(await page.locator('#localControls').isVisible(), true); assert.equal(await page.locator('#cloudControls').isVisible(), false);
+    assert.equal(await page.locator('#providerLocal').getAttribute('aria-selected'), 'true');
+    assert.equal(await page.locator('#providerLocal').getAttribute('tabindex'), '0');
+    assert.equal(await page.locator('#providerQwen').getAttribute('tabindex'), '-1');
+    await page.locator('#providerLocal').press('ArrowRight');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'providerQwen');
+    assert.equal(await page.locator('#cloudControls').isVisible(), true); assert.equal(await page.locator('#localControls').isVisible(), false);
+    await page.locator('#providerQwen').press('ArrowLeft');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'providerLocal');
+    assert.equal(await page.locator('#localControls').isVisible(), true);
+    await page.locator('#providerLocal').press('End');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'providerQwen');
+    await page.locator('#providerQwen').press('Home');
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'providerLocal');
+    const complete = await page.locator('.wizard-steps .step.completed span').first().evaluate(node => ({ position: getComputedStyle(node, '::after').position, font: getComputedStyle(node).fontSize }));
+    assert.equal(complete.position, 'absolute'); assert.equal(complete.font, '0px');
+    await screen(page, 'wizard-local-tab-light-1240x900');
+    await page.locator('#providerQwen').click();
+    assert.equal((await calls(page, 'save_preset')).length, 0, 'changing tabs only changes the draft');
+  });
   await check('wizard body scrolls independently; footer stays visible at minimum size in both themes', async () => {
     await page.setViewportSize({ width: 820, height: 620 });
     await unchangedBounds(page, '.wizard-footer', async () => {
@@ -347,10 +448,65 @@ async function firstUseChecks(context, origin) {
   await page.close();
 }
 
+async function deviceSetupChecks(context, origin) {
+  const detected = {
+    devices: {
+      window: snapshot().devices.window,
+      monitor: [
+        { itemName: '副显示器（合成测试）', itemValue: 'synthetic-secondary-display', itemEnabled: true },
+        { itemName: '主显示器（合成测试，不在列表首位）', itemValue: 'synthetic-primary-display', itemEnabled: true },
+      ],
+      mic: [
+        { itemName: '指定麦克风（合成测试）', itemValue: 'synthetic-physical-mic', itemEnabled: true },
+        { itemName: '默认麦克风（合成测试）', itemValue: 'default', itemEnabled: true },
+      ],
+    },
+    device_defaults: { monitor: 'synthetic-primary-display', mic: 'default' },
+  };
+  for (const scenario of [{ theme: 'light', width: 1240, height: 900 }, { theme: 'dark', width: 820, height: 620 }]) {
+    const page = await context.newPage(); await page.setViewportSize({ width: scenario.width, height: scenario.height });
+    await bridge(page, snapshot({ devices: { window: [], monitor: [], mic: [] }, device_defaults: {} }), scenario.theme);
+    await page.goto(origin + '/ui/index.html'); await page.locator('#newPresetButton:not([disabled])').waitFor();
+    await check(`empty devices offer OBS setup, use explicit defaults, and preserve later manual choices (${scenario.theme} ${scenario.width})`, async () => {
+      const original = await page.evaluate(() => JSON.stringify(window.__syntheticFixture.snapshot.config));
+      await page.locator('#newPresetButton').click(); await page.locator('#wizardNext').click();
+      assert.equal(await page.locator('#refreshDevices').innerText(), '设置 OBS');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'game');
+      await page.locator('#game').fill('合成 OBS 初始化验证');
+      await page.evaluate(value => { window.__syntheticFixture.refreshSnapshot = value; }, detected);
+      await page.locator('#refreshDevices').click();
+      await page.waitForFunction(() => document.querySelector('#source').value === '整个显示器' && document.querySelector('#target').value === 'synthetic-primary-display' && document.querySelector('#mic').value === 'default');
+      assert.equal(await page.locator('#refreshDevices').innerText(), '刷新设备');
+      assert.equal(await page.locator('#target option').first().getAttribute('value'), 'synthetic-secondary-display', 'default selection must not assume the first monitor is primary');
+      assert.equal(await page.locator('#wizardError').isVisible(), false);
+      assert.equal(await page.evaluate(() => JSON.stringify(window.__syntheticFixture.snapshot.config)), original, 'setup initializes only the draft');
+      assert.equal((await calls(page, 'save_preset')).length, 0);
+      assert.equal((await calls(page, 'refresh_devices')).length, 1);
+      await screen(page, `wizard-obs-defaults-${scenario.theme}-${scenario.width}x${scenario.height}`);
+      await page.locator('#target').selectOption('synthetic-secondary-display');
+      await page.locator('#mic').selectOption('synthetic-physical-mic');
+      await page.locator('#refreshDevices').click();
+      await page.waitForFunction(() => window.__syntheticFixture.calls.filter(call => call.method === 'refresh_devices').length === 2 && !document.querySelector('#refreshDevices').disabled);
+      assert.equal(await page.locator('#target').inputValue(), 'synthetic-secondary-display');
+      assert.equal(await page.locator('#mic').inputValue(), 'synthetic-physical-mic');
+      assert.equal(await page.evaluate(() => JSON.stringify(window.__syntheticFixture.snapshot.config)), original);
+      await page.locator('#wizardCancel').click();
+      assert.equal((await calls(page, 'save_preset')).length, 0);
+    });
+    await page.close();
+  }
+}
+
 async function reviewChecks(context, origin) {
   const page = await context.newPage(); await bridge(page);
   await page.goto(origin + '/review'); await page.locator('#lines .line').first().waitFor();
-  await page.waitForFunction(() => document.querySelector('#video').readyState >= 1);
+  try { await page.waitForFunction(() => document.querySelector('#video').readyState >= 1); }
+  catch (error) {
+    const diagnostic = await page.locator('#video').evaluate(node => ({ readyState: node.readyState, networkState: node.networkState, currentSrc: node.currentSrc, src: node.getAttribute('src'), error: node.error && { code: node.error.code, message: node.error.message }, vp8: node.canPlayType('video/webm;codecs=vp8'), status: document.querySelector('#status').textContent }));
+    evidence.reviewMediaDiagnostic = { ...diagnostic, fixtureBytes: media?.length, fixtureHeader: media?.subarray(0, 24).toString('hex') };
+    await screen(page, 'review-media-failure');
+    throw new Error(`${error.message}\nSynthetic media diagnostic: ${JSON.stringify(evidence.reviewMediaDiagnostic)}`);
+  }
   await check('synthetic video genuinely loads and review reports readiness', async () => {
     const readiness = await calls(page, 'ready'); assert.ok(readiness.some(call => call.args[0] === null));
     assert.equal(await page.locator('#testLabel').isVisible(), true);
@@ -441,7 +597,7 @@ async function main() {
       evidence.errors.push(`Blocked non-fixture request: ${route.request().url()}`); return route.abort();
     });
     context.on('page', page => page.on('pageerror', error => evidence.errors.push(error.message)));
-    for (const [name, task] of [['recorder scenarios', homeChecks], ['first launch scenario', firstUseChecks], ['review scenarios', reviewChecks]]) {
+    for (const [name, task] of [['recorder scenarios', homeChecks], ['first launch scenario', firstUseChecks], ['device setup scenarios', deviceSetupChecks], ['review scenarios', reviewChecks]]) {
       await check(name, () => task(context, origin));
     }
     await check('no browser exceptions or unexpected network requests', () => assert.deepEqual(evidence.errors, []));

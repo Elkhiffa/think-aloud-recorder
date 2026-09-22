@@ -36,7 +36,7 @@ test('new preset is independent; editing and cancellation preserve every saved s
   const state=new State();state.accept(snapshot());
   const saved=JSON.stringify(state.saved);
   state.openDraft('new');assert.equal(state.editingId,null);assert.equal(state.draft.game,'');
-  assert.equal(state.draft.transcription_provider,'later');assert.equal(state.draft.hotwords,'');
+  assert.equal(state.draft.transcription_provider,'local');assert.equal(state.draft.hotwords,'');
   assert.equal(state.draft.obsidian_exe,undefined);assert.equal(state.draft.window,'');
   state.updateDraft('game','Unsaved');state.cancelDraft();assert.equal(JSON.stringify(state.saved),saved);
   state.openDraft('edit');assert.equal(state.editingId,'one');assert.equal(state.draft.vault,state.saved.vault);assert.equal(state.draft.hotword_manual,'Saved vocabulary');assert.deepEqual(state.draft.hotword_files,[]);
@@ -110,7 +110,7 @@ function fakeDOM() {
   const steps=[0,1,2,3].map(n=>{const el=new Element();el.dataset.step=String(n);return el;});
   document={activeElement:null,documentElement:{dataset:{}},getElementById:id=>elements.get(id),
     querySelector:selector=>selector.startsWith('#')?elements.get(selector.slice(1)):null,
-    querySelectorAll:selector=>selector==='[data-draft]'?[...elements.values()].filter(el=>el.dataset.draft):selector==='[data-step]'?steps:[],
+    querySelectorAll:selector=>selector==='[data-draft]'?[...elements.values()].filter(el=>el.dataset.draft):selector==='[data-provider]'?[...elements.values()].filter(el=>el.dataset.provider):selector==='[data-step]'?steps:[],
     createElement:()=>new Element(),addEventListener(){}};
   elements.get('filter').value='all';
   return {document,elements};
@@ -118,7 +118,7 @@ function fakeDOM() {
 async function settle(){for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}
 async function fixture(initial=snapshot()) {
   const {document,elements}=fakeDOM();const calls=[];const data={snapshot:initial};
-  const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='choose_directory')return {ok:true,data:{path:data.chosenDirectory||null}};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_preset'){if(data.vaultRace){data.vaultRace=false;data.snapshot.default_vault={...data.snapshot.default_vault,exists:true,is_directory:true,requires_confirmation:true};return {ok:false,code:'VAULT_REUSE_REQUIRED',error:'请确认使用已有资料库。'};}data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
+  const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='refresh_devices')return data.refreshResult||{ok:true,data:{started:true,refresh_id:'refresh-1'}};if(name==='choose_directory')return {ok:true,data:{path:data.chosenDirectory||null}};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_preset'){if(data.vaultRace){data.vaultRace=false;data.snapshot.default_vault={...data.snapshot.default_vault,exists:true,is_directory:true,requires_confirmation:true};return {ok:false,code:'VAULT_REUSE_REQUIRED',error:'请确认使用已有资料库。'};}data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
   const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(){return 1;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},console});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/state.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/app.js'),'utf8'),context);
@@ -320,4 +320,93 @@ test('provider console opens without sending typed secrets or saving the preset'
   assert.deepEqual(f.calls.find(call=>call.name==='open_bailian_console').args,[]);
   assert.equal(f.calls.some(call=>['save_cloud_key','save_preset'].includes(call.name)),false);
   assert.equal(f.elements.get('cloudKey').value,'synthetic-unsaved-not-a-real-key');
+});
+
+test('entering device setup focuses the name input, but polling never steals user focus',async()=>{
+  const f=await fixture();f.elements.get('settingsButton').onclick();
+  assert.equal(f.run('document.activeElement.id'),'game');
+  f.elements.get('mic').focus();await f.run('poll()');
+  assert.equal(f.run('document.activeElement.id'),'mic');
+  f.elements.get('wizardCancel').onclick();f.elements.get('newPresetButton').onclick();
+  f.elements.get('wizardNext').onclick();assert.equal(f.run('document.activeElement.id'),'game');
+});
+
+test('two transcription tabs change only the draft and support keyboard selection',async()=>{
+  const f=await fixture();f.elements.get('settingsButton').onclick();f.run('setStep(2)');
+  assert.equal(f.elements.has('transcription_provider'),false);
+  assert.equal(f.elements.get('providerQwen').getAttribute('aria-selected'),'true');
+  f.elements.get('providerLocal').onclick();
+  assert.equal(f.run('store.draft.transcription_provider'),'local');
+  assert.equal(f.elements.get('localControls').classList.contains('hidden'),false);
+  assert.equal(f.elements.get('cloudControls').classList.contains('hidden'),true);
+  f.elements.get('providerLocal').onkeydown({key:'ArrowRight',preventDefault(){}});
+  assert.equal(f.run('store.draft.transcription_provider'),'qwen');
+  assert.equal(f.run('document.activeElement.id'),'providerQwen');
+  f.elements.get('wizardCancel').onclick();
+  assert.equal(f.run('store.saved.transcription_provider'),'qwen');
+  assert.equal(f.calls.some(c=>['save_preset','save_cloud_key','model_action'].includes(c.name)),false);
+});
+
+test('editing a legacy record-only preset requires an explicit choice before saving',async()=>{
+  const f=await fixture(snapshot({config:{...snapshot().config,transcription_provider:'later'}}));
+  f.elements.get('settingsButton').onclick();await f.run('finishWizard()');
+  assert.equal(f.run('step'),2);
+  assert.match(f.elements.get('wizardError').textContent,/本地转写.*Qwen/);
+  assert.equal(f.calls.some(c=>c.name==='save_preset'),false);
+  assert.equal(f.elements.get('providerChoiceHint').classList.contains('hidden'),false);
+  f.elements.get('wizardCancel').onclick();assert.equal(f.run('store.saved.transcription_provider'),'later');
+});
+
+const setupSnapshot=()=>snapshot({devices:{monitor:[],mic:[],window:[]},device_refresh:{id:'',state:'idle'},device_defaults:{monitor:'',mic:''}});
+const detectedDefaults=()=>({
+  devices:{window:[],monitor:[{itemName:'Secondary',itemValue:'secondary',itemEnabled:true},{itemName:'Primary',itemValue:'primary',itemEnabled:true}],mic:[{itemName:'Default',itemValue:'default',itemEnabled:true}]},
+  device_defaults:{monitor:'primary',mic:'default'},device_refresh:{id:'refresh-1',state:'succeeded',error:''}
+});
+
+test('empty-device setup waits for its own completion then selects only verified defaults in the draft',async()=>{
+  const f=await fixture(setupSnapshot());f.elements.get('settingsButton').onclick();
+  assert.equal(f.elements.get('refreshDevices').textContent,'设置 OBS');
+  await f.elements.get('refreshDevices').onclick();
+  assert.equal(f.run('store.draft.source'),'游戏窗口');
+  Object.assign(f.data.snapshot,detectedDefaults());await f.run('poll()');
+  assert.equal(f.run('store.draft.source'),'整个显示器');
+  assert.equal(f.run('store.draft.monitor'),'primary');assert.equal(f.run('store.draft.mic'),'default');
+  assert.equal(f.elements.get('refreshDevices').textContent,'刷新设备');
+  assert.equal(f.run('store.saved.source'),'游戏窗口');
+  assert.equal(f.calls.some(c=>['save_preset','start_recording'].includes(c.name)),false);
+  f.elements.get('target').value='secondary';f.elements.get('target').onchange();
+  await f.elements.get('refreshDevices').onclick();await f.run('poll()');
+  assert.equal(f.run('store.draft.monitor'),'secondary','ordinary refresh preserves the selected display');
+});
+
+test('setup never guesses defaults or reuses old completion metadata',async()=>{
+  const f=await fixture(setupSnapshot());f.elements.get('settingsButton').onclick();
+  await f.elements.get('refreshDevices').onclick();
+  Object.assign(f.data.snapshot,detectedDefaults(),{device_refresh:{id:'old-refresh',state:'succeeded'}});
+  await f.run('poll()');assert.equal(f.run('store.draft.source'),'游戏窗口');
+  f.data.snapshot.device_refresh={id:'refresh-1',state:'succeeded'};
+  f.data.snapshot.device_defaults={monitor:'missing',mic:'disabled'};
+  f.data.snapshot.devices.mic.push({itemValue:'disabled',itemName:'Disabled',itemEnabled:false});
+  await f.run('poll()');assert.equal(f.run('store.draft.monitor'),'');assert.equal(f.run('store.draft.mic'),'');
+  assert.match(f.elements.get('wizardError').textContent,/手动选择/);
+});
+
+test('late setup results cannot overwrite a reopened draft or a manually edited device choice',async()=>{
+  const f=await fixture(setupSnapshot());f.elements.get('settingsButton').onclick();
+  await f.elements.get('refreshDevices').onclick();f.elements.get('wizardCancel').onclick();
+  f.elements.get('settingsButton').onclick();Object.assign(f.data.snapshot,detectedDefaults());await f.run('poll()');
+  assert.equal(f.run('store.draft.source'),'游戏窗口');
+  Object.assign(f.data.snapshot,setupSnapshot());await f.run('poll()');
+  await f.elements.get('refreshDevices').onclick();
+  const mic=f.elements.get('mic');mic.value='my-manual-choice';mic.listeners.change();
+  Object.assign(f.data.snapshot,detectedDefaults());await f.run('poll()');
+  assert.equal(f.run('store.draft.mic'),'my-manual-choice');assert.equal(f.run('store.draft.source'),'游戏窗口');
+});
+
+test('failed OBS setup keeps existing draft choices and shows the concrete failure',async()=>{
+  const f=await fixture(setupSnapshot());f.elements.get('settingsButton').onclick();
+  await f.elements.get('refreshDevices').onclick();
+  f.data.snapshot.device_refresh={id:'refresh-1',state:'failed',error:'OBS 未能启动'};await f.run('poll()');
+  assert.equal(f.run('store.draft.source'),'游戏窗口');assert.equal(f.run('store.draft.mic'),'microphone');
+  assert.match(f.elements.get('wizardError').textContent,/OBS 未能启动/);
 });

@@ -66,6 +66,8 @@ class DesktopService:
         self._obs_uncertain = False
         self._closed = threading.Event()
         self._devices = {'mic': [], 'window': [], 'monitor': []}
+        self._device_defaults = {'monitor': '', 'mic': ''}
+        self._device_refresh = None
         self._device_labels = {'mic': {}, 'window': {}, 'monitor': {}}
         self._readiness = dict(ready=False, checking=True, errors=[], checked_at=None)
         self._cfg = load_settings(self.root)
@@ -322,6 +324,8 @@ class DesktopService:
                                presets=self._preset_list(), active_preset_id=self._cfg.get('active_preset_id'),
                                background_jobs=[self._job_summary(job) for job in self._background_jobs.values()],
                                activity=activity, devices=deepcopy(self._devices), model=model,
+                               device_defaults=deepcopy(self._device_defaults),
+                               device_refresh=deepcopy(self._device_refresh),
                                capabilities=dict(cloud_key=self._has_key(),
                                    obs=(self.root / 'tools/obs/bin/64bit/obs64.exe').is_file(),
                                    local_model=model['state'] == 'ready')))
@@ -367,7 +371,7 @@ class DesktopService:
             result['ready'] = False
             result['checking'] = bool(self._readiness_thread and self._readiness_thread.is_alive())
             result['errors'] = [*result['errors'], dict(code='READINESS_STALE', step=1,
-                message='录制条件检查结果已过期，请等待重新确认或点击“重新检查”。')]
+                message='录制条件检查结果已过期，请等待自动确认，或打开录制预设并刷新设备。')]
         return result
 
     def _mark_readiness_checking(self, invalidate):
@@ -377,9 +381,22 @@ class DesktopService:
         # still tracked independently; Start always performs another full check.
 
     def _cache_devices(self, devices):
+        try:
+            primary_ids = recorder.primary_monitor_ids()
+        except Exception:
+            primary_ids = ()
         with self._lock:
             self._devices = {key: [{field: item.get(field) for field in ('itemName', 'itemValue', 'itemEnabled')}
                                   for item in devices.get(key, [])] for key in self._devices}
+            monitors = {str(item.get('itemValue')).casefold(): item['itemValue']
+                        for item in self._devices['monitor']
+                        if item.get('itemEnabled') and item.get('itemValue')}
+            self._device_defaults = {
+                'monitor': next((monitors[value.casefold()] for value in primary_ids
+                                 if value.casefold() in monitors), ''),
+                'mic': 'default' if any(item.get('itemEnabled') and item.get('itemValue') == 'default'
+                                        for item in self._devices['mic']) else '',
+            }
             for key, items in self._devices.items():
                 for item in items:
                     self._device_labels[key][str(item.get('itemValue'))] = str(item.get('itemName', ''))
@@ -410,7 +427,7 @@ class DesktopService:
                 return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
             if (client.get_profile_list().current_profile_name != 'Experience'
                     or client.get_scene_collection_list().current_scene_collection_name != 'Experience'):
-                return None, ('OBS_CONFIGURATION', 'OBS 当前不是记录器专用配置，请使用“重新检查”恢复设备列表。')
+                return None, ('OBS_CONFIGURATION', 'OBS 当前不是记录器专用配置，请打开录制预设并刷新设备 / 设置 OBS。')
             inputs = client.get_input_list().inputs
             result = {}
             for key, kind, prop, settings in (
@@ -494,10 +511,10 @@ class DesktopService:
                                 else:
                                     error('MONITOR_UNAVAILABLE', f'显示器“{label}”未连接或不可用。', 1)
                 except Exception:
-                    error('OBS_UNAVAILABLE', '无法连接录制引擎。请使用“重新检查”启动或重新连接 OBS。', 1)
+                    error('OBS_UNAVAILABLE', '无法连接录制引擎。请打开录制预设并刷新设备 / 设置 OBS。', 1)
             provider = cfg.get('transcription_provider', 'later')
             if provider == 'local' and not self._model.resolve_model():
-                error('LOCAL_MODEL_MISSING', '已选本地转写，但模型缺失、已移动或校验失效；请导入/下载模型，或改为仅录制。', 2)
+                error('LOCAL_MODEL_MISSING', '已选本地转写，但模型缺失、已移动或校验失效；请导入 / 下载模型，或改用 Qwen 转写。', 2)
             elif provider == 'qwen' and not self._has_key():
                 exists = (self.root / 'state/secrets/dashscope-beijing.dpapi').exists()
                 error('CLOUD_KEY_UNREADABLE' if exists else 'CLOUD_KEY_MISSING',
@@ -512,7 +529,7 @@ class DesktopService:
                 except Exception:
                     error('OUTPUT_UNAVAILABLE', '保存位置无法访问或写入，请连接保存磁盘，或重新选择可写文件夹。', 3)
         except Exception:
-            error('READINESS_FAILED', '录制条件检查未完成，请重新检查后再开始。', 1)
+            error('READINESS_FAILED', '录制条件检查未完成，请等待自动确认，或打开录制预设并刷新设备。', 1)
         if not has_setup:
             # Onboarding has one actionable next step. Device probing above still
             # populates the wizard, but absent selections are not user errors yet.
@@ -689,6 +706,7 @@ class DesktopService:
                     base.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
                 data = self._save(payload, ident, base)
                 self._devices = {'mic': [], 'window': [], 'monitor': []}
+                self._device_defaults = {'monitor': '', 'mic': ''}
                 self._request_readiness()
                 self._progress('录制预设已保存。', status='已保存')
                 return ok(dict(id=ident, active_preset_id=ident, config=data))
@@ -713,6 +731,7 @@ class DesktopService:
                 self._persist(cfg)
                 self._cfg = cfg
                 self._devices = {'mic': [], 'window': [], 'monitor': []}
+                self._device_defaults = {'monitor': '', 'mic': ''}
                 self._readiness.update(ready=False, checking=True, checked_at=None, errors=[])
                 self._request_readiness()
                 self._progress('已切换录制预设，正在检查保存的配置。', status='已切换预设')
@@ -721,23 +740,40 @@ class DesktopService:
                 return self._error(error)
 
     def refresh_devices(self):
+        refresh_id = uuid.uuid4().hex
         def work():
-            with self._lock:
-                self._readiness.update(ready=False, checking=True)
-            self._recover()
-            if self._active is not None:
-                self._update_readiness()
-                return
             try:
-                result = recorder.devices(progress=self._progress)
-            except Exception:
-                self._update_readiness()
+                with self._lock:
+                    self._readiness.update(ready=False, checking=True)
+                self._recover()
+                if self._active is not None:
+                    self._update_readiness()
+                    raise RuntimeError('当前场次仍在录制，无法刷新设备；请先结束录制。')
+                try:
+                    result = recorder.devices(progress=self._progress)
+                except Exception:
+                    # A read-only probe can recover ordinary readiness, but it
+                    # cannot turn this explicit refresh's failure into success.
+                    self._update_readiness()
+                    raise
+                self._cache_devices(result)
+                self._recover()
+                self._update_readiness(devices=result)
+                self._progress('设备列表已从 OBS 刷新；未开始电平检测。', status='设备已就绪')
+                with self._lock:
+                    self._device_refresh = dict(id=refresh_id, state='succeeded', error='')
+            except Exception as error:
+                with self._lock:
+                    self._device_refresh = dict(id=refresh_id, state='failed', error=self._safe_text(error))
                 raise
-            self._cache_devices(result)
-            self._recover()
-            self._update_readiness(devices=result)
-            self._progress('设备列表已从 OBS 刷新；未开始电平检测。', status='设备已就绪')
-        return self._launch('devices', work, status='正在读取设备', allow_uncertain=True)
+        with self._lock:
+            result = self._launch('devices', work, status='正在读取设备', allow_uncertain=True)
+            if result['ok']:
+                # The worker needs this same lock before doing any work. Publish
+                # its token atomically with admission; rejected jobs change none.
+                self._device_refresh = dict(id=refresh_id, state='running', error='')
+                result['data']['refresh_id'] = refresh_id
+            return result
 
     def _dialog(self, kind, **kwargs):
         with self._lock:

@@ -10,7 +10,7 @@
   const splitWords = text => String(text||'').replace(/^\uFEFF/,'').split(/[,，;；、\r\n]+/).map(word=>word.normalize('NFC').trim()).filter(Boolean);
   const vocabularyWords = draft => [...new Set([...(draft?.hotword_files||[]).flatMap(file=>file.words||[]),...splitWords(draft?.hotword_manual)].map(word=>word.normalize('NFC').trim()).filter(Boolean))];
   function defaults(vault='') {
-    return {game:'',vault,preset:'均衡 1080p30',source:'游戏窗口',window:'',monitor:'',mic:'',language:'zh',hotwords:'',hotword_files:[],hotword_manual:'',transcription_provider:'later'};
+    return {game:'',vault,preset:'均衡 1080p30',source:'游戏窗口',window:'',monitor:'',mic:'',language:'zh',hotwords:'',hotword_files:[],hotword_manual:'',transcription_provider:'local'};
   }
   class State {
     constructor() { this.snapshot=null;this.connected=false;this.draft=null;this.editingId=null;this.step=1;this.requestPending=false;this.confirmedVault=''; }
@@ -36,6 +36,9 @@
       this.editingId=mode==='edit'?this.activeId:null;
       this.draft=defaults(this.snapshot?.suggested_vault||this.saved.vault||this.snapshot?.default_vault?.path||'');
       if(this.editingId) for(const key of FIELDS) if(this.saved[key]!==undefined)this.draft[key]=clone(this.saved[key]);
+      // Legacy record-only presets remain intact until the user saves an explicit
+      // transcription choice. Never silently turn an old preset into cloud use.
+      if(!['local','qwen'].includes(this.draft.transcription_provider))this.draft.transcription_provider='';
       if(!Array.isArray(this.draft.hotword_files))this.draft.hotword_files=[];
       if(this.editingId&&!Array.isArray(this.saved.hotword_files))this.draft.hotword_manual=this.saved.hotwords||'';
       this.syncVocabulary();
@@ -52,7 +55,7 @@
     validateStep(step=this.step) {
       const d=this.draft;if(!d)return '请先打开录制设置。';
       if(step===1){if(!d.game.trim())return '请填写游戏或项目名称。';if(!d[d.source==='整个显示器'?'monitor':'window'])return '请选择要录制的窗口或显示器。';if(!d.mic)return '请选择麦克风。';}
-      if(step===2&&!['later','local','qwen'].includes(d.transcription_provider))return '请选择录制结束后的整理方式。';
+      if(step===2&&!['local','qwen'].includes(d.transcription_provider))return '请选择本地转写或 Qwen 转写。';
       if(step===3&&!d.vault)return '请选择保存文件夹。';
       if(step===3&&this.needsVaultConfirmation)return '发现已有资料库。请先选择“使用已有资料库”，或选择其他位置。';
       return '';
