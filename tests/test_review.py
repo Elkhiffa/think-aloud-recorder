@@ -65,7 +65,60 @@ class ReviewTests(unittest.TestCase):
             self.assertFalse(api.open_document('../outside')['ok'])
             self.assertTrue(api.open_document('notes')['ok'])
         self.assertEqual({name for name in dir(api) if not name.startswith('_')},
-                         {'ready', 'open_folder', 'copy_path', 'open_document', 'get_layout', 'save_layout', 'get_snapshot', 'rename_session'})
+                         {'ready', 'open_folder', 'copy_path', 'open_document', 'get_layout', 'save_layout', 'get_snapshot', 'rename_session', 'set_input_offset'})
+
+    def test_input_offset_is_per_session_metadata_and_never_rewrites_captured_facts(self):
+        recorder.write(self.folder/'input-events.json',dict(version=1,state='complete',duration=10,
+            timebase='video_seconds',intervals=[dict(id='a',device='keyboard',code='A',start=3,end=3.1)],gaps=[]))
+        source=(self.folder/'input-events.json').read_bytes()
+        api=ReviewAPI(self.folder,{})
+        previous=api.get_snapshot()['data']['revision']
+        result=api.set_input_offset(-1.8)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['data']['offset_seconds'],-1.8)
+        self.assertEqual(result['data']['source'],'manual')
+        snapshot=api.get_snapshot(previous)['data']
+        self.assertNotEqual(snapshot['revision'],previous)
+        self.assertEqual(snapshot['inputs']['intervals'][0]['start'],3)
+        self.assertEqual(snapshot['inputs']['alignment'],result['data'])
+        recorder.Session(self.folder).update(state='转写中')
+        self.assertEqual(api.get_snapshot()['data']['inputs']['alignment']['offset_seconds'],-1.8)
+        self.assertEqual((self.folder/'input-events.json').read_bytes(),source)
+
+    def test_manual_input_offset_overrides_measured_and_reset_restores_measured(self):
+        recorder.Session(self.folder).update(input_alignment=dict(method='final_video_stop_boundary_v1',
+            offset_seconds=1.4,uncertainty_seconds=.1))
+        api=ReviewAPI(self.folder,{})
+        self.assertEqual(api.get_snapshot()['data']['inputs']['alignment']['offset_seconds'],1.4)
+        self.assertEqual(api.set_input_offset(0)['data']['source'],'manual')
+        self.assertEqual(api.set_input_offset(None)['data']['offset_seconds'],1.4)
+        self.assertEqual(api.get_snapshot()['data']['inputs']['alignment']['source'],'measured')
+
+    def test_invalid_input_offset_does_not_touch_session_metadata(self):
+        api=ReviewAPI(self.folder,{})
+        before=(self.folder/'session.json').read_bytes()
+        for invalid in (True,False,'1.8',[],{},float('nan'),float('inf'),31,-30.01):
+            self.assertFalse(api.set_input_offset(invalid)['ok'],repr(invalid))
+        self.assertEqual((self.folder/'session.json').read_bytes(),before)
+
+    def test_unknown_or_low_confidence_alignment_is_not_presented_as_measured(self):
+        for value in ({'offset_seconds':1.8,'uncertainty_seconds':.1},
+                      {'method':'final_video_stop_boundary_v1','offset_seconds':1.8,'uncertainty_seconds':.251},
+                      {'method':'final_video_stop_boundary_v1','offset_seconds':float('nan'),'uncertainty_seconds':.1}):
+            recorder.Session(self.folder).update(input_alignment=value)
+            alignment=ReviewAPI(self.folder,{}).get_snapshot()['data']['inputs']['alignment']
+            self.assertEqual(alignment['source'],'uncalibrated')
+            self.assertEqual(alignment['offset_seconds'],0)
+
+    def test_export_keeps_the_same_alignment_as_desktop_review(self):
+        api=ReviewAPI(self.folder,{})
+        api.set_input_offset(-1.8)
+        desktop=api.get_snapshot()['data']['inputs']['alignment']
+        with zipfile.ZipFile(recorder.Session(self.folder).package()) as archive:
+            exported=json.loads(archive.read('场次/synthetic/session.json'))
+            page=archive.read('场次/synthetic/独立回看.html').decode('utf-8')
+        self.assertEqual(exported['input_offset_seconds'],-1.8)
+        self.assertIn(json.dumps(desktop,ensure_ascii=False),page)
 
     def test_video_review_opens_while_transcription_owns_processing_lock(self):
         import msvcrt

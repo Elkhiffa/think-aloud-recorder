@@ -3,6 +3,7 @@ import ctypes
 from ctypes import wintypes
 from pathlib import Path
 import subprocess
+import hashlib
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -33,9 +34,7 @@ class ObsLifecycleTests(unittest.TestCase):
         self.connection.base_client.ws.sock.getpeername.return_value = ('127.0.0.1', 11223)
         for name in ('get_record_status', 'get_stream_status', 'get_replay_buffer_status', 'get_virtual_cam_status'):
             getattr(self.connection, name).return_value = SimpleNamespace(output_active=False)
-        self.connection.get_output_list.return_value.outputs = [
-            {'outputName': 'synthetic file output', 'outputActive': False},
-            {'outputName': 'synthetic virtual camera', 'outputActive': False}]
+        self.connection.get_output_list.side_effect=AssertionError('GetOutputList crashes stock OBS after SetVideoSettings')
         self.connection.get_profile_list.return_value.current_profile_name = 'Experience'
         self.connection.get_scene_collection_list.return_value.current_scene_collection_name = 'Experience'
         self.cfg = dict(port=11223, password='synthetic-only-credential')
@@ -49,6 +48,9 @@ class ObsLifecycleTests(unittest.TestCase):
                         patch.object(recorder.subprocess, 'Popen', return_value=self.process),
                         patch.object(recorder, '_request_obs_window_close', return_value=True)]
         self.mocks = [item.start() for item in self.patches]
+        self.stock_patch=patch.object(recorder,'_stock_obs_environment',return_value=True)
+        self.stock=self.stock_patch.start()
+        self.addCleanup(self.stock_patch.stop)
         for item in self.patches:
             self.addCleanup(item.stop)
         self.req, self.popen, self.native_close = self.mocks[5], self.mocks[7], self.mocks[8]
@@ -91,6 +93,23 @@ class ObsLifecycleTests(unittest.TestCase):
         self.req.side_effect = [ConnectionRefusedError('synthetic lost'), self.connection]
         self.assertIs(recorder.client(), self.connection)
         self.popen.assert_called_once()
+
+    def test_retry_handshakes_are_short_but_ready_requests_use_normal_timeout(self):
+        self.req.side_effect=[ConnectionRefusedError('starting'),ConnectionRefusedError('starting'),self.connection]
+        connection=recorder.client()
+        self.assertEqual([call.kwargs['timeout'] for call in self.req.call_args_list],[8,2,2])
+        self.connection.base_client.ws.settimeout.assert_called_once_with(8)
+        self.assertEqual(connection.base_client.timeout,8)
+        connection.set_current_program_scene('Experience')
+        self.popen.assert_called_once()
+
+    def test_failed_startup_retries_remain_bounded_and_do_not_spawn_again(self):
+        self.req.side_effect=ConnectionRefusedError('unavailable')
+        with self.assertRaisesRegex(RuntimeError,'仍在运行'):recorder.client()
+        self.assertEqual(self.req.call_count,46)
+        self.assertEqual([call.kwargs['timeout'] for call in self.req.call_args_list],[8]+[2]*45)
+        self.popen.assert_called_once()
+        self.connection.base_client.ws.settimeout.assert_not_called()
 
     def test_closed_root_cannot_relaunch_on_late_request(self):
         self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'not_owned'})
@@ -150,7 +169,7 @@ class ObsLifecycleTests(unittest.TestCase):
 
     def test_any_active_or_missing_output_status_preserves_obs(self):
         self.launch()
-        for name in ('get_record_status', 'get_stream_status'):
+        for name in ('get_record_status', 'get_stream_status', 'get_replay_buffer_status', 'get_virtual_cam_status'):
             method = getattr(self.connection, name)
             for state in (SimpleNamespace(output_active=True), SimpleNamespace()):
                 with self.subTest(request=name, state=state):
@@ -159,22 +178,31 @@ class ObsLifecycleTests(unittest.TestCase):
                     self.native_close.assert_not_called()
             method.return_value = SimpleNamespace(output_active=False)
 
-    def test_active_or_unknown_auxiliary_output_inventory_preserves_obs(self):
+    def test_unknown_plugin_or_script_output_environment_preserves_obs(self):
         self.launch()
-        for outputs in ([{'outputName': 'replay buffer', 'outputActive': True}],
-                        [{'outputName': 'virtual camera', 'outputActive': True}],
-                        [{'outputName': 'plugin output'}], ['malformed'], None):
-            with self.subTest(outputs=outputs):
-                self.connection.get_output_list.return_value.outputs = outputs
-                self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'output_active_or_unknown'})
-                self.native_close.assert_not_called()
+        self.stock.return_value=False
+        self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'custom_outputs_unverified'})
+        self.native_close.assert_not_called()
+        self.process.terminate.assert_not_called()
+        self.connection.get_output_list.assert_not_called()
 
-    def test_disabled_replay_buffer_does_not_require_unavailable_status_request(self):
+    def test_only_explicitly_unavailable_replay_buffer_is_safe(self):
         self.launch()
         self.connection.get_replay_buffer_status.side_effect = recorder.OBSSDKRequestError(
             'GetReplayBufferStatus', 604, 'Replay buffer is not available.')
         self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'closed'})
-        self.connection.get_replay_buffer_status.assert_not_called()
+        self.connection.get_replay_buffer_status.assert_called_once()
+        self.connection.get_virtual_cam_status.assert_called_once()
+        self.connection.get_output_list.assert_not_called()
+
+    def test_unavailable_virtualcam_and_other_replay_errors_remain_unknown(self):
+        self.launch()
+        for request,code in [('get_virtual_cam_status',604),('get_replay_buffer_status',500)]:
+            method=getattr(self.connection,request)
+            method.side_effect=recorder.OBSSDKRequestError(request,code,'synthetic unavailable')
+            self.assertEqual(recorder.shutdown_owned_obs(self.root),{'status':'unverified'})
+            self.native_close.assert_not_called()
+            method.side_effect=None
 
     def test_status_or_identity_query_failure_fails_closed_without_exception_details(self):
         self.launch()
@@ -215,6 +243,78 @@ class ObsLifecycleTests(unittest.TestCase):
         with patch.object(recorder, '_owned_obs_identity', side_effect=[True, True, True, False]):
             self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'close_unconfirmed'})
         self.process.terminate.assert_not_called()
+
+
+class StockOutputEnvironmentTests(unittest.TestCase):
+    def setUp(self):
+        temp=TemporaryDirectory();self.addCleanup(temp.cleanup)
+        self.root=Path(temp.name).resolve()
+        self.plugins=self.root/'tools/obs/obs-plugins/64bit';self.plugins.mkdir(parents=True)
+        self.dll=self.plugins/'obs-websocket.dll';self.dll.write_bytes(b'synthetic module bytes')
+        recorder.write(self.root/'scripts/runtime-seed.json',{'files':[dict(
+            path='tools/obs/obs-plugins/64bit/obs-websocket.dll',sha256=hashlib.sha256(self.dll.read_bytes()).hexdigest())]})
+        self.settings=self.root/'tools/obs/config/obs-studio'
+        self.log=self.settings/'logs/synthetic.txt';self.log.parent.mkdir(parents=True)
+        self.log.write_text('12:00:00.000:   Loaded Modules:\n12:00:00.000:     obs-websocket.dll\n'
+            '12:00:00.000: ---------------------------------\n12:00:00.001: ==== Startup complete ====\n',encoding='utf-8')
+        self.owned=dict(created=self.log.stat().st_ctime,process=SimpleNamespace(pid=12345))
+        self.child=MagicMock()
+        self.child.environ.return_value={}
+        self.child.cmdline.return_value=['obs64.exe','--portable']
+        self.child.memory_maps.return_value=[SimpleNamespace(path=str(self.dll))]
+        self.patch=patch.object(recorder.psutil,'Process',return_value=self.child)
+        self.patch.start();self.addCleanup(self.patch.stop)
+
+    def check(self):return recorder._stock_obs_environment(self.root,self.owned)
+
+    def test_verified_portable_stock_modules_pass_without_output_enumeration(self):
+        self.assertTrue(self.check())
+
+    def test_extra_module_modified_module_and_missing_loaded_identity_fail_closed(self):
+        extra=self.plugins/'custom-output.dll';extra.write_bytes(b'custom')
+        self.assertFalse(self.check())
+        extra.unlink()
+        self.dll.write_bytes(b'changed stock module')
+        self.assertFalse(self.check())
+        self.dll.write_bytes(b'synthetic module bytes')
+        self.child.memory_maps.return_value=[]
+        self.assertFalse(self.check())
+
+    def test_log_from_other_process_and_missing_log_do_not_prove_environment(self):
+        self.owned['created']+=120
+        self.assertFalse(self.check())
+        self.owned['created']-=120
+        self.log.unlink()
+        self.assertFalse(self.check())
+
+    def test_script_loaded_then_removed_is_still_uncertain(self):
+        with self.log.open('a',encoding='utf-8') as log:
+            log.write('12:00:05.000: [obs-scripting]: Loaded lua script: custom.lua\n'
+                      '12:00:06.000: [obs-scripting]: Unloaded lua script: custom.lua\n')
+        self.assertFalse(self.check())
+
+    def test_script_configuration_hardware_configuration_and_external_paths_fail_closed(self):
+        scene=self.settings/'basic/scenes/Experience.json'
+        recorder.write(scene,{'modules':{'scripts-tool':[{'path':'synthetic.lua'}]}})
+        self.assertFalse(self.check())
+        recorder.write(scene,{'modules':{'scripts-tool':[]}})
+        hardware=self.settings/'plugin_config/decklink-output-ui/settings.json'
+        recorder.write(hardware,{'enabled':True})
+        self.assertFalse(self.check())
+        hardware.unlink()
+        self.assertTrue(self.check())
+        self.child.environ.return_value={'OBS_PLUGINS_PATH':'synthetic custom modules'}
+        self.assertFalse(self.check())
+
+    def test_portable_flag_required_and_missing_baseline_or_permission_denied_is_unknown(self):
+        self.child.cmdline.return_value=['obs64.exe']
+        self.assertFalse(self.check())
+        self.child.cmdline.return_value=['obs64.exe','--portable']
+        self.child.memory_maps.side_effect=recorder.psutil.AccessDenied()
+        self.assertFalse(self.check())
+        self.child.memory_maps.side_effect=None
+        (self.root/'scripts/runtime-seed.json').unlink()
+        self.assertFalse(self.check())
 
 
 @unittest.skipUnless(recorder.os.name == 'nt', 'Windows native close boundary')

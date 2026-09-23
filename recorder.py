@@ -117,6 +117,20 @@ def probe(path):
     with av.open(str(path)) as f:
         return {'duration':float(f.duration or 0)/av.time_base,'video':len(f.streams.video),'audio':len(f.streams.audio),'codecs':[s.codec_context.name for s in f.streams]}
 
+def video_clock_endpoint(path):
+    """Use the published video track, not longer AAC/container duration."""
+    with av.open(str(path)) as media:
+        if len(media.streams.video)!=1:raise ValueError('ambiguous video stream')
+        video=media.streams.video[0]
+        if video.duration is None or video.start_time is None or not video.average_rate:
+            raise ValueError('video presentation clock unavailable')
+        start=float(video.start_time*video.time_base)
+        end=float((video.start_time+video.duration)*video.time_base)
+        rate=float(video.average_rate)
+        if not (10<=rate<=240 and 0<=start<=.25 and end>start):
+            raise ValueError('unsupported video presentation clock')
+        return end,1/rate
+
 def microphone_is_silent(path):
     """Only digital zero counts as silence; quiet speech must still be transcribed."""
     samples=0
@@ -198,7 +212,13 @@ def _connect_obs(launch,progress):
                 raise RuntimeError('上次启动的录制引擎仍在运行，但无法连接。请先确认它已退出。')
             raise RuntimeError('专用 OBS 未能连接。请查看 tools/obs/config/obs-studio/logs。')
     # Readiness failures must never launch another OBS instance.
-    try:wait_obs_ready(r,progress=progress)
+    try:
+        wait_obs_ready(r,progress=progress)
+        # Retry handshakes stay short, but a ready connection must use the same
+        # request deadline as a connection to an already-running OBS. Scene and
+        # device initialization can legitimately exceed the 2s handshake bound.
+        r.base_client.ws.settimeout(8)
+        r.base_client.timeout=8
     except Exception:
         try:r.disconnect()
         except Exception:pass
@@ -251,6 +271,60 @@ def _request_obs_window_close(process):
     user32.GetWindowThreadProcessId(windows[0],ctypes.byref(pid))
     return pid.value==process.pid and bool(user32.PostMessageW(windows[0],0x0010,0,0))
 
+def _stock_obs_environment(root, owned):
+    """Bound the stock-output status APIs to the shipped, unscripted OBS.
+
+    GetOutputList can crash OBS after SetVideoSettings (upstream #1344). The
+    four frontend status APIs cannot attest to arbitrary plugin outputs, so an
+    unknown module, scripting history, hardware output module or unverifiable
+    startup log must preserve the process. This is an operational customization
+    check, not a security boundary against a locally tampered executable/log.
+    """
+    try:
+        child=psutil.Process(owned['process'].pid)
+        environment=child.environ()
+        if any(environment.get(name) for name in ('OBS_PLUGINS_PATH','OBS_PLUGINS_DATA_PATH')):return False
+        plugins=root/'tools/obs/obs-plugins/64bit'
+        rows=read(root/'scripts/runtime-seed.json')['files']
+        expected={Path(row['path']).name.casefold():row for row in rows
+            if row['path'].startswith('tools/obs/obs-plugins/64bit/') and row['path'].endswith('.dll')}
+        actual={path.name.casefold():path for path in plugins.glob('*.dll')}
+        if not expected or set(expected)!=set(actual):return False
+        # Portable OBS skips machine-wide module paths. The recorded command
+        # line and environment must prove that this process used that mode.
+        if '--portable' not in child.cmdline():return False
+        settings=root/'tools/obs/config/obs-studio'
+        logs=[path for path in (settings/'logs').glob('*.txt')
+            if owned['created']-1<=path.stat().st_ctime<=owned['created']+60]
+        if len(logs)!=1 or logs[0].stat().st_size>20*1024*1024:return False
+        log=logs[0].read_text(encoding='utf-8-sig')
+        if '==== Startup complete' not in log:return False
+        if re.search(r'\[obs-scripting\]|\[(?:Lua|Python):',log,re.I):return False
+        section=re.search(r'Loaded Modules:\r?\n(.*?)(?:\r?\n[^\n]*-{8,})',log,re.S)
+        if section is None:return False
+        modules=re.findall(r'^\d\d:\d\d:\d\d\.\d+:\s+([^\s]+\.dll)\s*$',section[1],re.M)
+        if not modules or any(name.casefold() not in expected for name in modules):return False
+        if any(name.casefold() in ('aja.dll','decklink.dll') for name in modules):return False
+        loaded={str(Path(item.path).resolve()).casefold() for item in child.memory_maps() if item.path}
+        for name in modules:
+            path=actual[name.casefold()]
+            if (not path.resolve().is_relative_to(plugins.resolve())
+                    or str(path.resolve()).casefold() not in loaded
+                    or sha256(path)!=expected[name.casefold()]['sha256']):return False
+        # Configurations of stock hardware-output tools are also outside the
+        # app's four standard output kinds. Cache-only stock files are harmless.
+        allowed={'obs-websocket/config.json','rtmp-services/meta.json','rtmp-services/package.json',
+            'rtmp-services/services.json','win-capture/meta.json','win-capture/package.json','win-capture/compatibility.json'}
+        directory=settings/'plugin_config'
+        for path in directory.rglob('*'):
+            if path.is_file() and path.relative_to(directory).as_posix() not in allowed:return False
+        for path in (settings/'basic/scenes').glob('*.json'):
+            if path.stat().st_size>4*1024*1024 or read(path).get('modules',{}).get('scripts-tool',[]):return False
+        return True
+    except (OSError,ValueError,TypeError,KeyError,AttributeError,psutil.Error):
+        return False
+
+
 def shutdown_owned_obs(root):
     """After accepted app close, exit only our verified idle child.
 
@@ -280,19 +354,18 @@ def shutdown_owned_obs(root):
             if not _owned_obs_identity(owned,connection):return {'status':'endpoint_unverified'}
             # An OBS started by us may subsequently be used from its own UI.
             # Missing fields, disconnection and active auxiliary outputs are unsafe.
-            for request in ('get_record_status','get_stream_status'):
-                if getattr(getattr(connection,request)(),'output_active',None) is not False:
-                    return {'status':'output_active_or_unknown'}
-            # Disabled replay buffers have no status object (OBS returns 604).
-            # The output inventory covers every instantiated output, including
-            # replay buffers, virtual cameras and outputs created by plugins.
-            outputs=connection.get_output_list().outputs
-            if not isinstance(outputs,list) or any(not isinstance(item,dict)
-                    or item.get('outputActive') is not False for item in outputs):
-                return {'status':'output_active_or_unknown'}
+            for request in ('get_record_status','get_stream_status','get_replay_buffer_status','get_virtual_cam_status'):
+                try:status=getattr(connection,request)()
+                except OBSSDKRequestError as error:
+                    # Only an explicitly unavailable replay buffer is known
+                    # absent. Other failures, including virtualcam, stay unknown.
+                    if request=='get_replay_buffer_status' and error.code==604:continue
+                    raise
+                if getattr(status,'output_active',None) is not False:return {'status':'output_active_or_unknown'}
             if (connection.get_profile_list().current_profile_name!='Experience'
                     or connection.get_scene_collection_list().current_scene_collection_name!='Experience'):
                 return {'status':'configuration_changed'}
+            if not _stock_obs_environment(root,owned):return {'status':'custom_outputs_unverified'}
             if not _owned_obs_identity(owned,connection):return {'status':'identity_unverified'}
             # Release our WebSocket before asking OBS to stop its server.
             # Holding it open can delay the child's otherwise normal exit.
@@ -457,6 +530,49 @@ def session_lock(fn):
             finally:lock.seek(0);msvcrt.locking(lock.fileno(),msvcrt.LK_UNLCK,1)
     return wrapper
 
+class _InputClockEvents:
+    """Optional output-only observer; no capture data or credentials persisted.
+
+    The STOPPING notification bounds when OBS takes its stop timestamp. A stop
+    response alone is insufficient: its UI action may still be queued. Keeping
+    this connection from before StartRecord also detects pauses between polls.
+    """
+    def __init__(self, request):
+        base=request.base_client
+        if not (base.host in ('127.0.0.1','localhost') and type(base.port) is int):
+            raise ValueError('local OBS endpoint required')
+        self.started=False
+        self.invalid=False
+        self.stopping=None
+        self._lock=threading.Lock()
+        self._client=obs.EventClient(host=base.host,port=base.port,password=base.password,timeout=2,subs=64)
+        self._client.callback.register(self.on_record_state_changed)
+
+    def on_record_state_changed(self, event):
+        with self._lock:
+            state=getattr(event,'output_state','')
+            if state=='OBS_WEBSOCKET_OUTPUT_STARTED':
+                if self.started:self.invalid=True
+                self.started=True
+            elif state in ('OBS_WEBSOCKET_OUTPUT_PAUSED','OBS_WEBSOCKET_OUTPUT_RESUMED'):
+                self.invalid=True
+            elif state=='OBS_WEBSOCKET_OUTPUT_STOPPING':
+                if self.stopping is not None:self.invalid=True
+                self.stopping=time.perf_counter()
+            elif state=='OBS_WEBSOCKET_OUTPUT_STOPPED' and self.stopping is None:
+                self.invalid=True
+
+    def boundary(self, before):
+        with self._lock:
+            if (not self.started or self.invalid or not self._client.worker.is_alive()
+                    or self.stopping is None or not before<=self.stopping<=before+.2):
+                return None
+            return (before,self.stopping)
+
+    def close(self):
+        self._client.disconnect()
+
+
 class Session:
     def __init__(self,path):
         self.path=Path(path);self.meta=read(self.path/'session.json')
@@ -464,6 +580,9 @@ class Session:
         self._video_seconds=0.0
         self._input_clock_anchor=None
         self._input_clock_trusted=None
+        self._input_clock_events=None
+        self._input_stop_boundary=None
+        self._input_clock_continuous=False
     def update(self,**kw):
         from session_metadata import update_metadata
         self.meta=update_metadata(self.path,kw)
@@ -548,6 +667,7 @@ class Session:
         anchor=self._input_clock_anchor
         if anchor is None:
             self._input_clock_anchor=self._input_clock_trusted=sample
+            self._input_clock_continuous=True
             return True
         expected=anchor[1]+midpoint-anchor[0]
         tolerance=.25+anchor[2]+uncertainty
@@ -562,6 +682,9 @@ class Session:
             self.update(input_clock={**self.meta.get('input_clock',{}),'last_verified_seconds':seconds})
         return True
     def finish_inputs(self,duration=None,*,interrupted=False,error=None,trim_to=None):
+        if interrupted or error or trim_to is not None:
+            self._input_clock_continuous=False
+            self.close_input_clock_events()
         capture=self._input_capture
         self._input_capture=None
         if capture is not None:
@@ -596,6 +719,45 @@ class Session:
                     self.update(input_state='interrupted')
             except Exception:
                 self.update(input_state='failed',input_error='操作记录文件无法恢复，原始录像不受影响。')
+    def close_input_clock_events(self):
+        events=self._input_clock_events
+        self._input_clock_events=None
+        if events is not None:
+            try:events.close()
+            except Exception:pass
+
+    def calibrate_input_clock(self, video):
+        """Estimate a constant presentation offset only for a verified live run.
+
+        GetRecordStatus counts packets already emitted by the encoder; it can
+        lag the captured image by a stable encoder buffer. Final video end and
+        the actual StopRecord boundary share the capture clock instead. Keep
+        their derived correction separate from the immutable input intervals.
+        """
+        boundary=self._input_stop_boundary
+        anchor=self._input_clock_anchor
+        if (boundary is None or anchor is None or not self._input_clock_continuous
+                or self.meta.get('input_state')!='complete'
+                or self.meta.get('input_alignment')):return
+        try:
+            data=read(self.path/'input-events.json')
+            if data.get('state')!='complete' or (self.path/'input-events.revocation.json').exists():return
+            endpoint,frame=video_clock_endpoint(video)
+            before,after=boundary
+            # Include the event delivery window, clock-query midpoint error,
+            # video frame quantization and encoder presentation reordering.
+            uncertainty=(after-before)/2+anchor[2]+3*frame
+            offset=endpoint-(anchor[1]+(before+after)/2-anchor[0])
+            if uncertainty>.25 or not math.isfinite(offset) or abs(offset)>30:return
+            self.update(input_alignment=dict(method='final_video_stop_boundary_v1',
+                offset_seconds=round(offset,6),uncertainty_seconds=round(uncertainty,6),
+                video_endpoint_seconds=round(endpoint,6),
+                stop_request_raw_seconds=round(anchor[1]+before-anchor[0],6),
+                stopping_event_delay_seconds=round(after-before,6)))
+        except (OSError,ValueError,TypeError,KeyError,OverflowError):
+            # Uncertain calibration never blocks video publication or invents
+            # precision. Review retains explicit manual per-session alignment.
+            return
     @classmethod
     def start(cls,c,test_file=None):
         with obs_connection() as r:
@@ -611,6 +773,9 @@ class Session:
             try:
                 from input_capture import prepare_capture
                 s._input_capture=prepare_capture(c,folder,root=ROOT)
+                if s._input_capture is not None:
+                    try:s._input_clock_events=_InputClockEvents(r)
+                    except Exception:pass
                 r.send('SetRecordDirectory',{'recordDirectory':str(folder)})
                 s.update(state='录制中',started=time.time())
                 r.start_record()
@@ -650,12 +815,20 @@ class Session:
             self.finish_inputs(self._video_seconds)
             if status.output_active:
                 self.update(state='保存中')
-                output=Path(r.stop_record().output_path)
-                self.update(recording_file=output.name)
-                for _ in range(120):
-                    if not r.get_record_status().output_active:break
-                    time.sleep(0.5)
-                else:raise RuntimeError('OBS 尚未完成停止，请稍后重试。')
+                # Native listener shutdown and sidecar flush may take seconds.
+                # Take this boundary immediately before the actual request.
+                stop_before=time.perf_counter()
+                try:
+                    output=Path(r.stop_record().output_path)
+                    self.update(recording_file=output.name)
+                    for _ in range(120):
+                        if not r.get_record_status().output_active:break
+                        time.sleep(0.5)
+                    else:raise RuntimeError('OBS 尚未完成停止，请稍后重试。')
+                    if self._input_clock_events is not None:
+                        self._input_stop_boundary=self._input_clock_events.boundary(stop_before)
+                finally:self.close_input_clock_events()
+            else:self.close_input_clock_events()
             self.adopt_recording()
             # Release capture devices after recording; a later session rebuilds them.
             for item in r.get_input_list().inputs:r.remove_input(item['inputName'])
@@ -701,6 +874,7 @@ class Session:
             if abs(info['duration']-duration)>0.5:raise RuntimeError('回看录像与原始录像时长不一致。')
             os.replace(p/'录像.pending.mp4',video)
         if abs(info['duration']-duration)>0.5:raise RuntimeError('回看录像与原始录像时长不一致。')
+        self.calibrate_input_clock(video)
         # Listeners stop before OBS finalization. Explicitly show the short tail
         # rather than representing unobserved final frames as "no input".
         inputs=p/'input-events.json'
@@ -708,10 +882,13 @@ class Session:
             try:
                 data=read(inputs)
                 observed=float(data.get('duration',0))
-                if data.get('state') in ('complete','failed','interrupted') and duration>observed+.001:
+                measured=self.meta.get('input_alignment') or {}
+                offset=measured.get('offset_seconds',0) if measured.get('method')=='final_video_stop_boundary_v1' else 0
+                raw_end=max(0,duration-offset)
+                if data.get('state') in ('complete','failed','interrupted') and raw_end>observed+.001:
                     reason='操作采集已结束，录像正在完成保存' if data.get('state')=='complete' else '操作采集中断，此区间没有可靠操作数据'
-                    data.setdefault('gaps',[]).append(dict(start=observed,end=duration,type='capture',reason=reason))
-                    data['duration']=duration
+                    data.setdefault('gaps',[]).append(dict(start=observed,end=raw_end,type='capture',reason=reason))
+                    data['duration']=raw_end
                     write(inputs,data)
             except (OSError,ValueError,TypeError):pass
         self.update(video_ready=True)

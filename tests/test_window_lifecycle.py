@@ -2,6 +2,7 @@
 import threading
 import unittest
 from unittest.mock import Mock
+from types import SimpleNamespace
 from window_manager import WindowManager
 
 
@@ -12,6 +13,19 @@ class Event:
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_review_starts_wide_enough_for_video_and_caps_to_monitor_work_area(self):
+        large=SimpleNamespace(x=0,y=0,width=1920,height=1080,frame=SimpleNamespace(Width=1920,Height=1040))
+        small=SimpleNamespace(x=-1280,y=0,width=1280,height=720,frame=SimpleNamespace(Width=1280,Height=680))
+        manager=WindowManager(Mock(),SimpleNamespace(screens=[large,small]))
+        manager.main=SimpleNamespace(x=100,y=100)
+        self.assertEqual(manager._review_window_options(),dict(width=1440,height=900,screen=large))
+        manager.main.x=-1000
+        self.assertEqual(manager._review_window_options(),dict(width=1232,height=616,screen=small))
+
+    def test_review_monitor_lookup_failure_does_not_prevent_opening(self):
+        manager=WindowManager(Mock(),SimpleNamespace(screens=[]))
+        self.assertEqual(manager._review_window_options(),dict(width=1440,height=900))
+
     def setup_manager(self):
         service, window = Mock(), Mock()
         window.events.closing = Event()

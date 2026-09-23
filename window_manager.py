@@ -64,6 +64,34 @@ class WindowManager:
             with self._lock:
                 self._closing = False
 
+    def _review_window_options(self):
+        """Leave room for a 900px video plus timeline on ordinary desktops.
+
+        Use pywebview's existing monitor coordinates/work area. Smaller screens
+        retain the responsive player rather than receiving an offscreen window.
+        """
+        options={'width':1440,'height':900}
+        try:
+            screens=self.webview.screens
+            if not isinstance(screens,(list,tuple)) or not screens:return options
+            selected=screens[0]
+            main=getattr(self,'main',None)
+            x,y=getattr(main,'x',None),getattr(main,'y',None)
+            if type(x) in (int,float) and type(y) in (int,float):
+                selected=next((screen for screen in screens
+                    if screen.x<=x<screen.x+screen.width and screen.y<=y<screen.y+screen.height),selected)
+            width,height=selected.width,selected.height
+            if type(width) is not int or type(height) is not int or width<560 or height<540:return options
+            frame=getattr(selected,'frame',None)
+            work_width,work_height=getattr(frame,'Width',None),getattr(frame,'Height',None)
+            if type(work_width) is int and 560<=work_width<=width:width=work_width
+            if type(work_height) is int and 540<=work_height<=height:height=work_height
+            options.update(width=min(1440,max(560,width-48)),height=min(900,max(540,height-64)),screen=selected)
+        except Exception:
+            # An unavailable monitor enumeration must not block existing reviews.
+            pass
+        return options
+
     def open_review(self, session):
         with self._lock:
             if self._updating:raise RuntimeError('应用正在退出以完成更新。')
@@ -73,7 +101,7 @@ class WindowManager:
         try:
             window = self.webview.create_window(
                 payload['title'] + ' · ' + payload['id'] + ' · 回看', url=page.as_uri(),
-                js_api=api, width=1180, height=780, min_size=(560, 540),
+                js_api=api, **self._review_window_options(), min_size=(560, 540),
                 frameless=False, resizable=True, text_select=True,
                 background_color='#fcfaf5')
             with self._lock:

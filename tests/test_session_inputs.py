@@ -183,6 +183,92 @@ class SessionInputTests(unittest.TestCase):
             with self.assertRaises(ConnectionError):session.stop()
         client.disconnect.assert_called_once()
 
+    def test_final_alignment_uses_final_video_and_post_listener_stop_boundary(self):
+        session=self.session(input_state='complete')
+        interval=dict(id='a',device='keyboard',code='A',start=2,end=2.1)
+        recorder.write(session.path/'input-events.json',dict(version=1,state='complete',duration=10,
+            timebase='video_seconds',intervals=[interval],gaps=[]))
+        original=(session.path/'input-events.json').read_bytes()
+        session._input_clock_anchor=(100,.3,.001)
+        session._input_clock_continuous=True
+        session._input_stop_boundary=(112,112.01)
+        with patch.object(recorder,'video_clock_endpoint',return_value=(14.1,1/30)):
+            session.calibrate_input_clock(session.path/'录像.mp4')
+        measured=session.meta['input_alignment']
+        self.assertAlmostEqual(measured['offset_seconds'],1.795)
+        self.assertAlmostEqual(measured['uncertainty_seconds'],.106)
+        self.assertEqual(measured['stop_request_raw_seconds'],12.3)
+        self.assertEqual((session.path/'input-events.json').read_bytes(),original)
+
+    def test_alignment_declines_recovered_interrupted_or_uncertain_clocks(self):
+        session=self.session(input_state='complete')
+        recorder.write(session.path/'input-events.json',dict(version=1,state='complete',duration=10,
+            timebase='video_seconds',intervals=[],gaps=[]))
+        with patch.object(recorder,'video_clock_endpoint',return_value=(14.1,1/30)) as endpoint:
+            session.calibrate_input_clock('synthetic')
+            endpoint.assert_not_called()
+            session._input_clock_anchor=(100,.3,.2)
+            session._input_clock_continuous=True
+            session._input_stop_boundary=(112,112.01)
+            session.calibrate_input_clock('synthetic')
+            self.assertNotIn('input_alignment',session.meta)
+            session._input_clock_anchor=(100,.3,.001)
+            session.update(input_state='interrupted')
+            session.calibrate_input_clock('synthetic')
+            self.assertNotIn('input_alignment',session.meta)
+            session.update(input_state='complete')
+            session._input_clock_continuous=False
+            session.calibrate_input_clock('synthetic')
+            self.assertNotIn('input_alignment',session.meta)
+
+    def test_stop_boundary_is_sampled_after_slow_listener_finish(self):
+        session=self.session()
+        client,capture,events=MagicMock(),MagicMock(),MagicMock()
+        session._input_capture=capture
+        session._input_clock_events=events
+        now=SimpleNamespace(value=100.)
+        capture.stop.side_effect=lambda **kw:setattr(now,'value',103.) or {'state':'complete'}
+        client.send.return_value=SimpleNamespace(record_directory=str(session.path))
+        client.get_record_status.side_effect=[SimpleNamespace(output_active=True,output_duration=12000),SimpleNamespace(output_active=False)]
+        client.stop_record.return_value=SimpleNamespace(output_path=str(session.path/'obs.mkv'))
+        client.get_input_list.return_value.inputs=[]
+        events.boundary.return_value=(103.,103.01)
+        with patch.object(recorder,'client',return_value=client),patch.object(recorder.time,'perf_counter',side_effect=lambda:now.value), \
+             patch.object(session,'adopt_recording'),patch.object(session,'prepare_video'):
+            session.stop()
+        events.boundary.assert_called_once_with(103.)
+        events.close.assert_called_once()
+        self.assertEqual(session._input_stop_boundary,(103.,103.01))
+
+    def test_event_observer_requires_continuous_started_output_and_short_stop_boundary(self):
+        request=SimpleNamespace(base_client=SimpleNamespace(host='127.0.0.1',port=4455,password='synthetic'))
+        connection=MagicMock()
+        with patch.object(recorder.obs,'EventClient',return_value=connection):
+            events=recorder._InputClockEvents(request)
+        event=lambda state:SimpleNamespace(output_state='OBS_WEBSOCKET_OUTPUT_'+state)
+        self.assertIsNone(events.boundary(100))
+        events.on_record_state_changed(event('STARTED'))
+        with patch.object(recorder.time,'perf_counter',return_value=100.02):
+            events.on_record_state_changed(event('STOPPING'))
+        self.assertEqual(events.boundary(100),(100,100.02))
+        self.assertIsNone(events.boundary(99))
+        self.assertIsNone(events.boundary(100.1))
+        events.on_record_state_changed(event('PAUSED'))
+        events.on_record_state_changed(event('RESUMED'))
+        self.assertIsNone(events.boundary(100))
+        events.close()
+        connection.disconnect.assert_called_once()
+
+    def test_video_clock_endpoint_ignores_longer_container_audio(self):
+        from fractions import Fraction
+        video=SimpleNamespace(duration=1200,start_time=2,time_base=Fraction(1,100),average_rate=30)
+        media=SimpleNamespace(streams=SimpleNamespace(video=[video]),duration=13000000)
+        with patch.object(recorder.av,'open') as container:
+            container.return_value.__enter__.return_value=media
+            self.assertEqual(recorder.video_clock_endpoint('synthetic'),(12.02,1/30))
+            video.duration=None
+            with self.assertRaises(ValueError):recorder.video_clock_endpoint('synthetic')
+
     def test_device_enumeration_failure_releases_connection(self):
         client=MagicMock()
         with patch.object(recorder,'client',return_value=client), patch.object(recorder,'ensure_idle'), patch.object(recorder,'add',side_effect=RuntimeError('synthetic failed source')):

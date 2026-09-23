@@ -88,8 +88,8 @@ for(const boundary of [
  assert.equal(input.inputVisualBands(values,boundary.gaps||[]).length,2);
 }
 assert.equal(input.inputVisualBands([sample('a',1,2),sample('b',2,3)],[{start:2,end:2.1,device:'dualsense'}]).length,1);
-assert.equal(input.inputVisualBands([sample('a',1,2),sample('b',2.001,3)]).length,2);
-assert.equal(input.inputVisualBands([sample('a',1,2),sample('zero',2,2.1,{value:0}),sample('b',2.1,3)]).length,3);
+assert.equal(input.inputVisualBands([sample('a',1,2),sample('b',2.001,3)]).length,1);
+assert.equal(input.inputVisualBands([sample('a',1,2),sample('zero',2,2.1,{value:0}),sample('b',2.1,3)]).length,2);
 const taps=Array.from({length:20},(_,i)=>sample('tap-'+i,2+i*.06,2+i*.06+.02,{device:'keyboard',code:'ShiftLeft',kind:'button'}));
 assert.equal(input.inputVisualBands(taps).length,taps.length);
 for(const scale of [12,32,64,120,240]){
@@ -122,3 +122,41 @@ assert.equal(input.timelinePointerTime(frozen,248),11);assert.equal(input.timeli
 assert.equal(input.timelineGesture(1,4),'pending');assert.equal(input.timelineGesture(2,5),'vertical');assert.equal(input.timelineGesture(-8,2),'horizontal');assert.equal(input.timelineGesture(5,5),'horizontal');
 assert.equal(input.timelinePointerTime({...frozen,scale:128},248),10);
 console.log('Frozen pointer timeline coordinates, clamping and vertical gesture threshold passed.');
+
+// Fixed lanes combine simultaneous WASD while keeping raw physical evidence.
+const movement=input.inputVisualBands(items);
+const move=movement.find(item=>item.id==='w');
+assert.equal(input.inputSampleAt(move,4).direction,'↖');
+assert.equal(input.inputSampleAt(move,5.5).direction,''); // W + S cancel.
+assert.equal(input.inputSampleAt(move,7).direction,'↑'); // A release does not erase W.
+for(const scale of [12,64,240]){
+ const narrow=input.packInputIntervals(movement,{scale});
+ for(const channel of ['direction','pointing','dpad'])assert.ok(narrow.counts[channel]<=1);
+}
+const dp=(id,start,end,code='DPadDown')=>sample(id,start,end,{device:'dualsense',code,kind:'button'});
+const presses=[dp('d1',1,1.08),dp('d2',1.4,1.5,'DPadRight'),dp('d3',1.9,2),dp('hold',4,7)];
+const burst=input.inputVisualBands(presses);
+assert.equal(burst.length,2);assert.equal(burst[0].activity,true);assert.equal(burst[1].activity,false);
+assert.equal(input.inputSampleAt(burst[0],1.3).code,'DPadDown');
+assert.equal(input.inputSampleAt(burst[0],1.7).code,'DPadRight');
+assert.equal(input.inputSampleAt(burst[0],2),null);
+assert.equal(input.inputVisualBands(presses,[{start:1.2,end:1.3,type:'focus'}]).length,3);
+assert.equal(input.inputVisualBands([dp('a',1,1.1),dp('b',1.2,1.3)], [{start:1.15,end:1.16,device:'xbox'}]).length,1);
+const shortMotion=input.inputVisualBands([sample('m1',1,1.1),sample('m2',1.16,1.3)]);
+assert.equal(shortMotion.length,1);assert.equal(input.inputSampleAt(shortMotion[0],1.14),null);
+assert.equal(input.inputVisualBands([sample('m1',1,1.1),sample('m2',1.5,1.6)]).length,2);
+// Each press expires two VIDEO seconds after release, independent of other keys.
+const recentIndex=input.intervalIndex([dp('one',1,1.08),dp('two',1.5,1.6),dp('held',2,8),sample('m1',2,2.1),sample('m2',2.1,2.2)]);
+let recent=input.recentInputs(recentIndex,2.15);assert.deepEqual(recent.map(item=>item.id),['one','two','held','m2']);
+assert.deepEqual(recent.map(item=>item.active),[false,false,true,true]);
+assert.deepEqual(input.recentInputs(recentIndex,3.08).map(item=>item.id),['two','held','m2']);
+assert.deepEqual(input.recentInputs(recentIndex,3.6).map(item=>item.id),['held','m2']);
+assert.deepEqual(input.recentInputs(recentIndex,10),[]);
+assert.deepEqual(input.recentInputs(recentIndex,.5),[]); // Backward seek never retains future operations.
+assert.equal(input.recentInputs(input.intervalIndex([{id:'wheel',start:1,end:1,kind:'button'}]),1.1).length,1);
+console.log('Fixed movement tracks, D-pad bursts, actual holds and independent recent-input expiry passed.');
+const rawOffset={duration:10,video_duration:12,alignment:{offset_seconds:1.8},intervals:[{id:'a',start:1,end:1.1},{id:'tail',start:11,end:12}],gaps:[{start:0,end:.3,type:'startup'}]};
+const copyOffset=JSON.stringify(rawOffset),adjusted=input.normalizeInputs(rawOffset);
+close(adjusted.intervals[0].start,2.8);assert.equal(adjusted.intervals.length,1);assert.equal(adjusted.gaps[0].start,0);close(adjusted.gaps[0].end,2.1);assert.equal(adjusted.duration,12);assert.equal(JSON.stringify(rawOffset),copyOffset);
+const early=input.normalizeInputs(rawOffset,-1.8);assert.equal(early.intervals.length,1);close(early.intervals[0].start,9.2);
+console.log('Non-destructive per-clip alignment, leading gap and video bounds passed.');
