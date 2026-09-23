@@ -33,6 +33,7 @@ class ReleasePreparationTests(unittest.TestCase):
             'baseline': {'version': 'synthetic', 'package_manifest_sha256': 'a' * 64},
             'files': [{'path': name, 'bytes': len(raw), 'sha256': digest(raw)}
                       for name in ('runtime/python.exe', 'runtime/pythonw.exe')]})
+        cls.code['portable.json'] = release.json_bytes({'version': '0.2.0', 'models': 'optional'})
         for name, raw in cls.code.items():
             path = cls.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -254,6 +255,13 @@ class ReleasePreparationTests(unittest.TestCase):
     def test_non_object_media_manifest_still_writes_blocked_report(self):
         self.make(code={'runtime/Lib/think_aloud_media/provenance.json': b'[]'})
         self.assert_blocked(self.run_preflight(), 'media_runtime_source_binding')
+
+    def test_extensionless_license_can_have_windows_line_endings(self):
+        self.make(code={'LICENSE': self.code['LICENSE'].replace(b'\n', b'\r\n')})
+        report = self.run_preflight()
+        self.assertEqual(report['status'], 'ready_for_draft_review', report['blockers'])
+        item = next(r for r in report['commit_binding']['files'] if r['path'] == 'LICENSE')
+        self.assertEqual(item['comparison'], 'crlf_normalized_text')
 
     def test_source_manifest_formatting_does_not_change_semantic_equality(self):
         self.make(source_values={'source-manifest.json': json.dumps(self.source_manifest, separators=(',', ':')).encode()})

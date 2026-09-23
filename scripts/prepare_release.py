@@ -197,6 +197,11 @@ def verify_commit_files(repo, commit, stage):
     packaged_names = {item['path'] for item in parse_json((stage / 'package-manifest.json').read_bytes())['files']}
     names = set(KEY_APPLICATION_FILES)
     for name in packaged_names:
+        # The repository retains a historical portable.json template. The
+        # builder generates release metadata; protocol/version checks above
+        # validate it instead of comparing it to that development template.
+        if name == 'portable.json':
+            continue
         if (name in tracked or name.startswith(('ui/', 'scripts/'))
                 or '/' not in name and name.endswith('.py')):
             names.add(name)
@@ -228,7 +233,8 @@ def verify_commit_files(repo, commit, stage):
         if packaged == committed:
             method = 'exact_bytes'
         elif (b'\0' not in packaged and b'\0' not in committed
-              and path.suffix.lower() in ('.py', '.html', '.css', '.js', '.json', '.md', '.txt', '.svg')
+              and (path.suffix.lower() in ('.py', '.html', '.css', '.js', '.json', '.md', '.txt', '.svg')
+                   or path.name in ('LICENSE', 'COPYING', 'NOTICE'))
               and packaged.replace(b'\r\n', b'\n') == committed.replace(b'\r\n', b'\n')):
             method = 'crlf_normalized_text'
         else:
