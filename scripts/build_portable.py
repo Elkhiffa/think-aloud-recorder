@@ -12,29 +12,32 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import tarfile
 import zipfile
 
+# Running this script with a prepared private runtime must use this checkout's
+# protocol, rather than a neighbouring seed's application modules.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from updater import SemVer
+from media_runtime import MEDIA_DIRECTORY, verify_media
+from scripts.verify_runtime_seed import verify_runtime_seed
+
 ROOT_FILES = (
     'app.py', 'desktop_service.py', 'hotword_files.py', 'hotword_ui.py',
-    'model_manager.py', 'model-manifest.json', 'portable_check.py', 'portable_config.py',
+    'model_manager.py', 'model-manifest.json', 'media_runtime.py', 'portable_check.py', 'portable_config.py',
     'portable_entry.py', 'processing_worker.py', 'processing.py', 'qwen_transcription.py',
-    'recorder.py', 'review_runtime.py', 'scel_to_text.py', 'secret_store.py',
+    'recorder.py', 'window_manager.py', 'review_runtime.py', 'scel_to_text.py', 'secret_store.py',
     'transcription_runtime.py', 'player.html', 'requirements-lock.txt',
-    'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md',
-    'scripts/build_portable.py', 'scripts/fetch_runtime.py',
+    'input_capture.py', 'input_capture_windows.py', 'input_capture_devices.py', 'session_metadata.py',
+    'updater.py', 'update_installer.py',
+    'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md', 'docs/updates.md',
+    'scripts/build_portable.py', 'scripts/fetch_runtime.py', 'scripts/fetch_input_runtime.py',
+    'scripts/fetch_media_runtime.py',
+    'scripts/verify_runtime_seed.py', 'scripts/runtime-seed.json', 'docs/release-readiness.md',
+    'vocabularies/uiux-terms.txt', 'docs/uiux-vocabulary.md', 'docs/input-capture-validation.md',
 )
 OPTIONAL_ROOT_FILES = ('README.md',)
-TEMPLATE_FILES = (
-    '.obsidian/community-plugins.json',
-    '.obsidian/plugins/experience-opener/main.js',
-    '.obsidian/plugins/experience-opener/manifest.json',
-    '.obsidian/plugins/media-transcript/main.js',
-    '.obsidian/plugins/media-transcript/manifest.json',
-    '.obsidian/plugins/media-transcript/styles.css',
-    '.obsidian/plugins/media-transcript/data.json',
-    '.obsidian/plugins/media-transcript/LICENSE',
-)
 BLOCKED_PARTS = {'__pycache__', '.git', '.cache', 'cache', 'caches', 'logs', 'log',
                  'crashes', 'crashdumps', 'pip-cache', 'wheelhouse', '.pytest_cache',
                  'gpucache', 'dawncache', 'code cache', 'local storage', 'session storage'}
@@ -78,8 +81,8 @@ def collect_files(root):
         add(relative)
     for relative in OPTIONAL_ROOT_FILES:
         add(relative, False)
-    for relative in TEMPLATE_FILES:
-        add('vault-template/' + relative)
+    for relative in ('tools/input/SDL2.dll', 'tools/input/provenance.json', 'licenses/SDL2-zlib.txt'):
+        add(relative)
     for dirname in ('licenses', 'ui', 'runtime', 'tools/obs'):
         base = root / dirname
         if not base.is_dir():
@@ -88,6 +91,10 @@ def collect_files(root):
             relative = file.relative_to(root)
             local = file.relative_to(base)
             if excluded(relative) or not file.is_file():
+                continue
+            # Keep the Python package's notices but never ship its legacy CLI.
+            if (relative.as_posix().startswith('runtime/Lib/site-packages/imageio_ffmpeg/binaries/')
+                    and file.suffix.lower() == '.exe'):
                 continue
             if dirname == 'ui' and file.suffix.lower() not in UI_EXTENSIONS:
                 continue
@@ -101,12 +108,44 @@ def collect_files(root):
                 if local.as_posix() != 'portable_mode.txt' and local.parts[0] not in {'bin', 'data', 'obs-plugins'}:
                     continue
             add(relative.as_posix())
-    for required in ('ui/index.html', 'runtime/python.exe', 'runtime/pythonw.exe',
+    for required in ('ui/index.html', 'ui/review.js', 'ui/review.css',
+                     'ui/vendor/plyr/plyr.min.js', 'ui/vendor/plyr/plyr.css', 'ui/vendor/plyr/plyr.svg',
+                     'licenses/Plyr-MIT.txt', 'runtime/python.exe', 'runtime/pythonw.exe',
                      'runtime/python312._pth', 'tools/obs/bin/64bit/obs64.exe',
                      'tools/obs/portable_mode.txt'):
         if required not in entries:
             raise ValueError('Required runtime component missing: ' + required)
     return entries
+
+
+def compact_dependency_notices(files):
+    """Keep original notice bytes under short Windows-update-safe paths."""
+    prefix = 'licenses/dependency-materials/'
+    notices = {name: value for name, value in files.items() if name.startswith(prefix)}
+    if not notices:
+        return files, {}
+    index_name = prefix + 'index.json'
+    # A prepared package can itself become a seed. Do not wrap its index again.
+    if index_name in notices and all(name == index_name or re.fullmatch(
+            re.escape(prefix) + r'f/[0-9a-f]{64}\.(txt|html|json)', name)
+            for name in notices):
+        return files, {}
+    if index_name in notices:
+        raise ValueError('Mixed compact and original dependency notices; use a clean prepared seed.')
+    result = {name: value for name, value in files.items() if not name.startswith(prefix)}
+    records = []
+    for name, value in sorted(notices.items()):
+        digest = sha256(value)
+        extension = Path(name).suffix.lower()
+        if extension not in {'.html', '.json'}:
+            extension = '.txt'
+        target = prefix + 'f/' + digest + extension
+        result[target] = value
+        records.append({'origin': name[len(prefix):], 'file': target[len(prefix):],
+                        'bytes': value.stat().st_size, 'sha256': digest})
+    return result, {index_name: json_bytes({'schema': 1,
+        'description': 'Original upstream notice bytes; origin maps the acquisition path to its packaged file.',
+        'files': records})}
 
 
 def launcher_bytes():
@@ -184,21 +223,32 @@ def write_zip(path, entries):
     return {'filename': path.name, 'bytes': path.stat().st_size, 'sha256': sha256(path)}
 
 
-def build(root, outdir, source_dir=None, *, candidate=False, version='0.2.0', launcher=None):
+def build(root, outdir, source_dir=None, *, candidate=False, version='0.3.0', launcher=None):
     root, outdir = Path(root).resolve(), Path(outdir).resolve()
     source_dir = Path(source_dir or root / 'build/dependency-sources').resolve()
-    if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9.-]+)?', version):
-        raise ValueError('Invalid version')
+    SemVer(version)
     files = collect_files(root)
     sources, source_files = read_sources(source_dir, candidate)
-    ffmpeg_name = 'runtime/Lib/site-packages/imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe'
-    expected_ffmpeg = sources.get('provenance', {}).get('ffmpeg_binary_sha256')
-    if expected_ffmpeg and (ffmpeg_name not in files or sha256(files[ffmpeg_name]) != expected_ffmpeg):
-        raise ValueError('Bundled FFmpeg differs from dependency-source provenance')
+    verify_media(root)
+    expected_media = sources.get('provenance', {}).get('media_runtime_manifest_sha256')
+    if not expected_media or sha256(root / MEDIA_DIRECTORY / 'provenance.json') != expected_media:
+        raise ValueError('Bundled media runtime differs from dependency-source provenance')
+    sdl = json.loads(files['tools/input/provenance.json'].read_text(encoding='utf-8'))
+    if sha256(files['tools/input/SDL2.dll']) != sdl.get('dll_sha256'):
+        raise ValueError('Bundled SDL2 differs from binary provenance')
+    source_assets = {item.get('name'): item.get('sha256') for item in sdl.get('assets', [])
+                     if str(item.get('name', '')).endswith('.tar.gz')}
+    if not any(item.get('component') == 'SDL2' and item.get('sha256') == source_assets.get(item.get('filename'))
+               and item.get('filename') in source_assets for item in sources['files']):
+        raise ValueError('Matching SDL2 source archive missing from dependency sources')
+    verify_runtime_seed(root, files)
+    files, compact_notices = compact_dependency_notices(files)
     generated = {
+        **compact_notices,
         'ExperienceRecorder.exe': launcher if launcher is not None else launcher_bytes(),
         'portable.json': json_bytes({'name': 'Experience Recorder', 'version': version,
             'platform': 'windows-x64', 'models': 'optional',
+            'update_protocol': 1, 'update_repository': 'Elkhiffa/think-aloud-recorder',
             'release_status': 'candidate-not-for-public-redistribution' if candidate else 'public'}),
         'dependency-source-manifest.json': json_bytes(sources),
     }
@@ -209,16 +259,25 @@ def build(root, outdir, source_dir=None, *, candidate=False, version='0.2.0', la
                 if license_file is None or not license_file.isfile() or license_file.size > 100000:
                     raise ValueError('FFmpeg GPLv3 license missing from pinned source')
                 generated['licenses/FFmpeg-GPL-3.0.txt'] = source.extractfile(license_file).read()
-    inventory = [{'path': name, 'bytes': value.stat().st_size, 'sha256': sha256(value)}
-                 for name, value in sorted(files.items())]
-    inventory.extend({'path': name, 'bytes': len(value), 'sha256': hashlib.sha256(value).hexdigest()}
-                     for name, value in sorted(generated.items()))
+    # Generated notices deliberately supersede an older seed's same-path copy.
+    # Inventory the final ZIP mapping, never both versions of an overridden path.
+    inventory = [{'path': name,
+                  'bytes': len(value) if isinstance(value, bytes) else value.stat().st_size,
+                  'sha256': hashlib.sha256(value).hexdigest() if isinstance(value, bytes) else sha256(value)}
+                 for name, value in sorted({**files, **generated}.items())]
     generated['package-manifest.json'] = json_bytes({'schema': 1, 'files': sorted(inventory, key=lambda x: x['path']),
         'reproducibility': 'Same prepared seed, source files, Python/zip implementation and launcher stub produce identical ZIP bytes.',
         'dependency_source_status': sources.get('redistribution_ready', False)})
-    outdir.mkdir(parents=True, exist_ok=True)
     suffix = '-candidate' if candidate else ''
     base = 'ExperienceRecorder-' + version + '-windows-x64' + suffix
+    # Refuse the whole set before writing its first archive. Keep failed or
+    # previous output untouched instead of leaving a mixed release directory.
+    names = (base + '-dependency-sources.zip', base + '.zip', base + '-SHA256SUMS.txt')
+    for name in names:
+        target = outdir / name
+        if target.exists() or target.with_suffix(target.suffix + '.partial').exists():
+            raise FileExistsError('Release output exists; choose a new output directory: ' + str(target))
+    outdir.mkdir(parents=True, exist_ok=True)
     # A sources archive accompanies every binary archive, including candidates.
     results = [write_zip(outdir / (base + '-dependency-sources.zip'), source_files),
                write_zip(outdir / (base + '.zip'), {**files, **generated})]
@@ -233,7 +292,7 @@ def main():
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--outdir', required=True, type=Path)
     parser.add_argument('--source-dir', type=Path)
-    parser.add_argument('--version', default='0.2.0')
+    parser.add_argument('--version', default='0.3.0')
     parser.add_argument('--candidate', action='store_true')
     args = parser.parse_args()
     print(json.dumps(build(args.root, args.outdir, args.source_dir,

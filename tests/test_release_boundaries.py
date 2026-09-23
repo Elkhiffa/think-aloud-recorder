@@ -46,8 +46,7 @@ class ReleaseBoundaries(unittest.TestCase):
             archive = recorder.Session(session).package()
             with zipfile.ZipFile(archive) as z:
                 self.assertNotIn('.obsidian/plugins/unrelated/data.json', z.namelist())
-                self.assertIn('.obsidian/plugins/media-transcript/LICENSE', z.namelist())
-                self.assertIn('.obsidian/community-plugins.json', z.namelist())
+                self.assertFalse(any(name.startswith('.obsidian/') for name in z.namelist()))
                 self.assertFalse(any(b'SYNTHETIC_SECRET_DO_NOT_EXPORT' in z.read(n) for n in z.namelist()))
 
 

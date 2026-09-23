@@ -33,7 +33,8 @@ def main():
         for name in ('tkinter', 'ssl', 'ctypes', 'av', 'imageio_ffmpeg', 'obsws_python',
                      'httpx', 'numpy', 'ctranslate2', 'faster_whisper', 'onnxruntime',
                      'webview', 'app', 'desktop_service', 'model_manager',
-                     'qwen_transcription', 'secret_store'):
+                     'qwen_transcription', 'secret_store', 'input_capture',
+                     'input_capture_windows', 'input_capture_devices', 'session_metadata'):
             module = importlib.import_module(name)
             path = Path(module.__file__).resolve()
             assert path.is_relative_to(root), f'{name} 加载了包外文件：{path}'
@@ -48,18 +49,41 @@ def main():
         cfg = config()
         assert Path(FFMPEG).resolve().is_relative_to(root)
         checks['ffmpeg'] = str(Path(FFMPEG).relative_to(root))
+        from media_runtime import MEDIA_EXECUTABLE, verify_media
+        assert checks['ffmpeg'].replace('\\', '/') == MEDIA_EXECUTABLE, '未使用独立音视频组件'
+        media = verify_media(root)
+        import subprocess
+        result = subprocess.run([FFMPEG, '-version'], capture_output=True, timeout=20,
+                                creationflags=0x08000000 if os.name == 'nt' else 0)
+        assert result.returncode == 0, '音视频组件无法启动'
+        checks['media_runtime'] = {'version': media['version'], 'files': len(media['files']),
+                                  'version_output': result.stdout.decode(errors='replace').splitlines()[0]}
         checks['library'] = cfg['vault']
         from model_manager import ModelManager
-        from review_runtime import find_obsidian
         checks['model_available'] = ModelManager(root).resolve_model() is not None
         checks['model_optional'] = True
         checks['record_engine'] = (root / 'tools/obs/bin/64bit/obs64.exe').is_file()
-        checks['obsidian_installed'] = find_obsidian(cfg.get('obsidian_exe')) is not None
         checks['default_mode'] = cfg.get('transcription_provider', 'later')
         assert checks['record_engine'], '缺少 OBS 录制引擎'
         assert (root / 'ui/index.html').is_file(), '缺少桌面界面'
         assert (root / 'player.html').is_file(), '缺少独立回看模板'
+        for asset in ('review.js', 'review.css', 'vendor/plyr/plyr.min.js', 'vendor/plyr/plyr.css', 'vendor/plyr/plyr.svg'):
+            assert (root / 'ui' / asset).is_file(), '缺少回看资源：' + asset
         import ctypes
+        import hashlib
+        sdl_path = root / 'tools/input/SDL2.dll'
+        provenance = json.loads((root / 'tools/input/provenance.json').read_text(encoding='utf-8'))
+        assert hashlib.sha256(sdl_path.read_bytes()).hexdigest() == provenance['dll_sha256'], '手柄运行库校验失败'
+        # Loading/querying the DLL does not initialize event listeners or record input.
+        sdl = ctypes.CDLL(str(sdl_path))
+        version_bytes = (ctypes.c_uint8 * 3)()
+        sdl.SDL_GetVersion.argtypes = [ctypes.c_void_p]
+        sdl.SDL_GetVersion.restype = None
+        sdl.SDL_GetVersion(ctypes.byref(version_bytes))
+        version = '.'.join(str(value) for value in version_bytes)
+        assert version == provenance['version'], '手柄运行库版本不一致'
+        checks['controller_runtime'] = {'path': 'tools/input/SDL2.dll', 'version': version,
+                                        'sha256': provenance['dll_sha256'], 'capture_started': False}
         kernel = ctypes.WinDLL('kernel32', use_last_error=True)
         kernel.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
         kernel.GetModuleHandleW.restype = ctypes.c_void_p
@@ -107,7 +131,8 @@ def main():
                 checks['session_package'] = str(session.package())
                 if args.review_test:
                     checks['review'] = open_review(session)
-                    assert checks['review'] == 'obsidian', '未收到 Obsidian 插件回看确认'
+                    assert checks['review'] == 'browser-requested'
+                    checks['review_notice'] = '仅请求浏览器打开，实际播放需桌面验证'
             finally:
                 if recording:
                     session.stop()

@@ -20,7 +20,8 @@ from websocket import WebSocketException
 
 import recorder
 from hotword_files import (merge_files, split_words, validate_words, compile_hotword_snapshots,
-                           read_dictionary_snapshots, SOGOU_DICTIONARIES)
+                           read_dictionary_snapshots, bundled_dictionary_snapshots,
+                           SOGOU_DICTIONARIES)
 from model_manager import ModelManager
 from portable_config import load_settings, stored_settings, default_vault_path
 from processing import process_isolated
@@ -29,10 +30,10 @@ import secret_store
 
 PUBLIC_KEYS = ('game', 'vault', 'preset', 'source', 'window', 'monitor', 'mic',
                'language', 'hotwords', 'hotword_files', 'hotword_manual',
-               'transcription_provider', 'obsidian_exe', 'configured')
+               'transcription_provider', 'record_inputs', 'configured')
 EDITABLE_KEYS = set(PUBLIC_KEYS) - {'configured'}
 PRESET_KEYS = ('preset', 'source', 'window', 'monitor', 'mic', 'language', 'hotwords',
-               'hotword_files', 'hotword_manual')
+               'hotword_files', 'hotword_manual', 'record_inputs')
 SUSPECT_STATES = {'录制中', '启动中', '保存中'}
 READINESS_MAX_AGE = 15
 
@@ -48,8 +49,11 @@ class VaultReuseRequired(ValueError):
 class DesktopService:
     def __init__(self, root=None):
         self.root = Path(root or recorder.ROOT).resolve()
+        self._default_hotword_files = bundled_dictionary_snapshots(self.root)
         self._lock = threading.RLock()
         self._operation_lock = threading.RLock()
+        self._shutdown_lock = threading.Lock()
+        self._obs_shutdown_result = None
         self._readiness_thread = None
         self._dialog_open = False
         self._startup_launch_attempted = False
@@ -59,20 +63,35 @@ class DesktopService:
         self._background_history = {}
         self._background_thread = None
         self._active = None
+        self._exit_pending = False
+        self._update_installing = False
+        self._update_commit = False
+        self._update_install_error = None
+        self._update_pending_cancel = None
+        self._update_thread = None
+        self._update_review_count = lambda: 0
+        self._update_close_windows = None
+        self._review_opener = None
+        self._review_opening = 0
         self._uncertain_ids = set()
         self._obs_uncertain = False
         self._closed = threading.Event()
         self._devices = {'mic': [], 'window': [], 'monitor': []}
+        self._device_defaults = {'monitor': '', 'mic': ''}
+        self._device_refresh = None
         self._device_labels = {'mic': {}, 'window': {}, 'monitor': {}}
         self._readiness = dict(ready=False, checking=True, errors=[], checked_at=None)
         self._cfg = load_settings(self.root)
         self._cfg.setdefault('transcription_provider', 'later')
-        self._cfg.setdefault('obsidian_exe', '')
+        self._cfg.setdefault('record_inputs', False)
+        self._cfg.pop('obsidian_exe', None)
         self._initialize_presets()
         self._model = ModelManager(self.root)
+        from updater import UpdateManager
+        self._updates = UpdateManager(self.root)
         self._activity = dict(busy=False, kind='idle', status='待开始', detail='',
                               active_id=None, elapsed_seconds=0)
-        self._launch('devices', self._startup, status='检查上次场次')
+        self._launch('recovery', self._startup, status='检查上次场次')
         self._monitor = threading.Thread(target=self._monitor_loop, daemon=True,
                                          name='recording-health')
         self._monitor.start()
@@ -108,8 +127,8 @@ class DesktopService:
             if status:
                 self._activity['status'] = status
 
-    def _guard(self, allow_active=False, allow_uncertain=False):
-        if self._closed.is_set():
+    def _guard(self, allow_active=False, allow_uncertain=False, allow_closing=False):
+        if self._closed.is_set() or (self._exit_pending and not allow_closing):
             raise RuntimeError('应用正在关闭。')
         if self._activity['busy']:
             raise RuntimeError('当前操作尚未结束，请稍候。')
@@ -123,7 +142,7 @@ class DesktopService:
     def _launch(self, kind, operation, *, status=None, allow_active=False, allow_uncertain=False):
         with self._lock:
             try:
-                self._guard(allow_active, allow_uncertain)
+                self._guard(allow_active, allow_uncertain, allow_closing=kind == 'saving')
             except Exception as error:
                 return self._error(error)
             self._activity.update(busy=True, kind=kind, status=status or '处理中', detail='')
@@ -153,6 +172,7 @@ class DesktopService:
 
     def _public_config(self):
         result = {key: deepcopy(self._cfg.get(key, '')) for key in PUBLIC_KEYS}
+        result['record_inputs'] = self._cfg.get('record_inputs') is True and self._cfg.get('source') == '游戏窗口'
         result['vault'] = str(Path(self._cfg['vault']).resolve())
         result['configured'] = bool(self._cfg.get('configured'))
         result['games'] = {
@@ -163,6 +183,7 @@ class DesktopService:
         return result
 
     def _initialize_presets(self):
+        self._normalize_input_choice(self._cfg)
         self._normalize_hotword_config(self._cfg)
         migrated = 'presets' not in self._cfg
         if migrated:
@@ -172,18 +193,27 @@ class DesktopService:
                 self._cfg['presets']['legacy'] = self._preset_snapshot(self._cfg)
                 self._cfg['active_preset_id'] = 'legacy'
         for value in self._cfg['presets'].values():
+            self._normalize_input_choice(value)
             self._normalize_hotword_config(value)
             if value.get('vault') and not Path(value['vault']).is_absolute():
                 value['vault'] = str((self.root / value['vault']).resolve())
         ident = self._cfg.get('active_preset_id')
         selected = self._cfg['presets'].get(ident)
         if selected:
+            self._cfg['record_inputs'] = False
             self._cfg.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
         else:
             self._cfg['active_preset_id'] = None
             self._cfg['configured'] = False
+            self._cfg['record_inputs'] = False
         if migrated and (self.root / 'config.json').exists():
             self._persist(self._cfg)
+
+    @staticmethod
+    def _normalize_input_choice(cfg):
+        # Capture is opt-in for this exact preset, never inherited from another
+        # active preset or from a value saved before this setting existed.
+        cfg['record_inputs'] = cfg.get('record_inputs') is True and cfg.get('source') == '游戏窗口'
 
     @staticmethod
     def _normalize_hotword_config(cfg):
@@ -198,6 +228,7 @@ class DesktopService:
     @staticmethod
     def _preset_snapshot(cfg):
         return {**{key: deepcopy(cfg.get(key, '')) for key in PUBLIC_KEYS},
+                'record_inputs': cfg.get('record_inputs') is True and cfg.get('source') == '游戏窗口',
                 'name': cfg.get('game') or '自由探索'}
 
     def _persist(self, cfg):
@@ -291,6 +322,9 @@ class DesktopService:
                         background = self._background_for(path)
                         result = self._background_history.get(str(path))
                         sessions.append(dict(id=ident, game=meta.get('game', ''),
+                                             session_name=meta.get('session_name', ''),
+                                             can_review=(path / '录像.mp4').is_file() and (path / '录像.mp4').resolve().parent == path.resolve()
+                                                 and not bool(self._active and self._active.path.resolve() == path.resolve()),
                                              created=meta.get('created', ''), state=meta.get('state', ''),
                                              duration=media.get('duration', 0),
                                              segments=meta.get('segments', 0),
@@ -313,14 +347,17 @@ class DesktopService:
                 model = {key: model.get(key) for key in ('state', 'model', 'path', 'downloaded_bytes',
                          'total_bytes', 'error', 'source', 'revision')}
                 model['error'] = self._safe_text(model.get('error'))
-                return ok(dict(config=self._public_config(), sessions=sessions,
+                return ok(dict(config=self._public_config(), sessions=sessions, closing=self._exit_pending,
+                               updates=self._update_snapshot(model),
                                default_vault=self._default_vault(),
+                               default_hotword_files=deepcopy(self._default_hotword_files),
                                readiness=self._visible_readiness(),
                                presets=self._preset_list(), active_preset_id=self._cfg.get('active_preset_id'),
                                background_jobs=[self._job_summary(job) for job in self._background_jobs.values()],
                                activity=activity, devices=deepcopy(self._devices), model=model,
+                               device_defaults=deepcopy(self._device_defaults),
+                               device_refresh=deepcopy(self._device_refresh),
                                capabilities=dict(cloud_key=self._has_key(),
-                                   obsidian=self._obsidian_available(),
                                    obs=(self.root / 'tools/obs/bin/64bit/obs64.exe').is_file(),
                                    local_model=model['state'] == 'ready')))
         except Exception as error:
@@ -332,18 +369,19 @@ class DesktopService:
     def _startup(self):
         self._recover()
         with self._lock:
-            initialize = (not self._startup_launch_attempted and self._cfg.get('configured')
+            self._activity['kind'] = 'devices'
+            initialize = (not self._closed.is_set() and not self._startup_launch_attempted and self._cfg.get('configured')
                           and self._cfg.get('active_preset_id') and self._active is None
                           and not self._obs_uncertain and not self._uncertain_ids
                           and (self.root / 'tools/obs/bin/64bit/obs64.exe').is_file())
             if initialize:
                 self._startup_launch_attempted = True
-        if initialize:
+        if initialize and not self._closed.is_set():
             try:
                 # The existing client connects before considering a launch and
                 # never launches another instance after a readiness failure.
-                client = recorder.client(launch=True, progress=self._progress)
-                client.disconnect()
+                with recorder.obs_connection(launch=True, progress=self._progress):
+                    pass
             except Exception:
                 # The following actual probe supplies the actionable readiness
                 # error. Routine checks never repeat this automatic launch.
@@ -364,7 +402,7 @@ class DesktopService:
             result['ready'] = False
             result['checking'] = bool(self._readiness_thread and self._readiness_thread.is_alive())
             result['errors'] = [*result['errors'], dict(code='READINESS_STALE', step=1,
-                message='录制条件检查结果已过期，请等待重新确认或点击“重新检查”。')]
+                message='录制条件检查结果已过期，请等待自动确认，或打开录制预设并刷新设备。')]
         return result
 
     def _mark_readiness_checking(self, invalidate):
@@ -374,9 +412,22 @@ class DesktopService:
         # still tracked independently; Start always performs another full check.
 
     def _cache_devices(self, devices):
+        try:
+            primary_ids = recorder.primary_monitor_ids()
+        except Exception:
+            primary_ids = ()
         with self._lock:
             self._devices = {key: [{field: item.get(field) for field in ('itemName', 'itemValue', 'itemEnabled')}
                                   for item in devices.get(key, [])] for key in self._devices}
+            monitors = {str(item.get('itemValue')).casefold(): item['itemValue']
+                        for item in self._devices['monitor']
+                        if item.get('itemEnabled') and item.get('itemValue')}
+            self._device_defaults = {
+                'monitor': next((monitors[value.casefold()] for value in primary_ids
+                                 if value.casefold() in monitors), ''),
+                'mic': 'default' if any(item.get('itemEnabled') and item.get('itemValue') == 'default'
+                                        for item in self._devices['mic']) else '',
+            }
             for key, items in self._devices.items():
                 for item in items:
                     self._device_labels[key][str(item.get('itemValue'))] = str(item.get('itemName', ''))
@@ -398,6 +449,8 @@ class DesktopService:
         Never switch profiles/collections, configure capture, or stop outputs.
         Service jobs hold the same operation lock, so Start cannot interleave.
         """
+        if self._closed.is_set():
+            return None, ('CLOSING', '正在关闭。')
         client = recorder.client(False)
         temporary = []
         try:
@@ -405,7 +458,7 @@ class DesktopService:
                 return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
             if (client.get_profile_list().current_profile_name != 'Experience'
                     or client.get_scene_collection_list().current_scene_collection_name != 'Experience'):
-                return None, ('OBS_CONFIGURATION', 'OBS 当前不是记录器专用配置，请使用“重新检查”恢复设备列表。')
+                return None, ('OBS_CONFIGURATION', 'OBS 当前不是记录器专用配置，请打开录制预设并刷新设备 / 设置 OBS。')
             inputs = client.get_input_list().inputs
             result = {}
             for key, kind, prop, settings in (
@@ -413,6 +466,8 @@ class DesktopService:
                 ('window', 'window_capture', 'window', {}),
                 ('monitor', 'monitor_capture', 'monitor_id', {}),
             ):
+                if self._closed.is_set():
+                    return None, ('CLOSING', '正在关闭。')
                 name = next((item['inputName'] for item in inputs if item.get('inputKind') == kind), None)
                 if name is None:
                     # Check again before any temporary input creation. No source
@@ -487,10 +542,15 @@ class DesktopService:
                                 else:
                                     error('MONITOR_UNAVAILABLE', f'显示器“{label}”未连接或不可用。', 1)
                 except Exception:
-                    error('OBS_UNAVAILABLE', '无法连接录制引擎。请使用“重新检查”启动或重新连接 OBS。', 1)
+                    error('OBS_UNAVAILABLE', '无法连接录制引擎。请打开录制预设并刷新设备 / 设置 OBS。', 1)
             provider = cfg.get('transcription_provider', 'later')
+            if cfg.get('record_inputs'):
+                from input_capture import capture_readiness
+                capture = capture_readiness(cfg, self.root)
+                if not capture['ready']:
+                    error('INPUT_CAPTURE_UNAVAILABLE', capture['error'], 1)
             if provider == 'local' and not self._model.resolve_model():
-                error('LOCAL_MODEL_MISSING', '已选本地转写，但模型缺失、已移动或校验失效；请导入/下载模型，或改为仅录制。', 2)
+                error('LOCAL_MODEL_MISSING', '已选本地转写，但模型缺失、已移动或校验失效；请导入 / 下载模型，或改用 Qwen 转写。', 2)
             elif provider == 'qwen' and not self._has_key():
                 exists = (self.root / 'state/secrets/dashscope-beijing.dpapi').exists()
                 error('CLOUD_KEY_UNREADABLE' if exists else 'CLOUD_KEY_MISSING',
@@ -505,7 +565,7 @@ class DesktopService:
                 except Exception:
                     error('OUTPUT_UNAVAILABLE', '保存位置无法访问或写入，请连接保存磁盘，或重新选择可写文件夹。', 3)
         except Exception:
-            error('READINESS_FAILED', '录制条件检查未完成，请重新检查后再开始。', 1)
+            error('READINESS_FAILED', '录制条件检查未完成，请等待自动确认，或打开录制预设并刷新设备。', 1)
         if not has_setup:
             # Onboarding has one actionable next step. Device probing above still
             # populates the wizard, but absent selections are not user errors yet.
@@ -516,14 +576,14 @@ class DesktopService:
 
     def _request_readiness(self, *, invalidate=False):
         with self._lock:
-            if (self._closed.is_set() or self._active is not None or self._activity['busy']
+            if (self._closed.is_set() or self._exit_pending or self._active is not None or self._activity['busy']
                     or (self._readiness_thread and self._readiness_thread.is_alive())):
                 return False
             self._mark_readiness_checking(invalidate)
             def work():
                 with self._operation_lock:
                     with self._lock:
-                        if self._closed.is_set() or self._active is not None or self._activity['busy']:
+                        if self._closed.is_set() or self._exit_pending or self._active is not None or self._activity['busy']:
                             self._readiness.update(ready=False, checking=False)
                             return
                     self._update_readiness(invalidate=invalidate)
@@ -531,9 +591,6 @@ class DesktopService:
             self._readiness_thread.start()
             return True
 
-    def _obsidian_available(self):
-        from review_runtime import find_obsidian
-        return find_obsidian(self._cfg.get('obsidian_exe')) is not None
 
     def _validate_vault(self, value):
         if not isinstance(value, str) or not value.strip() or '\x00' in value:
@@ -558,17 +615,21 @@ class DesktopService:
     def _validated_settings(self, payload, base=None):
         if not isinstance(payload, dict) or set(payload) - EDITABLE_KEYS:
             raise ValueError('设置包含不支持的字段。')
-        if any(not isinstance(value, str) for key, value in payload.items() if key != 'hotword_files'):
+        if any(not isinstance(value, str) for key, value in payload.items() if key not in ('hotword_files', 'record_inputs')):
             raise ValueError('设置格式不正确。')
         updated = deepcopy(self._cfg if base is None else base)
         updated.update(deepcopy(payload))
+        if type(updated.get('record_inputs', False)) is not bool:
+            raise ValueError('操作记录选项必须为开启或关闭。')
+        if updated.get('record_inputs') and updated.get('source') != '游戏窗口':
+            raise ValueError('操作记录仅支持指定游戏窗口，请选择窗口录制或关闭操作记录。')
         updated['vault'] = self._validate_vault(updated.get('vault'))
         for key, allowed in [('preset', recorder.PRESETS), ('source', ['游戏窗口', '整个显示器']),
                              ('language', ['zh', 'en', 'ja', '']),
                              ('transcription_provider', ['later', 'local', 'qwen'])]:
             if updated.get(key) not in allowed:
                 raise ValueError('设置选项无效：' + key)
-        for key in EDITABLE_KEYS - {'hotwords', 'hotword_files', 'hotword_manual'}:
+        for key in EDITABLE_KEYS - {'hotwords', 'hotword_files', 'hotword_manual', 'record_inputs'}:
             value = updated.get(key, '')
             if not isinstance(value, str) or len(value) > 4096 or any(ord(char) < 32 for char in value):
                 raise ValueError('设置文本包含无效内容：' + key)
@@ -583,12 +644,7 @@ class DesktopService:
             files, manual = updated.get('hotword_files', []), updated.get('hotword_manual', '')
         updated.update(compile_hotword_snapshots(files, manual,
                        qwen=updated['transcription_provider'] == 'qwen'))
-        exe = updated.get('obsidian_exe', '')
-        if exe:
-            path = Path(exe)
-            if not path.is_absolute() or path.name.lower() != 'obsidian.exe' or not path.is_file():
-                raise ValueError('请选择已安装的 Obsidian.exe。')
-            updated['obsidian_exe'] = str(path.resolve())
+        updated.pop('obsidian_exe', None)
         # Saved selections remain editable even while devices are disconnected.
         # Availability is a readiness gate, not a reason to discard a preset.
         updated['configured'] = bool(updated.get('mic') and updated.get('window' if updated['source'] == '游戏窗口' else 'monitor'))
@@ -602,25 +658,6 @@ class DesktopService:
         for name in ('场次', '打包'):
             if (vault / name).resolve().parent != vault.resolve():
                 raise ValueError('资料目录指向外部位置，已停止写入。')
-        source = self.root / 'vault-template/.obsidian'
-        for file in source.rglob('*'):
-            if file.is_file():
-                dest = vault / '.obsidian' / file.relative_to(source)
-                if not dest.resolve().is_relative_to(vault.resolve()):
-                    raise ValueError('资料库插件目录指向外部位置，已停止写入。')
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                if not dest.exists():
-                    shutil.copy2(file, dest)
-        enabled = vault / '.obsidian/community-plugins.json'
-        if not enabled.resolve().is_relative_to(vault.resolve()):
-            raise ValueError('资料库配置文件指向外部位置。')
-        plugins = recorder.read(enabled) if enabled.exists() else []
-        if not isinstance(plugins, list) or not all(isinstance(name, str) for name in plugins):
-            raise ValueError('资料库插件清单格式不正确，已保留原文件。')
-        for name in ['media-transcript', 'experience-opener']:
-            if name not in plugins:
-                plugins.append(name)
-        recorder.write(enabled, plugins)
         instructions = vault / '办公室打开说明.md'
         if not instructions.exists():
             instructions.write_text(recorder.OFFICE, encoding='utf-8')
@@ -704,11 +741,19 @@ class DesktopService:
                     raise ValueError('要编辑的预设不存在。')
                 ident = preset_id or uuid.uuid4().hex
                 base = deepcopy(self._cfg)
+                base['record_inputs'] = False
                 if preset_id:
                     selected = base['presets'][preset_id]
+                    self._normalize_input_choice(selected)
                     base.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
+                elif not {'hotword_files', 'hotword_manual', 'hotwords'}.intersection(payload):
+                    # Only an omitted new-preset choice receives bundled defaults.
+                    # Explicit removal and all existing presets keep their snapshots.
+                    base['hotword_files'] = deepcopy(self._default_hotword_files)
+                    base['hotword_manual'] = ''
                 data = self._save(payload, ident, base)
                 self._devices = {'mic': [], 'window': [], 'monitor': []}
+                self._device_defaults = {'monitor': '', 'mic': ''}
                 self._request_readiness()
                 self._progress('录制预设已保存。', status='已保存')
                 return ok(dict(id=ident, active_preset_id=ident, config=data))
@@ -728,11 +773,14 @@ class DesktopService:
                     raise ValueError('请选择有效的录制预设。')
                 cfg = deepcopy(self._cfg)
                 selected = cfg['presets'][id]
+                self._normalize_input_choice(selected)
+                cfg['record_inputs'] = False
                 cfg.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
                 cfg['active_preset_id'] = id
                 self._persist(cfg)
                 self._cfg = cfg
                 self._devices = {'mic': [], 'window': [], 'monitor': []}
+                self._device_defaults = {'monitor': '', 'mic': ''}
                 self._readiness.update(ready=False, checking=True, checked_at=None, errors=[])
                 self._request_readiness()
                 self._progress('已切换录制预设，正在检查保存的配置。', status='已切换预设')
@@ -741,23 +789,40 @@ class DesktopService:
                 return self._error(error)
 
     def refresh_devices(self):
+        refresh_id = uuid.uuid4().hex
         def work():
-            with self._lock:
-                self._readiness.update(ready=False, checking=True)
-            self._recover()
-            if self._active is not None:
-                self._update_readiness()
-                return
             try:
-                result = recorder.devices(progress=self._progress)
-            except Exception:
-                self._update_readiness()
+                with self._lock:
+                    self._readiness.update(ready=False, checking=True)
+                self._recover()
+                if self._active is not None:
+                    self._update_readiness()
+                    raise RuntimeError('当前场次仍在录制，无法刷新设备；请先结束录制。')
+                try:
+                    result = recorder.devices(progress=self._progress)
+                except Exception:
+                    # A read-only probe can recover ordinary readiness, but it
+                    # cannot turn this explicit refresh's failure into success.
+                    self._update_readiness()
+                    raise
+                self._cache_devices(result)
+                self._recover()
+                self._update_readiness(devices=result)
+                self._progress('设备列表已从 OBS 刷新；未开始电平检测。', status='设备已就绪')
+                with self._lock:
+                    self._device_refresh = dict(id=refresh_id, state='succeeded', error='')
+            except Exception as error:
+                with self._lock:
+                    self._device_refresh = dict(id=refresh_id, state='failed', error=self._safe_text(error))
                 raise
-            self._cache_devices(result)
-            self._recover()
-            self._update_readiness(devices=result)
-            self._progress('设备列表已从 OBS 刷新；未开始电平检测。', status='设备已就绪')
-        return self._launch('devices', work, status='正在读取设备', allow_uncertain=True)
+        with self._lock:
+            result = self._launch('devices', work, status='正在读取设备', allow_uncertain=True)
+            if result['ok']:
+                # The worker needs this same lock before doing any work. Publish
+                # its token atomically with admission; rejected jobs change none.
+                self._device_refresh = dict(id=refresh_id, state='running', error='')
+                result['data']['refresh_id'] = refresh_id
+            return result
 
     def _dialog(self, kind, **kwargs):
         with self._lock:
@@ -783,14 +848,6 @@ class DesktopService:
         except Exception as error:
             return self._error(error)
 
-    def choose_obsidian(self):
-        try:
-            paths = self._dialog('file', allow_multiple=False, file_types=('Obsidian executable (*.exe)',))
-            if paths and Path(paths[0]).name.lower() != 'obsidian.exe':
-                raise ValueError('请选择 Obsidian.exe。')
-            return ok({'path': str(Path(paths[0]).resolve()) if paths else None})
-        except Exception as error:
-            return self._error(error)
 
     def import_hotwords(self, current_text=None):
         try:
@@ -812,8 +869,10 @@ class DesktopService:
 
     def choose_hotword_files(self):
         try:
+            directory = self.root / 'vocabularies'
+            options = {'directory': str(directory)} if directory.is_dir() else {}
             paths = self._dialog('file', allow_multiple=True,
-                                 file_types=('Hotword dictionaries (*.txt;*.scel)',))
+                                 file_types=('Hotword dictionaries (*.txt;*.scel)',), **options)
             return ok({'files': read_dictionary_snapshots(paths)})
         except Exception as error:
             return self._error(error)
@@ -825,6 +884,15 @@ class DesktopService:
             return ok({'requested': True})
         except Exception:
             return self._error('未能请求浏览器打开搜狗词库下载页。')
+
+    def open_bailian_console(self):
+        """Open only the fixed provider console; never pass credentials or state."""
+        try:
+            if not webbrowser.open('https://bailian.console.aliyun.com/'):
+                raise RuntimeError('未能请求浏览器打开百炼控制台。')
+            return ok({'requested': True})
+        except Exception:
+            return self._error('未能请求浏览器打开百炼控制台。')
 
     def _require_transcription(self, cfg, allow_later=False):
         provider = cfg.get('transcription_provider', 'later')
@@ -888,12 +956,13 @@ class DesktopService:
                 session.stop()
             except Exception:
                 # Keep the active handle unless OBS proves this recording ended.
+                session.finish_inputs(interrupted=True,error='停止录制时连接中断，操作采集已停止。')
                 try:
-                    client = recorder.client(False)
-                    if not client.get_record_status().output_active:
-                        with self._lock:
-                            self._active = None
-                        session.update(state='失败', error='录制已停止，但保存校验尚未完成。原文件已保留，请恢复整理。')
+                    with recorder.obs_connection(False) as client:
+                        if not client.get_record_status().output_active:
+                            with self._lock:
+                                self._active = None
+                            session.update(state='失败', error='录制已停止，但保存校验尚未完成。原文件已保留，请恢复整理。')
                 except Exception:
                     pass
                 raise
@@ -921,11 +990,15 @@ class DesktopService:
                     or session.meta.get('recording_uncertain')):
                 raise RuntimeError('尚无法确认上次录制已结束。请刷新设备重新连接 OBS，再恢复整理。')
             return
-        if client.get_record_status().output_active:
-            directory = Path(client.send('GetRecordDirectory').record_directory).resolve()
-            if directory == session.path.resolve():
-                raise RuntimeError('此场次仍在录制，请先结束录制。')
-        self._uncertain_ids.discard(session.meta['id'])
+        try:
+            if client.get_record_status().output_active:
+                directory = Path(client.send('GetRecordDirectory').record_directory).resolve()
+                if directory == session.path.resolve():
+                    raise RuntimeError('此场次仍在录制，请先结束录制。')
+            self._uncertain_ids.discard(session.meta['id'])
+        finally:
+            try:client.disconnect()
+            except Exception:pass
 
     def _processing_settings(self, session):
         # A display name is not a preset identity. Historical language/vocabulary
@@ -1054,27 +1127,44 @@ class DesktopService:
         except Exception as error:
             return self._error(error)
 
-    def open_review(self, id, mode='obsidian'):
-        if mode not in ('obsidian', 'html'):
-            return self._error('回看方式无效。')
-
-        def work():
-            session = self._session(id)
+    def open_review(self, id):
+        admitted = False
+        try:
             with self._lock:
-                if self._background_for(session.path):
-                    raise RuntimeError('此场次仍在后台整理或排队，请等待整理结束后回看。')
-            if mode == 'html':
-                file = self._contained_file(session, '独立回看.html')
-                os.startfile(file)
-                self._progress('已请求浏览器打开独立回看网页。', status='已请求打开')
-            else:
-                self._install_vault(session.path.parent.parent)
-                result = recorder.open_review(session, self._progress)
-                if result == 'obsidian':
-                    self._progress('Obsidian 插件已确认打开同步回看。', status='回看已打开')
-                else:
-                    self._progress('Obsidian 未确认打开；已请求浏览器打开独立回看网页。', status='已请求网页回看')
-        return self._launch('review', work, status='正在打开回看')
+                if self._closed.is_set() or self._exit_pending:
+                    raise RuntimeError('记录器正在关闭。')
+                session = self._session(id)
+                if self._active and self._active.path == session.path:
+                    raise RuntimeError('此场次仍在录制，请先结束并保存。')
+                self._contained_file(session, '录像.mp4')
+                opener = self._review_opener
+                if opener is None:
+                    raise RuntimeError('回看窗口尚未就绪。')
+                self._review_opening += 1
+                admitted = True
+            return ok(opener(session))
+        except Exception as error:
+            return self._error(error)
+        finally:
+            if admitted:
+                with self._lock:
+                    self._review_opening -= 1
+
+    def set_review_opener(self, opener):
+        self._review_opener = opener
+
+    def rename_session(self, id, name):
+        try:
+            with self._lock:
+                if self._closed.is_set() or self._exit_pending:
+                    raise RuntimeError('记录器正在关闭。')
+                session = self._session(id)
+                if self._active and self._active.path.resolve() == session.path.resolve():
+                    raise RuntimeError('请先结束本场次录制，再修改场次名称。')
+            from session_metadata import rename_session
+            return ok(rename_session(session.path, name))
+        except Exception as error:
+            return self._error(error)
 
     def package_session(self, id):
         def work():
@@ -1194,14 +1284,168 @@ class DesktopService:
             except Exception as error:
                 return self._error(error)
 
-    def open_official_obsidian(self):
+    def set_update_lifecycle(self, review_count, close_windows):
+        """Native callbacks stay outside the JavaScript bridge."""
+        with self._lock:
+            self._update_review_count = review_count
+            self._update_close_windows = close_windows
+
+    def _update_blockers(self, model=None, *, installing=False):
+        """Read-only eligibility. Never call close_allowed or pause a worker."""
+        reasons=[]
+        if self._update_pending_cancel is not None:
+            reasons.append('更新助手尚未确认取消，请重试取消后再关闭应用。')
+        elif self._closed.is_set() or (self._exit_pending and not installing):
+            reasons.append('应用正在关闭，请等待当前操作完成。')
+        if self._active is not None:
+            reasons.append('请先结束录制并等待录像保存完成。')
+        if self._uncertain_ids or self._obs_uncertain:
+            reasons.append('尚无法确认录制已结束，请先重新连接录制引擎。')
+        if self._activity['busy'] and self._activity['kind'] not in ('devices','idle'):
+            reasons.append('当前操作尚未完成，请等待保存、整理或导出结束。')
+        if self._background_jobs or (self._background_thread and self._background_thread.is_alive()):
+            reasons.append('还有场次正在整理或排队，请等待完成。')
+        state=(model if model is not None else self._model.status()).get('state')
+        if state in ('downloading','verifying') or self._model.wait(timeout=0) is False:
+            reasons.append('本地模型正在下载或校验，请先暂停并等待文件保存。')
+        if self._dialog_open:
+            reasons.append('请先完成或取消当前文件选择。')
+        if self._review_opening:
+            reasons.append('回看窗口正在打开，请稍候。')
+        if self._update_close_windows is None:
+            reasons.append('更新窗口尚未就绪，请稍候。')
+        return reasons
+
+    def _update_snapshot(self, model=None):
+        snapshot=dict(self._updates.snapshot())
+        blockers=self._update_blockers(model)
+        try:count=max(0,int(self._update_review_count()))
+        except Exception:
+            count=0
+            blockers.append('暂时无法确认回看窗口状态。')
+        snapshot.update(can_install=snapshot.get('state')=='ready' and not blockers and not self._update_installing,
+                        install_blockers=blockers,review_count=count,
+                        cancel_pending=self._update_pending_cancel is not None)
+        if self._update_install_error:
+            snapshot['error']=self._update_install_error
+        if snapshot.get('error'):snapshot['error']=self._safe_text(snapshot['error'])
+        return snapshot
+
+    def update_action(self, payload):
         try:
-            requested = webbrowser.open('https://obsidian.md/download')
-            if not requested:
-                raise RuntimeError('未能请求浏览器打开，请访问 https://obsidian.md/download。')
-            return ok({'requested': True})
+            if not isinstance(payload,dict):raise ValueError('更新操作无效。')
+            action=payload.get('action')
+            if action not in ('check','download','cancel','install','open_release'):
+                raise ValueError('更新操作无效。')
+            with self._lock:
+                if action=='cancel' and self._update_pending_cancel is not None:
+                    if self._update_thread and self._update_thread.is_alive():
+                        return ok({'started':True})
+                    self._update_thread=threading.Thread(target=self._retry_update_cancel,daemon=False,
+                        name='portable-update-cancel')
+                    self._update_thread.start()
+                    return ok({'started':True})
+                if self._closed.is_set() or self._exit_pending:
+                    raise RuntimeError('应用正在关闭，请等待当前操作完成。')
+                if action=='install':
+                    blockers=self._update_blockers()
+                    if blockers:raise RuntimeError('\n'.join(blockers))
+                    if self._updates.snapshot().get('state')!='ready':
+                        raise RuntimeError('请先完成更新包下载与校验。')
+                    self._exit_pending=self._update_installing=True
+                    self._update_install_error=None
+                    self._update_thread=threading.Thread(target=self._install_update,daemon=False,name='portable-update-close')
+                    self._update_thread.start()
+                    return ok({'started':True})
+                self._update_install_error=None
+                if action=='check':
+                    include=payload.get('include_prerelease',False)
+                    if type(include) is not bool:raise ValueError('预览版选项必须为开启或关闭。')
+                    result=self._updates.check(include_prerelease=include)
+                elif action=='download':result=self._updates.download()
+                elif action=='cancel':result=self._updates.cancel()
+                else:
+                    from urllib.parse import urlsplit
+                    url=self._updates.snapshot().get('release_url') or 'https://github.com/Elkhiffa/think-aloud-recorder/releases'
+                    parts=urlsplit(url)
+                    if (parts.scheme!='https' or parts.netloc!='github.com' or parts.query or parts.fragment
+                            or not (parts.path=='/Elkhiffa/think-aloud-recorder/releases'
+                                    or parts.path.startswith('/Elkhiffa/think-aloud-recorder/releases/tag/'))):
+                        raise ValueError('更新发布页地址无效。')
+                    if not webbrowser.open(url):raise RuntimeError('未能打开 GitHub 发布页，请稍后重试。')
+                    result=None
+                if isinstance(result,dict) and result.get('ok') is False:
+                    raise RuntimeError(result.get('error') or '更新操作未完成。')
+                return ok(self._update_snapshot())
         except Exception as error:
             return self._error(error)
+
+    def _install_update(self):
+        prepared=None
+        try:
+            # Admission set _exit_pending under the same lock used by record,
+            # model, processing and viewer creation. Drain any idle OBS probe.
+            with self._operation_lock:
+                with self._lock:
+                    blockers=self._update_blockers(installing=True)
+                    if blockers:raise RuntimeError('\n'.join(blockers))
+                prepared=self._updates.prepare_install(os.getpid())
+                result=recorder.shutdown_owned_obs(self.root)
+                if result.get('status') not in ('closed','not_owned','already_exited'):
+                    raise RuntimeError('录制引擎尚未确认正常退出，未开始更新。请检查 OBS 后重试。')
+                with self._lock:self._obs_shutdown_result=dict(result)
+                launched=self._updates.launch_install(prepared)
+                if not isinstance(launched,dict) or launched.get('ready') is not True:
+                    raise RuntimeError('更新助手尚未确认就绪，未关闭应用窗口。')
+                with self._lock:self._update_commit=True
+                self._update_close_windows()
+        except Exception as error:
+            if prepared is not None:
+                # Revoke native close permission before attempting cancellation.
+                # A failed durable write must never turn into a later install
+                # when the user closes the app through the ordinary window X.
+                with self._lock:
+                    self._update_commit=False
+                    self._closed.clear()
+                    self._update_pending_cancel=prepared
+                try:self._cancel_prepared_update(prepared)
+                except Exception:
+                    with self._lock:
+                        self._update_install_error='更新助手尚未确认取消。应用已阻止关闭，请点击“重试取消”。'
+                    return
+            self._restore_after_update_failure(error)
+
+    def _cancel_prepared_update(self, prepared):
+        result=self._updates.cancel_install(prepared)
+        if not isinstance(result,dict) or result.get('cancelled') is not True:
+            raise RuntimeError('更新助手未确认取消。')
+
+    def _retry_update_cancel(self):
+        with self._lock:prepared=self._update_pending_cancel
+        if prepared is None:return
+        try:self._cancel_prepared_update(prepared)
+        except Exception:
+            with self._lock:
+                self._update_install_error='更新助手尚未确认取消。应用已阻止关闭，请点击“重试取消”。'
+            return
+        self._restore_after_update_failure('已取消这次安装，当前版本保留。')
+
+    def _restore_after_update_failure(self, error):
+        # Reopen only this app's connection gate, never adopt or kill OBS.
+        # Do not reach here while an unrevoked helper could still install.
+        with recorder._obs_process_lock:
+            recorder._obs_closed_roots.discard(self.root)
+        with self._lock:
+            self._obs_shutdown_result=None
+            self._closed.clear()
+            self._update_pending_cancel=None
+            self._exit_pending=self._update_installing=self._update_commit=False
+            self._update_install_error=self._safe_text(error)
+            if not self._monitor.is_alive():
+                self._monitor=threading.Thread(target=self._monitor_loop,daemon=True,name='recording-health')
+                self._monitor.start()
+        self._request_readiness(invalidate=True)
+
 
     def _recover(self):
         connected = False
@@ -1209,19 +1453,19 @@ class DesktopService:
         interrupted = False
         active_unknown = False
         try:
-            client = recorder.client(False)
-            recording = client.get_record_status()
-            if recording.output_active:
-                # A positive status alone cannot establish whose recording this
-                # is. Do not classify other sessions as stopped until its output
-                # directory is also known.
-                active_unknown = True
-                directory = client.send('GetRecordDirectory').record_directory
-                if not isinstance(directory, str) or not directory or not Path(directory).is_absolute():
-                    raise ValueError('OBS 未返回可确认的录制目录。')
-                recording_path = Path(directory).resolve()
-                active_unknown = False
-            connected = True
+            with recorder.obs_connection(False) as client:
+                recording = client.get_record_status()
+                if recording.output_active:
+                    # A positive status alone cannot establish whose recording this
+                    # is. Do not classify other sessions as stopped until its output
+                    # directory is also known.
+                    active_unknown = True
+                    directory = client.send('GetRecordDirectory').record_directory
+                    if not isinstance(directory, str) or not directory or not Path(directory).is_absolute():
+                        raise ValueError('OBS 未返回可确认的录制目录。')
+                    recording_path = Path(directory).resolve()
+                    active_unknown = False
+                connected = True
         except Exception:
             pass
         with self._lock:
@@ -1234,6 +1478,10 @@ class DesktopService:
                     if session.meta.get('test'):
                         self._progress('OBS 正在录制合成测试场次，未接管或停止它。')
                         continue
+                    if self._active and self._active.path.resolve() == path.resolve():
+                        session = self._active
+                    else:
+                        session.finish_inputs(interrupted=True,error='上次操作采集已中断，恢复录像连接不会重新开启采集。')
                     self._active = session
                     self._uncertain_ids.discard(ident)
                     session.update(state='录制中', recording_uncertain=False)
@@ -1258,6 +1506,9 @@ class DesktopService:
                                     warning='上次后台整理已中断，原始资料已保留。请手动恢复整理；不会自动上传。')
                                 return True
                             if owned.meta.get('state') in SUSPECT_STATES | {'转写中'} or owned.meta.get('recording_uncertain'):
+                                active = self._active
+                                capture_owner = active if active and active.path.resolve() == owned.path.resolve() else owned
+                                capture_owner.finish_inputs(interrupted=True,error='上次录制或操作采集已中断。')
                                 owned.update(state='失败', recording_uncertain=bool(uncertain),
                                     error='上次操作中断，原始资料已保留。请恢复整理；连接不明时先刷新设备。')
                                 return True
@@ -1297,24 +1548,30 @@ class DesktopService:
         if session is None:
             return
         try:
-            client = recorder.client(False)
-            state = client.get_record_status()
+            with recorder.obs_connection(False) as client:
+                before = time.perf_counter()
+                state = client.get_record_status()
+                after = time.perf_counter()
+                directory = Path(client.send('GetRecordDirectory').record_directory).resolve() if state.output_active else None
         except Exception:
+            session.finish_inputs(interrupted=True,error='与录制引擎的连接中断，操作采集已停止。')
             self._progress('无法连接 OBS，录像可能仍在继续。正在重连，请勿重复开始。', status='录制连接中断')
             return
         if not state.output_active:
+            session.finish_inputs(interrupted=True,error='OBS 录制意外停止。')
             session.update(state='失败', error='OBS 录制意外停止。原录像已保留，请选择恢复整理。')
             with self._lock:
                 self._active = None
             self._progress(session.meta['error'], status='录制已中断')
             return
-        directory = Path(client.send('GetRecordDirectory').record_directory).resolve()
         if directory != session.path.resolve():
+            session.finish_inputs(interrupted=True,error='录制归属已变化，操作采集已停止。')
             session.update(state='失败', error='OBS 已切换到其他录制目录。本场次原文件已保留，未停止其他录制。')
             with self._lock:
                 self._active = None
             self._progress(session.meta['error'], status='录制归属已变化')
             return
+        session.observe_input_clock(state, before, after)
         if shutil.disk_usage(session.path).free < 2 * 1024 ** 3:
             session.stop()
             session.update(state='待整理', warning='磁盘剩余空间不足 2 GB，已停止并保存录像。')
@@ -1324,20 +1581,78 @@ class DesktopService:
         else:
             self._progress('OBS 正在录制 ' + str(getattr(state, 'output_timecode', '')) + '；未开始电平检测。', status='录制中')
 
-    def close_allowed(self):
-        """Internal pywebview closing event handler; intentionally returns bool."""
+    def close_allowed(self, *, for_update=False):
+        """Only durable work blocks close. Idle readiness never owns the window."""
         with self._lock:
-            blocked = (self._activity['busy'] or self._active is not None or bool(self._uncertain_ids)
-                       or bool(self._background_jobs)
-                       or self._obs_uncertain or self._dialog_open or self._readiness['checking']
-                       or bool(self._readiness_thread and self._readiness_thread.is_alive()))
+            if self._update_installing:
+                allowed=for_update and self._update_commit
+                if allowed:self._closed.set()
+                return allowed
+            foreground = self._activity['busy'] and self._activity['kind'] not in ('devices', 'idle')
+            blocked = (foreground or self._active is not None or bool(self._uncertain_ids)
+                       or bool(self._background_jobs) or self._obs_uncertain or self._dialog_open
+                       or self._review_opening > 0)
             if not blocked:
                 self._model.pause_download()
-                stopped = self._model.wait(timeout=0)
-                state = self._model.status()['state']
-                blocked = stopped is False or state in ('downloading', 'verifying')
+                blocked = self._model.wait(timeout=0) is False
             if blocked:
-                self._progress('操作仍在后台进行，窗口已最小化。请等待录制、保存或模型写入安全结束后关闭。')
                 return False
             self._closed.set()
             return True
+
+    def update_close_ready(self):
+        with self._lock:return self._update_installing and self._update_commit
+
+    def update_in_progress(self):
+        with self._lock:return self._update_installing
+
+    def close_reason(self):
+        with self._lock:
+            if self._active is not None:
+                return '当前场次仍在录制，退出前需要先保存录像。'
+            if self._uncertain_ids or self._obs_uncertain:
+                return '录制状态尚未确认，请先重新检查录制引擎。'
+            if self._background_jobs:
+                return '还有场次正在整理或排队，完成后可以安全关闭。'
+            return '当前操作尚未完成，需要等到资料安全保存后关闭。'
+
+    def shutdown(self):
+        """Native-only cleanup after accepted close; idle probes finish first."""
+        if not self._closed.is_set():
+            return {'status': 'close_not_accepted'}
+        with self._shutdown_lock:
+            if self._active is not None:
+                self._active.finish_inputs(interrupted=True,error='应用已关闭，操作采集已停止。')
+            if self._obs_shutdown_result is None:
+                with self._operation_lock:
+                    self._obs_shutdown_result = recorder.shutdown_owned_obs(self.root)
+            return dict(self._obs_shutdown_result)
+
+    def finish_for_close(self):
+        with self._lock:
+            if self._uncertain_ids or self._obs_uncertain:
+                raise RuntimeError('无法确认录制已停止，请先重新检查录制引擎。')
+            if self._dialog_open:
+                raise RuntimeError('请先完成或取消当前文件选择。')
+            self._exit_pending = True
+        stop_requested = False
+        try:
+            while not self._closed.is_set():
+                with self._lock:
+                    if self._uncertain_ids or self._obs_uncertain:
+                        raise RuntimeError('录制状态无法确认，请重新检查后关闭。')
+                    active, busy = self._active is not None, self._activity['busy']
+                    if active and not busy:
+                        if stop_requested:
+                            raise RuntimeError('录像尚未确认保存成功，请处理录制错误后再关闭。')
+                        result = self.stop_recording()
+                        if not result['ok']:
+                            raise RuntimeError(result['error'])
+                        stop_requested = True
+                if self.close_allowed():
+                    return
+                self._closed.wait(.2)
+        except Exception:
+            with self._lock:
+                self._exit_pending = False
+            raise

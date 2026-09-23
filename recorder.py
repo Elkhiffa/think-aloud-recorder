@@ -1,19 +1,24 @@
 """Local recording engine. Every session is durable before the first OBS request."""
 from pathlib import Path
 from datetime import datetime
-import json, os, re, shutil, subprocess, time, uuid, zipfile, hashlib
+import json, os, re, shutil, subprocess, time, uuid, zipfile, hashlib, math
 import av
-import imageio_ffmpeg
+from media_runtime import resolve_ffmpeg
 import obsws_python as obs
 from obsws_python.error import OBSSDKRequestError
-import functools,msvcrt
+import functools,msvcrt,threading
+from contextlib import contextmanager
+import psutil
 
 ROOT=Path(__file__).resolve().parent
-FFMPEG=imageio_ffmpeg.get_ffmpeg_exe()
+FFMPEG=resolve_ffmpeg(ROOT)
 HIDDEN=0x08000000 if os.name=='nt' else 0
 PRESETS={'均衡 1080p30':(1920,1080,30),'流畅 1080p60':(1920,1080,60),'省空间 720p30':(1280,720,30)}
 SESSION_SETTING_KEYS=('game','language','preset','source','window','monitor','mic',
-    'model','device','compute_type','transcription_provider','hotwords','qwen_region','qwen_model')
+    'model','device','compute_type','transcription_provider','hotwords','qwen_region','qwen_model','record_inputs')
+_obs_process_lock=threading.RLock()
+_owned_obs={}
+_obs_closed_roots=set()
 
 def session_settings(cfg):
     """Session exports contain their own recording choices, not other presets."""
@@ -34,39 +39,12 @@ def config():
 def save_config(cfg):
     from portable_config import stored_settings
     write(ROOT/'config.json',stored_settings(ROOT,cfg))
-def open_review(session,progress=lambda s:None):
-    import urllib.parse
-    if session.meta['state']!='可回看':raise RuntimeError('此场次尚未完成自动转写，请点击“开始整理”或“重试生成回看”。')
-    for name in ['录像.mp4','录像.whisper.json','独立回看.html']:
-        if not (session.path/name).is_file():raise RuntimeError('缺少 '+name+'，请恢复整理或查看资料文件夹。')
-    vault=session.path.parent.parent;data_dir=ROOT/'state/obsidian';registry=data_dir/'obsidian.json'
-    state=read(registry) if registry.exists() else {'vaults':{}}
-    if state.get('vaults') and not any(Path(v['path']).resolve()==vault.resolve() for v in state['vaults'].values()):
-        data_dir=ROOT/'state'/('obsidian-'+hashlib.sha256(str(vault.resolve()).encode()).hexdigest()[:12]);registry=data_dir/'obsidian.json'
-        state=read(registry) if registry.exists() else {'vaults':{}}
-    vault_id=next((k for k,v in state.get('vaults',{}).items() if Path(v['path']).resolve()==vault.resolve()),None)
-    if vault_id is None:
-        vault_id=uuid.uuid4().hex[:16];state.setdefault('vaults',{})[vault_id]={'path':str(vault),'ts':int(time.time()*1000),'open':True};write(registry,state)
-    nonce=uuid.uuid4().hex;rel=(session.path/'录像.mp4').relative_to(vault).as_posix()
-    request_dir=vault/'.experience/requests';request_dir.mkdir(parents=True,exist_ok=True)
-    write(request_dir/(str(int(time.time()*1000))+'-'+nonce+'.json'),{'file':rel,'nonce':nonce,'created':int(time.time()*1000)})
-    url='obsidian://experience?'+urllib.parse.urlencode({'vault':vault_id,'file':rel,'nonce':nonce})
-    from review_runtime import find_obsidian
-    exe=find_obsidian(config().get('obsidian_exe'))
-    if exe:
-        progress('正在打开 Obsidian 同步回看，等待插件确认…')
-        subprocess.Popen([str(exe),'--user-data-dir='+str(data_dir),'--disable-gpu',url])
-        for _ in range(40):
-            time.sleep(0.25)
-            try:
-                ack=read(vault/'.experience/ack'/f'{nonce}.json')
-                if ack.get('nonce')==nonce:
-                    if ack.get('error'):break
-                    progress('已在 Obsidian 打开同步回看：'+session.meta['game']);return 'obsidian'
-            except (OSError,ValueError):pass
-    progress('Obsidian 未确认打开，正在打开本地浏览器同步回看…')
-    os.startfile(session.path/'独立回看.html')
-    progress('已请求打开独立回看网页。如浏览器未出现，请在资料文件夹双击“独立回看.html”。')
+def open_review(session, progress=lambda s: None):
+    """Portable browser entry; the desktop service owns native review windows."""
+    from review_runtime import session_review_payload, render_player
+    (session.path / '独立回看.html').write_text(render_player(ROOT, session_review_payload(session.path)), encoding='utf-8')
+    os.startfile(session.path / '独立回看.html')
+    progress('已请求打开独立回看网页。')
     return 'browser-requested'
 def stamp(t):
     ms=round(t*1000);s,ms=divmod(ms,1000);m,s=divmod(s,60);h,m=divmod(m,60)
@@ -107,13 +85,38 @@ def wait_obs_ready(r,timeout=45,progress=lambda s:None):
             time.sleep(min(.2,remaining))
 
 def client(launch=True,progress=lambda s:None):
+    # Keep the original process handle, and serialize launch/close so reconnects
+    # cannot create duplicate children or race an accepted application close.
+    with _obs_process_lock:
+        if ROOT.resolve() in _obs_closed_roots:
+            raise RuntimeError('记录器正在关闭，录制引擎不再接受新连接。')
+        return _connect_obs(launch,progress)
+
+@contextmanager
+def obs_connection(*args,**kwargs):
+    """Release each operation's socket explicitly, including failed requests.
+
+    ReqClient owns dynamically bound methods; relying on local-variable cleanup
+    can leave its socket alive until cyclic GC, delaying OBS's normal shutdown.
+    """
+    connection=client(*args,**kwargs)
+    try:yield connection
+    finally:
+        try:connection.disconnect()
+        except Exception:pass
+
+def _connect_obs(launch,progress):
     c=config()
     try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=8)
     except Exception:
         if not launch:raise
         progress('正在启动录制引擎，请稍候…')
         exe=ROOT/'tools/obs/bin/64bit/obs64.exe'
-        subprocess.Popen([str(exe),'--portable','--multi','--profile','Experience','--collection','Experience','--minimize-to-tray','--disable-shutdown-check'],cwd=exe.parent,creationflags=HIDDEN)
+        root=ROOT.resolve()
+        owned=_owned_obs.get(root)
+        if owned is None or owned['process'].poll() is not None:
+            process=subprocess.Popen([str(exe),'--portable','--multi','--profile','Experience','--collection','Experience','--minimize-to-tray','--disable-shutdown-check'],cwd=exe.parent,creationflags=HIDDEN)
+            _owned_obs[root]=dict(process=process,exe=exe.resolve(),port=c['port'],password=c['password'])
         for _ in range(45):
             time.sleep(1)
             try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=2);break
@@ -126,6 +129,103 @@ def client(launch=True,progress=lambda s:None):
         except Exception:pass
         raise
     return r
+
+def _owned_obs_identity(owned,connection=None):
+    """A live original child handle plus image, parent and exact TCP peer proof."""
+    process=owned['process']
+    if process.poll() is not None:return False
+    child=psutil.Process(process.pid)
+    if child.ppid()!=os.getpid() or Path(child.exe()).resolve()!=owned['exe']:return False
+    if connection is not None:
+        sock=connection.base_client.ws.sock
+        local,peer=sock.getsockname(),sock.getpeername()
+        if not any(tuple(item.laddr)==tuple(peer) and tuple(item.raddr)==tuple(local)
+                   and item.status==psutil.CONN_ESTABLISHED
+                   for item in child.net_connections(kind='tcp')):
+            return False
+    return process.poll() is None
+
+def _request_obs_window_close(process):
+    """Send normal WM_CLOSE only to this live child's OBS main window; never kill."""
+    if os.name!='nt' or process.poll() is not None:return False
+    import ctypes
+    from ctypes import wintypes
+    user32=ctypes.WinDLL('user32',use_last_error=True)
+    callback_type=ctypes.WINFUNCTYPE(wintypes.BOOL,wintypes.HWND,wintypes.LPARAM)
+    user32.EnumWindows.argtypes=(callback_type,wintypes.LPARAM)
+    user32.EnumWindows.restype=wintypes.BOOL
+    user32.GetWindowThreadProcessId.argtypes=(wintypes.HWND,ctypes.POINTER(wintypes.DWORD))
+    user32.GetWindowTextW.argtypes=(wintypes.HWND,wintypes.LPWSTR,ctypes.c_int)
+    user32.PostMessageW.argtypes=(wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM)
+    user32.PostMessageW.restype=wintypes.BOOL
+    windows=[]
+    def visit(hwnd,_):
+        pid=wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd,ctypes.byref(pid))
+        if pid.value==process.pid:
+            title=ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd,title,len(title))
+            if title.value.startswith('OBS '):windows.append(hwnd)
+        return True
+    user32.EnumWindows(callback_type(visit),0)
+    if len(windows)!=1 or process.poll() is not None:return False
+    # Recheck the HWND owner immediately before posting, after enumeration.
+    pid=wintypes.DWORD()
+    user32.GetWindowThreadProcessId(windows[0],ctypes.byref(pid))
+    return pid.value==process.pid and bool(user32.PostMessageW(windows[0],0x0010,0,0))
+
+def shutdown_owned_obs(root):
+    """After accepted app close, gracefully exit only our verified idle child.
+
+    No process enumeration/adoption, saved PID, kill, output stop, or launch.
+    Missing identity/status evidence leaves OBS untouched, including old orphans.
+    Returned reasons are fixed codes and never include connection credentials.
+    """
+    root=Path(root).resolve()
+    with _obs_process_lock:
+        _obs_closed_roots.add(root)
+        owned=_owned_obs.get(root)
+        if owned is None:return {'status':'not_owned'}
+        process=owned['process']
+        if process.poll() is not None:
+            _owned_obs.pop(root,None)
+            return {'status':'already_exited'}
+        connection=None
+        try:
+            if not _owned_obs_identity(owned):return {'status':'identity_unverified'}
+            connection=obs.ReqClient(host='127.0.0.1',port=owned['port'],password=owned['password'],timeout=2)
+            if not _owned_obs_identity(owned,connection):return {'status':'endpoint_unverified'}
+            # An OBS started by us may subsequently be used from its own UI.
+            # Missing fields, disconnection and active auxiliary outputs are unsafe.
+            for request in ('get_record_status','get_stream_status'):
+                if getattr(getattr(connection,request)(),'output_active',None) is not False:
+                    return {'status':'output_active_or_unknown'}
+            # Disabled replay buffers have no status object (OBS returns 604).
+            # The output inventory covers every instantiated output, including
+            # replay buffers, virtual cameras and outputs created by plugins.
+            outputs=connection.get_output_list().outputs
+            if not isinstance(outputs,list) or any(not isinstance(item,dict)
+                    or item.get('outputActive') is not False for item in outputs):
+                return {'status':'output_active_or_unknown'}
+            if (connection.get_profile_list().current_profile_name!='Experience'
+                    or connection.get_scene_collection_list().current_scene_collection_name!='Experience'):
+                return {'status':'configuration_changed'}
+            if not _owned_obs_identity(owned,connection):return {'status':'identity_unverified'}
+            # Release our WebSocket before asking OBS to stop its server.
+            # Holding it open can delay the child's otherwise normal exit.
+            connection.disconnect()
+            connection=None
+            if not _request_obs_window_close(process):return {'status':'close_not_requested'}
+            try:process.wait(timeout=8)
+            except subprocess.TimeoutExpired:return {'status':'close_unconfirmed'}
+            _owned_obs.pop(root,None)
+            return {'status':'closed'}
+        except Exception:
+            return {'status':'unverified'}
+        finally:
+            if connection is not None:
+                try:connection.disconnect()
+                except Exception:pass
 def ensure_idle(r):
     recording,streaming=wait_obs_ready(r)
     if recording.output_active: raise RuntimeError('OBS 已在录制，未覆盖或停止它。请先处理当前场次。')
@@ -139,17 +239,74 @@ def add(r,name,kind,settings,enabled=True):
     if name in existing: r.set_input_settings(name,settings,True)
     else:r.create_input('Experience',name,kind,settings,enabled)
 def tracks(r,name,nums):r.set_input_audio_tracks(name,{str(i):i in nums for i in range(1,7)})
+def primary_monitor_ids():
+    """Read Windows' primary monitor identity; callers must match actual OBS items.
+
+    OBS monitor properties use the display-interface ID on current releases and
+    the display name on some older ones. Neither list order nor OBS' placeholder
+    default (for example ``DUMMY``) identifies the primary display.
+    """
+    if os.name != 'nt':
+        return ()
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', wintypes.RECT),
+                        ('rcWork', wintypes.RECT), ('dwFlags', wintypes.DWORD),
+                        ('szDevice', wintypes.WCHAR * 32)]
+
+        class DisplayDevice(ctypes.Structure):
+            _fields_ = [('cb', wintypes.DWORD), ('DeviceName', wintypes.WCHAR * 32),
+                        ('DeviceString', wintypes.WCHAR * 128), ('StateFlags', wintypes.DWORD),
+                        ('DeviceID', wintypes.WCHAR * 128), ('DeviceKey', wintypes.WCHAR * 128)]
+
+        user32 = ctypes.WinDLL('user32', use_last_error=True)
+        callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HANDLE, wintypes.HDC,
+                                          ctypes.POINTER(wintypes.RECT), ctypes.c_ssize_t)
+        user32.EnumDisplayMonitors.argtypes = [wintypes.HDC, ctypes.POINTER(wintypes.RECT),
+                                               callback_type, ctypes.c_ssize_t]
+        user32.EnumDisplayMonitors.restype = wintypes.BOOL
+        user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MonitorInfo)]
+        user32.GetMonitorInfoW.restype = wintypes.BOOL
+        user32.EnumDisplayDevicesW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
+                                               ctypes.POINTER(DisplayDevice), wintypes.DWORD]
+        user32.EnumDisplayDevicesW.restype = wintypes.BOOL
+        primary = []
+
+        @callback_type
+        def visit(monitor, _dc, _rect, _data):
+            info = MonitorInfo()
+            info.cbSize = ctypes.sizeof(info)
+            if user32.GetMonitorInfoW(monitor, ctypes.byref(info)) and info.dwFlags & 1:
+                primary.append(info.szDevice)
+            return True
+
+        if not user32.EnumDisplayMonitors(None, None, visit, 0) or len(primary) != 1 or not primary[0]:
+            return ()
+        display = DisplayDevice()
+        display.cb = ctypes.sizeof(display)
+        # EDD_GET_DEVICE_INTERFACE_NAME, read-only; never change display settings.
+        if user32.EnumDisplayDevicesW(primary[0], 0, ctypes.byref(display), 1) and display.DeviceID:
+            return (display.DeviceID, primary[0])
+        return (primary[0],)
+    except Exception:
+        # Optional default suggestions must not prevent device enumeration.
+        return ()
+
 def devices(progress=lambda s:None):
-    r=client(progress=progress);ensure_idle(r)
-    add(r,'设置：麦克风','wasapi_input_capture',{'device_id':'default'},False)
-    add(r,'设置：窗口','window_capture',{},False)
-    add(r,'设置：显示器','monitor_capture',{},False)
-    result={}
-    for key,name,prop in [('mic','设置：麦克风','device_id'),('window','设置：窗口','window'),('monitor','设置：显示器','monitor_id')]:
-        result[key]=r.get_input_properties_list_property_items(name,prop).property_items
-        result[key]=[x for x in result[key] if x.get('itemEnabled') and x.get('itemValue')]
-    for n in ['设置：麦克风','设置：窗口','设置：显示器']:r.remove_input(n)
-    return result
+    with obs_connection(progress=progress) as r:
+        ensure_idle(r)
+        add(r,'设置：麦克风','wasapi_input_capture',{'device_id':'default'},False)
+        add(r,'设置：窗口','window_capture',{},False)
+        add(r,'设置：显示器','monitor_capture',{},False)
+        result={}
+        for key,name,prop in [('mic','设置：麦克风','device_id'),('window','设置：窗口','window'),('monitor','设置：显示器','monitor_id')]:
+            result[key]=r.get_input_properties_list_property_items(name,prop).property_items
+            result[key]=[x for x in result[key] if x.get('itemEnabled') and x.get('itemValue')]
+        for n in ['设置：麦克风','设置：窗口','设置：显示器']:r.remove_input(n)
+        return result
 def configure_scene(r,c,test_file=None):
     ensure_idle(r)
     if r.get_profile_parameter('Output','Mode').parameter_value!='Advanced' or r.get_profile_parameter('AdvOut','RecTracks').parameter_value!='3':
@@ -206,44 +363,208 @@ def session_lock(fn):
     return wrapper
 
 class Session:
-    def __init__(self,path):self.path=Path(path);self.meta=read(self.path/'session.json')
-    def update(self,**kw):self.meta.update(kw);write(self.path/'session.json',self.meta)
+    def __init__(self,path):
+        self.path=Path(path);self.meta=read(self.path/'session.json')
+        self._input_capture=None
+        self._video_seconds=0.0
+        self._input_clock_anchor=None
+        self._input_clock_trusted=None
+    def update(self,**kw):
+        from session_metadata import update_metadata
+        self.meta=update_metadata(self.path,kw)
+    @staticmethod
+    def output_seconds(status):
+        value=getattr(status,'output_duration',None)
+        if type(value) in (int,float) and math.isfinite(value) and value>=0:return value/1000.0
+        code=getattr(status,'output_timecode','')
+        if isinstance(code,str):
+            try:
+                hours,minutes,seconds=code.split(':')
+                value=int(hours)*3600+int(minutes)*60+float(seconds)
+                if math.isfinite(value) and value>=0:return value
+            except (ValueError,TypeError):pass
+        raise RuntimeError('OBS 尚未返回录像时间，无法同步操作记录。')
+    def await_input_clock(self,client,status,before,after):
+        """Confirm an advancing output clock before creating any input listener.
+
+        OBS acknowledges output_active before its encoder emits frames. A zero
+        duration at that point cannot anchor wall time to video time. Require
+        three positive samples, two increments and a short stable span instead;
+        the collector will mark all video before listener readiness as a gap.
+        This bounded startup check never weakens ongoing pause/drift detection.
+        """
+        deadline=after+5
+        candidate=previous=None
+        increments=0
+        for _ in range(51):
+            if not getattr(status,'output_active',False):
+                raise RuntimeError('OBS 已停止输出，未启动操作采集。')
+            if getattr(status,'output_paused',False) is True:
+                raise RuntimeError('OBS 启动时已暂停，未启动操作采集。')
+            try:seconds=self.output_seconds(status)
+            except RuntimeError:seconds=None
+            midpoint=(before+after)/2
+            uncertainty=max(0,(after-before)/2)
+            if seconds is not None:self._video_seconds=seconds
+            if seconds is None or seconds<=0 or uncertainty>.1:
+                candidate=previous=None
+                increments=0
+            else:
+                sample=(midpoint,seconds,uncertainty)
+                if candidate is not None:
+                    elapsed=midpoint-candidate[0]
+                    progressed=seconds-candidate[1]
+                    if seconds>previous[1] and abs(progressed-elapsed)<=.1+candidate[2]+uncertainty:
+                        increments+=1
+                        if increments>=2 and elapsed>=.15:return status,before,after
+                    else:
+                        candidate=None
+                if candidate is None:
+                    candidate=sample
+                    increments=0
+                previous=sample
+            if after>=deadline:break
+            time.sleep(.1)
+            before=time.perf_counter()
+            status=client.get_record_status()
+            after=time.perf_counter()
+        raise RuntimeError('OBS 录像时间尚未稳定递增，未启动操作采集；录像仍会保留。')
+    def observe_input_clock(self,status,before,after):
+        """Fail closed on a paused/discontinuous OBS clock; never retime facts.
+
+        Request midpoint estimates carry half-roundtrip uncertainty. Every sample
+        is compared to the initial anchor, so small persistent drift cannot hide
+        by being accepted one short interval at a time.
+        """
+        if self._input_capture is None:return False
+        midpoint=(before+after)/2
+        uncertainty=max(0,(after-before)/2)
+        try:seconds=self.output_seconds(status)
+        except RuntimeError:
+            cutoff=(self._input_clock_trusted or (0,0,0))[1]
+            self.finish_inputs(cutoff,interrupted=True,trim_to=cutoff,error='录像时钟暂不可确认，操作采集已停止。')
+            return False
+        self._video_seconds=seconds
+        if getattr(status,'output_paused',False) is True:
+            self.finish_inputs(seconds,interrupted=True,trim_to=seconds,error='OBS 已暂停录像，操作采集已停止；恢复录像后不补写未知操作。')
+            self.update(warning='OBS 暂停导致操作采集中断，后续录像区间将标记为缺口。')
+            return False
+        sample=(midpoint,seconds,uncertainty)
+        anchor=self._input_clock_anchor
+        if anchor is None:
+            self._input_clock_anchor=self._input_clock_trusted=sample
+            return True
+        expected=anchor[1]+midpoint-anchor[0]
+        tolerance=.25+anchor[2]+uncertainty
+        if abs(seconds-expected)>tolerance:
+            cutoff=self._input_clock_trusted[1]
+            self.finish_inputs(max(cutoff,seconds),interrupted=True,trim_to=cutoff,error='录像时钟与操作时钟不连续，已保留上次可信校准前的操作；后续区间不能恢复。')
+            self.update(warning='检测到暂停或录像时钟变化，操作采集已停止并标记数据缺口。')
+            return False
+        # Slow replies may confirm continuity but are not better trim points.
+        if uncertainty<=.5:
+            self._input_clock_trusted=sample
+            self.update(input_clock={**self.meta.get('input_clock',{}),'last_verified_seconds':seconds})
+        return True
+    def finish_inputs(self,duration=None,*,interrupted=False,error=None,trim_to=None):
+        capture=self._input_capture
+        self._input_capture=None
+        if capture is not None:
+            try:
+                if interrupted and trim_to is None and self._input_clock_trusted is not None:
+                    trim_to=self._input_clock_trusted[1]
+                options={'duration':duration,'interrupted':interrupted,'error':error}
+                if trim_to is not None:options['trim_to']=trim_to
+                result=capture.stop(**options)
+                if result.get('version')==1 and trim_to is not None:
+                    endpoint=max(float(result.get('duration',0)),float(duration or 0))
+                    if endpoint>result['duration']:
+                        result.setdefault('gaps',[]).append(dict(start=result['duration'],end=endpoint,type='capture',reason=error or '操作时钟无法继续确认'))
+                        result['duration']=endpoint
+                        write(self.path/'input-events.json',result)
+                self.update(input_state=result.get('state','failed'))
+            except Exception:
+                self.update(input_state='failed',input_error='操作记录未能完整保存，原始录像不受影响。')
+        elif self.meta.get('settings',{}).get('record_inputs'):
+            # A recovered recording has no listener owned by this process. Never
+            # resume global capture silently or claim that the gap had no input.
+            path=self.path/'input-events.json'
+            try:
+                data=read(path) if path.is_file() else {'state':'recording'}
+                was_recording=self.meta.get('state') in ('录制中','启动中','保存中') or self.meta.get('recording_uncertain')
+                if data.get('state') in ('recording','prepared') or (interrupted and was_recording and data.get('state') == 'complete'):
+                    verified=self.meta.get('input_clock',{}).get('last_verified_seconds')
+                    if trim_to is None and type(verified) in (int,float) and math.isfinite(verified) and verified>=0:
+                        trim_to=verified
+                    from input_capture import recover_capture
+                    recover_capture(self.path,duration,error=error or '操作采集已中断；未记录的区间不能恢复。',trim_to=trim_to)
+                    self.update(input_state='interrupted')
+            except Exception:
+                self.update(input_state='failed',input_error='操作记录文件无法恢复，原始录像不受影响。')
     @classmethod
     def start(cls,c,test_file=None):
-        r=client();ensure_idle(r)
-        vault=Path(c['vault']);vault.mkdir(parents=True,exist_ok=True)
-        if shutil.disk_usage(vault).free<5*1024**3:raise RuntimeError('保存盘可用空间不足 5 GB。请清理或更换保存位置。')
-        configure_scene(r,c,test_file)
-        ident=datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]
-        game=re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',c['game']).strip(' .')[:60] or '自由探索'
-        folder=vault/'场次'/f'{ident} {game}';folder.mkdir(parents=True)
-        write(folder/'session.json',dict(id=ident,game=c['game'],created=datetime.now().astimezone().isoformat(),state='待开始',settings=session_settings(c),test=bool(test_file),audio_layout={'track1':'游戏与口述混音，仅回放','track2':'独立口述，唯一转写输入','ffmpeg_map':'0:a:1'}))
-        s=cls(folder);s.update(state='启动中')
-        try:
-            r.send('SetRecordDirectory',{'recordDirectory':str(folder)})
-            s.update(state='录制中',started=time.time())
-            r.start_record()
-            for _ in range(100):
-                if r.get_record_status().output_active:break
-                time.sleep(0.1)
-            else:raise RuntimeError('OBS 尚未确认录制状态，请在场次列表恢复后检查。')
-        except Exception as e:s.update(state='失败',error=str(e));raise
-        return s
+        with obs_connection() as r:
+            ensure_idle(r)
+            vault=Path(c['vault']);vault.mkdir(parents=True,exist_ok=True)
+            if shutil.disk_usage(vault).free<5*1024**3:raise RuntimeError('保存盘可用空间不足 5 GB。请清理或更换保存位置。')
+            configure_scene(r,c,test_file)
+            ident=datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]
+            game=re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',c['game']).strip(' .')[:60] or '自由探索'
+            folder=vault/'场次'/f'{ident} {game}';folder.mkdir(parents=True)
+            write(folder/'session.json',dict(id=ident,game=c['game'],created=datetime.now().astimezone().isoformat(),state='待开始',settings=session_settings(c),test=bool(test_file),audio_layout={'track1':'游戏与口述混音，仅回放','track2':'独立口述，唯一转写输入','ffmpeg_map':'0:a:1'}))
+            s=cls(folder);s.update(state='启动中')
+            try:
+                from input_capture import prepare_capture
+                s._input_capture=prepare_capture(c,folder,root=ROOT)
+                r.send('SetRecordDirectory',{'recordDirectory':str(folder)})
+                s.update(state='录制中',started=time.time())
+                r.start_record()
+                for _ in range(100):
+                    before=time.perf_counter()
+                    state=r.get_record_status()
+                    after=time.perf_counter()
+                    if state.output_active:break
+                    time.sleep(0.1)
+                else:raise RuntimeError('OBS 尚未确认录制状态，请在场次列表恢复后检查。')
+                if s._input_capture is not None:
+                    try:
+                        state,before,after=s.await_input_clock(r,state,before,after)
+                        s._video_seconds=s.output_seconds(state)
+                        if not s.observe_input_clock(state,before,after):
+                            return s
+                        s._input_capture.start(origin=(before+after)/2,video_offset=s._video_seconds)
+                        s.update(input_state='recording',input_clock={'basis':'OBS output_duration','initial_seconds':s._video_seconds,'last_verified_seconds':s._video_seconds,'uncertainty_seconds':(after-before)/2})
+                    except Exception:
+                        s.finish_inputs(s._video_seconds,error='操作采集启动失败或无法取得录像时钟；录像仍在继续。')
+                        s.update(warning='操作采集未能启动，录像仍在继续。')
+            except Exception as e:
+                s.finish_inputs(s._video_seconds,interrupted=True,error='录制启动未确认，操作采集已停止。')
+                s.update(state='失败',error=str(e));raise
+            return s
     def stop(self):
-        r=client(False)
-        directory=Path(r.send('GetRecordDirectory').record_directory)
-        if directory.resolve()!=self.path.resolve():raise RuntimeError('OBS 录制目录不属于本场次，已拒绝停止其他录制。')
-        if r.get_record_status().output_active:
-            self.update(state='保存中')
-            output=Path(r.stop_record().output_path)
-            self.update(recording_file=output.name)
-            for _ in range(120):
-                if not r.get_record_status().output_active:break
-                time.sleep(0.5)
-            else:raise RuntimeError('OBS 尚未完成停止，请稍后重试。')
-        self.adopt_recording()
-        # Release capture devices after recording; a later session rebuilds them.
-        for item in r.get_input_list().inputs:r.remove_input(item['inputName'])
+        with obs_connection(False) as r:
+            directory=Path(r.send('GetRecordDirectory').record_directory)
+            if directory.resolve()!=self.path.resolve():raise RuntimeError('OBS 录制目录不属于本场次，已拒绝停止其他录制。')
+            before=time.perf_counter()
+            status=r.get_record_status()
+            after=time.perf_counter()
+            self.observe_input_clock(status,before,after)
+            try:self._video_seconds=self.output_seconds(status)
+            except RuntimeError:pass
+            # Stop listeners before a stop request can block or lose acknowledgement.
+            self.finish_inputs(self._video_seconds)
+            if status.output_active:
+                self.update(state='保存中')
+                output=Path(r.stop_record().output_path)
+                self.update(recording_file=output.name)
+                for _ in range(120):
+                    if not r.get_record_status().output_active:break
+                    time.sleep(0.5)
+                else:raise RuntimeError('OBS 尚未完成停止，请稍后重试。')
+            self.adopt_recording()
+            # Release capture devices after recording; a later session rebuilds them.
+            for item in r.get_input_list().inputs:r.remove_input(item['inputName'])
+            self.prepare_video()
     def adopt_recording(self):
         raw=self.path/'原始录像.mkv'
         if not raw.exists():
@@ -270,6 +591,45 @@ class Session:
             data=probe(recovered);source=recovered
         if data['audio']<2 or data['video']!=1 or data['duration']<=0:raise RuntimeError('录像缺少画面或独立口述音轨，已保留原文件。')
         self.update(state='待整理',media=data,processing_source=source.name)
+    def prepare_video(self,progress=lambda text:None):
+        p=self.path;duration=self.meta['media']['duration'];video=p/'录像.mp4'
+        # Published playback media is immutable during retranscription, including
+        # while a native viewer holds it open. Only the first remux publishes it.
+        if video.is_file():
+            info=probe(video)
+        else:
+            progress('生成可回看的 MP4，保留原始 MKV…')
+            self.update(step='生成回看录像')
+            source=p/self.meta.get('processing_source','原始录像.mkv')
+            run(['-i',source,'-map','0:v:0','-map','0:a:0','-c','copy','-movflags','+faststart',p/'录像.pending.mp4'],p/'处理日志.txt')
+            info=probe(p/'录像.pending.mp4')
+            if abs(info['duration']-duration)>0.5:raise RuntimeError('回看录像与原始录像时长不一致。')
+            os.replace(p/'录像.pending.mp4',video)
+        if abs(info['duration']-duration)>0.5:raise RuntimeError('回看录像与原始录像时长不一致。')
+        # Listeners stop before OBS finalization. Explicitly show the short tail
+        # rather than representing unobserved final frames as "no input".
+        inputs=p/'input-events.json'
+        if inputs.is_file() and self._input_capture is None:
+            try:
+                data=read(inputs)
+                observed=float(data.get('duration',0))
+                if data.get('state') in ('complete','failed','interrupted') and duration>observed+.001:
+                    reason='操作采集已结束，录像正在完成保存' if data.get('state')=='complete' else '操作采集中断，此区间没有可靠操作数据'
+                    data.setdefault('gaps',[]).append(dict(start=observed,end=duration,type='capture',reason=reason))
+                    data['duration']=duration
+                    write(inputs,data)
+            except (OSError,ValueError,TypeError):pass
+        self.update(video_ready=True)
+        if not (p/'复盘.md').exists():(p/'复盘.md').write_text('# 复盘\n\n## 回看记录\n\n## Insight\n\n## 待验证\n\n',encoding='utf-8')
+        try:
+            transcript=read(p/'录像.whisper.json')['segments'] if (p/'录像.whisper.json').is_file() else []
+            if not isinstance(transcript,list):raise ValueError('逐字稿条目无效')
+            valid_segments(transcript,duration)
+        except (OSError,ValueError,TypeError,KeyError,RuntimeError):
+            # The old bytes were archived by process() before retranscription.
+            # A corrupt old transcript must not prevent generating a successor.
+            transcript=[]
+        make_player(p,self.meta,transcript)
     @session_lock
     def process(self,progress=lambda text:None,transcription_settings=None):
         try:
@@ -288,15 +648,10 @@ class Session:
                     (version/'旧版打开说明.md').write_text('# 旧版逐字稿\n\n此目录保留重新转写前的文字与设置。[原场次录像](../../录像.mp4)和[复盘](../../复盘.md)仍在场次目录。\n\n[查看旧版逐字稿](逐字稿.md)。原始分段结果的位置记录在“版本说明.json”中。\n',encoding='utf-8')
                     progress('旧版逐字稿已保留，开始重新转写…')
                 self.update(settings=session_settings(transcription_settings))
-            self.update(step='检查原始录像');self.adopt_recording();self.update(state='转写中',error=None)
+            self.update(step='检查原始录像');self.adopt_recording();self.update(state='转写中',transcription_state='pending',error=None)
             p=self.path;log=p/'处理日志.txt';duration=self.meta['media']['duration']
             source=p/self.meta.get('processing_source','原始录像.mkv')
-            progress('生成可回看的 MP4，保留原始 MKV…')
-            self.update(step='生成回看录像')
-            run(['-i',source,'-map','0:v:0','-map','0:a:0','-c','copy','-movflags','+faststart',p/'录像.pending.mp4'],log)
-            info=probe(p/'录像.pending.mp4')
-            if abs(info['duration']-duration)>0.5:raise RuntimeError('回看录像与原始录像时长不一致。')
-            os.replace(p/'录像.pending.mp4',p/'录像.mp4')
+            self.prepare_video(progress)
             progress('提取独立口述音轨（保留静音与时间位置）…')
             self.update(step='提取口述音轨')
             run(['-i',source,'-map','0:a:1','-af','aresample=16000:async=1:first_pts=0','-ac','1','-c:a','flac',p/'口述.flac'],log)
@@ -358,36 +713,60 @@ class Session:
             (p/'逐字稿.md').write_text('# 口述逐字稿\n\n机器转写未经校对；原话、改口与疑问不转成设计结论。音频是最终依据。\n\n'+(warning+'\n\n' if warning else '')+ '\n\n'.join(f'[{stamp(s["start"])}](录像.mp4#t={s["start"]}) {s["text"]}' for s in all_segments),encoding='utf-8')
             (p/'场次说明.md').write_text(f'# {self.meta["game"]}\n\n场次 ID：`{self.meta["id"]}`\n\n开始：{self.meta["created"]}\n\n录像时长：{stamp(duration)}\n\n[同步回看](录像.mp4) · [[逐字稿]] · [[复盘]]\n\n引用格式：`{self.meta["id"]} @ 00:12:03.200–00:12:18.500`\n\n原始录像.mkv：音轨1 游戏与口述混音；音轨2 独立口述。\n\n口述.flac 保留录制时间位置；录像.mp4 保留画面与混音，无重编码。\n\n自动逐字稿可能漏字、误识别和不精确分句，请结合原声校对。\n',encoding='utf-8')
             if not (p/'复盘.md').exists():(p/'复盘.md').write_text('# 复盘\n\n## 回看记录\n\n## Insight\n\n## 待验证\n\n',encoding='utf-8')
-            make_player(p,self.meta,all_segments)
             warning=warning or ('未识别出语音，请检查原声。' if not all_segments else '')
-            self.update(state='可回看',segments=len(all_segments),completed=datetime.now().astimezone().isoformat(),warning=warning)
+            self.update(state='可回看',transcription_state='ready',segments=len(all_segments),completed=datetime.now().astimezone().isoformat(),warning=warning)
+            make_player(p,self.meta,all_segments)
             progress(warning or '可回看')
         except Exception as e:
             error=f'{self.meta.get("step","整理")}：{e}'
             history=self.meta.get('error_history',[]);history.append({'time':datetime.now().astimezone().isoformat(),'error':error})
-            self.update(state='失败',error=error,error_history=history);raise RuntimeError(error) from e
+            self.update(state='失败',transcription_state='failed',error=error,error_history=history)
+            if (self.path/'录像.mp4').is_file():
+                try:make_player(self.path,self.meta,[])
+                except Exception:pass
+            raise RuntimeError(error) from e
     @session_lock
     def package(self):
-        if self.meta['state']!='可回看':raise RuntimeError('整理完成后才能打包。')
+        from session_metadata import metadata_lock
+        with metadata_lock(self.path):
+            metadata_bytes=(self.path/'session.json').read_bytes()
+            metadata=json.loads(metadata_bytes)
+        if metadata['state']!='可回看':raise RuntimeError('整理完成后才能打包。')
         folder=self.path;vault=folder.parent.parent;dest=vault/'打包';dest.mkdir(exist_ok=True)
-        target=dest/(self.meta['id']+'-'+datetime.now().strftime('%H%M%S')+'.zip');tmp=target.with_suffix('.partial')
+        from review_runtime import render_player,review_payload,input_payload
+        transcript=folder/'录像.whisper.json'
+        payload=review_payload(folder,metadata,read(transcript)['segments']) if transcript.is_file() else None
+        public_inputs=payload['inputs'] if payload is not None else input_payload(folder,metadata)
+        input_bytes=json.dumps(public_inputs,ensure_ascii=False,separators=(',',':'),allow_nan=False).encode('utf-8')
+        target=dest/(metadata['id']+'-'+datetime.now().strftime('%H%M%S')+'.zip');tmp=target.with_suffix('.partial')
         hashes={}
         with zipfile.ZipFile(tmp,'w',compression=zipfile.ZIP_STORED,allowZip64=True) as z:
             for src in folder.rglob('*'):
                 if src.is_file() and not src.name.endswith(('.tmp','.pending.mp4','.lock')):
-                    rel=Path('场次')/folder.name/src.relative_to(folder);z.write(src,str(rel))
-                    if src.suffix not in ['.md','.txt','.html']:hashes[rel.as_posix()]=sha256(src)
-            # A user's vault may contain unrelated plugin credentials. Ship only
-            # our audited review template, never the user's .obsidian directory.
-            review_files=('community-plugins.json','app.json','appearance.json',
-                'plugins/experience-opener/main.js','plugins/experience-opener/manifest.json',
-                'plugins/media-transcript/main.js','plugins/media-transcript/manifest.json',
-                'plugins/media-transcript/styles.css','plugins/media-transcript/LICENSE',
-                'plugins/media-transcript/data.json')
-            template=ROOT/'vault-template/.obsidian'
-            for relative in review_files:
-                src=template/relative
-                if src.is_file() and not src.is_symlink():z.write(src,'.obsidian/'+relative)
+                    if src.parent==folder and src.name.startswith('input-events.') and src.name!='input-events.json':
+                        # Recovery journals and revocation fences are local-only.
+                        continue
+                    rel=Path('场次')/folder.name/src.relative_to(folder)
+                    if src.name == '独立回看.html' and src.parent == folder:
+                        continue
+                    if src.name == 'session.json' and src.parent == folder:
+                        # Renaming may continue while large media files are being
+                        # copied. Metadata, title, and digest share one snapshot.
+                        z.writestr(rel.as_posix(),metadata_bytes)
+                        hashes[rel.as_posix()]=hashlib.sha256(metadata_bytes).hexdigest()
+                    elif src.name=='input-events.json' and src.parent==folder:
+                        z.writestr(rel.as_posix(),input_bytes)
+                        hashes[rel.as_posix()]=hashlib.sha256(input_bytes).hexdigest()
+                    else:
+                        digest=hashlib.sha256()
+                        with src.open('rb') as source,z.open(rel.as_posix(),'w',force_zip64=True) as output:
+                            for block in iter(lambda:source.read(8*1024*1024),b''):
+                                output.write(block)
+                                digest.update(block)
+                        if src.suffix not in ['.md','.txt','.html']:hashes[rel.as_posix()]=digest.hexdigest()
+            if payload is not None:
+                page = render_player(ROOT,payload)
+                z.writestr((Path('场次') / folder.name / '独立回看.html').as_posix(), page)
             z.writestr('校验清单.json',json.dumps(hashes,ensure_ascii=False,indent=2))
             z.writestr('办公室打开说明.md',OFFICE)
         with zipfile.ZipFile(tmp) as z:
@@ -403,9 +782,19 @@ def valid_segments(segments,duration):
     for s in segments:
         if not (0<=s['start']<=s['end']<=duration+0.05 and s['start']>=last):raise RuntimeError('字幕时间轴校验失败。')
         last=s['start']
-OFFICE='''# 办公室回看\n\n完整解压 ZIP（含 .obsidian）到任意文件夹。在 Obsidian 中选择“打开本地仓库”，选择解压后的根目录，并启用已附带的 Media Transcript 和 Experience Opener 插件。打开场次内 录像.mp4；若出现普通视频，右键选择 Open in Media Transcript。\n\n也可以双击场次内“独立回看.html”，用本地浏览器并排回看与点击逐字稿，无需安装录制或转写引擎。\n\n在 复盘.md 写自己的复盘与 insight。引用场次 ID + 起止时间。仅传回改过的 Markdown；不要替换原录像或原始转写。跨场次分析另建 Markdown 文件。没有自动联网或云同步。\n\n更换家庭保存位置时，先把完整资料库复制过去，再在记录器设置里选择新目录。\n'''
-def make_player(p,meta,segments):
-    import html
-    data=json.dumps(segments,ensure_ascii=False).replace('<','\\u003c')
-    template=(ROOT/'player.html').read_text(encoding='utf-8')
-    (p/'独立回看.html').write_text(template.replace('%%TITLE%%',html.escape(meta['game'])).replace('%%ID%%',meta['id']).replace('%%DATA%%',data),encoding='utf-8')
+OFFICE = """# 办公室回看
+
+完整解压 ZIP，在记录器中选择资料库并打开场次回看，也可以双击场次内的“独立回看.html”。网页内已包含播放器资源，无需联网或安装录制、转写引擎。
+
+回看窗口支持多开、点击逐字稿定位录像、空格播放/暂停、方向键前后 15 秒。视频下方可打开资料文件夹并复制路径。直接用浏览器打开网页时，“打开所在文件夹”会复制路径，可粘贴到文件资源管理器。
+
+在“复盘.md”记录自己的复盘与 insight。引用场次 ID + 起止时间。保留原录像、原始转写与手写笔记；没有自动联网或云同步。
+
+迁移时复制完整资料库，再在记录器设置中选择新目录。可将场次文件夹路径交给 agent 分析录像、逐字稿与复盘。
+"""
+
+def make_player(p, meta, segments):
+    from review_runtime import render_player, review_payload
+    temporary=p/('独立回看.html.'+uuid.uuid4().hex+'.tmp')
+    temporary.write_text(render_player(ROOT, review_payload(p, meta, segments)), encoding='utf-8')
+    os.replace(temporary,p/'独立回看.html')

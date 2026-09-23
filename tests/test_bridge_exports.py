@@ -19,14 +19,15 @@ EXPECTED_EXPORTS = {
     'save_preset': ['payload', 'preset_id'],
     'select_preset': ['id'],
     'choose_directory': ['kind'],
-    'choose_obsidian': [],
     'import_hotwords': ['current_text'],
     'choose_hotword_files': [],
     'open_dictionary_site': [],
+    'open_bailian_console': [],
     'start_recording': ['payload'],
     'stop_recording': [],
     'process_session': ['id'],
-    'open_review': ['id', 'mode'],
+    'open_review': ['id'],
+    'rename_session': ['id', 'name'],
     'package_session': ['id'],
     'open_folder': ['id'],
     'open_raw': ['id'],
@@ -34,7 +35,7 @@ EXPECTED_EXPORTS = {
     'verify_cloud_key': [],
     'recover_cloud_task': ['id', 'task_id'],
     'model_action': ['action', 'path'],
-    'open_official_obsidian': [],
+    'update_action': ['payload'],
 }
 
 

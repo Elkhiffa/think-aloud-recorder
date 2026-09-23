@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>操作回看 · ThinkAloud</title>
+  <link rel="stylesheet" href="prototype.css">
+  <script src="fixture.js" defer></script>
+  <script src="prototype.js" defer></script>
+</head>
+<body>
+  <header class="review-header">
+    <div class="review-brand">
+      <span class="review-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M4 16C4 10 7 7 13 6v4c-3 1-4 3-4 5h4v10H4Z"/><path d="M16 16c0-6 3-9 9-10v4c-3 1-4 3-4 5h4v10h-9Z"/><path d="M30 3h6v35l-3-4-3 4Z"/></svg></span>
+      <div><h1>回看</h1><p class="session-info" id="session-title">通道入口 · 操作回看</p></div>
+    </div>
+    <div class="header-actions"><span class="review-wordmark">ThinkAloud</span><button class="theme-button" id="theme-toggle" aria-label="切换至深色主题" title="切换主题"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.7 14A8.9 8.9 0 0 1 10 3.3 9 9 0 1 0 20.7 14Z"/></svg></button></div>
+  </header>
+
+  <main class="review-layout">
+    <section class="video-column" aria-label="录制视频与当前操作">
+      <div class="player">
+        <div class="video-slot"><video id="video" preload="auto" muted playsinline aria-label="合成的游戏回看视频"></video><div class="video-error" id="video-error" hidden>示例视频未能加载。请通过本地预览服务打开此原型。</div></div>
+        <div class="player-controls">
+          <button id="play" class="play-button" aria-label="播放"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 4 10 6-10 6Z"/></svg></button>
+          <span class="player-time"><span id="current-time">00:04.8</span><span class="time-divider"> / </span><span id="duration">00:32</span></span>
+          <input id="seek" type="range" min="0" max="32" step="0.01" value="4.8" aria-label="视频进度">
+          <label class="speed-select"><span class="sr-only">播放倍速</span><select id="speed" aria-label="播放倍速"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+        </div>
+      </div>
+
+      <section class="input-panel" aria-labelledby="input-heading">
+        <div class="input-heading"><h2 id="input-heading">当前操作</h2><div class="mode-switch" role="group" aria-label="操作面板显示方式"><button data-mode="keys" class="selected" aria-pressed="true">当前按键</button><button data-mode="device" aria-pressed="false">设备图</button><button data-mode="collapsed" aria-pressed="false" title="收起操作内容">收起</button></div></div>
+        <div class="input-body" id="input-body">
+          <div class="input-meta"><span id="input-source">键盘 + 鼠标</span><span class="input-live" id="input-summary">对应视频时刻</span><label class="device-select" id="device-select-label" hidden><span class="sr-only">设备显示方式</span><select id="device-select" aria-label="设备显示方式"><option value="auto">自动 · 跟随记录来源</option><option value="keyboard">锁定 · 键盘 + 鼠标</option><option value="xbox">锁定 · Xbox</option><option value="dualsense">锁定 · DualSense</option></select></label></div>
+          <div id="current-keys" class="current-keys" aria-label="当前时刻的操作"></div>
+          <div id="device-view" class="device-view" hidden></div>
+          <div id="input-gap" class="input-gap" hidden><span class="gap-symbol" aria-hidden="true">Ⅱ</span><div><strong id="gap-title">暂停采集</strong><p id="gap-detail"></p></div></div>
+          <p class="input-hint" id="input-hint">暖红填充表示此刻按住或持续中的操作</p>
+        </div>
+        <p class="collapsed-summary" id="collapsed-summary" hidden>操作面板已收起 · 仍可在右侧定位历史操作</p>
+      </section>
+    </section>
+
+    <aside class="history-panel" aria-label="操作历史和原话">
+      <div class="history-heading"><div class="history-tabs" role="tablist" aria-label="回看内容"><button id="timeline-tab" role="tab" aria-selected="true" aria-controls="timeline-panel" class="selected">操作时间轴</button><button id="transcript-tab" role="tab" aria-selected="false" aria-controls="transcript-panel" disabled>转写中</button></div><button id="follow" class="follow-button" aria-pressed="true" title="自动跟随视频当前时刻"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5M2 3v10"/></svg><span>跟随中</span></button></div>
+      <div class="history-subheading" id="history-subheading"><div class="track-headings"><span>时间</span><span>原话</span><span id="input-track-headings">操作</span></div></div>
+      <section id="timeline-panel" role="tabpanel" aria-labelledby="timeline-tab" class="history-content"><div id="timeline-scroll" class="history-scroll" tabindex="0" aria-label="连续时间轴，时间自上而下，点击按键条定位视频"><div id="timeline" class="timeline"><div id="time-scale" class="time-scale" aria-hidden="true"></div><div id="gap-layer" class="gap-layer"></div><div id="quote-track" class="quote-track" aria-label="原话轨"></div><div id="key-track" class="key-track" aria-label="操作轨"></div><div id="playhead" class="playhead"><span id="playhead-time"></span></div></div></div></section>
+      <section id="transcript-panel" role="tabpanel" aria-labelledby="transcript-tab" class="history-content" hidden><div id="transcript-scroll" class="history-scroll transcript-scroll" tabindex="0" aria-label="原话，点击任一行定位视频"><div id="transcript-lines"></div></div></section>
+      <div class="history-footer"><span id="history-count">按真实持续时间排列</span><span>按键定位 · 原话展开</span></div>
+    </aside>
+  </main>
+
+  <footer class="demo-controls" aria-label="交互原型演示控制">
+    <span class="demo-label">交互原型 <span>· 合成数据</span></span>
+    <label class="demo-scene"><span>示例片段</span><select id="scene" aria-label="跳转示例片段"><option value="4.8">组合与长按</option><option value="10.5">切出窗口</option><option value="17">Xbox 手柄</option><option value="25.3">DualSense 手柄</option></select></label>
+    <label class="demo-scene"><span>对照方案</span><select id="track-layout" aria-label="时间轴对照方案"><option value="compact">紧凑排列</option><option value="directional">固定方向轨</option></select></label>
+    <label class="zoom-label"><span class="sr-only">时间轴缩放</span><select id="timeline-zoom" aria-label="时间轴缩放"><option value="40">时间缩放 · 紧凑</option><option value="60" selected>时间缩放 · 标准</option><option value="100">时间缩放 · 放大</option><option value="160">时间缩放 · 细看短按</option></select></label>
+    <div class="demo-transcript"><button id="transcript-ready">模拟转写完成</button><button id="transcript-reset" title="将转写恢复为进行中">重置转写</button><button id="transcript-fail" title="模拟转写失败，视频与操作仍可回看">模拟失败</button></div>
+    <span class="sr-only" id="announcement" role="status" aria-live="polite"></span>
+  </footer>
+  <div id="quote-popover" class="quote-popover" role="dialog" aria-label="原话全文" hidden><div class="quote-popover-heading"><span id="quote-popover-time"></span><span id="quote-pinned" hidden>已固定</span><button id="quote-close" aria-label="关闭原话卡片">×</button></div><p id="quote-popover-text"></p><button id="quote-seek">定位到这里</button></div>
+</body>
+</html>

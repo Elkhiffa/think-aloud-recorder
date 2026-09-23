@@ -19,50 +19,43 @@ class DesktopShellTests(unittest.TestCase):
             with app.instance_lock(Path(d)):
                 pass
 
-    def test_native_close_is_cancelled_for_active_work(self):
-        minimized = threading.Event()
-        window = Mock()
-        window.minimize.side_effect = minimized.set
-        service = Mock()
-        service.close_allowed.return_value = False
-        self.assertFalse(app.build_close_guard(service, window)())
-        self.assertTrue(minimized.wait(1))
-        service.close_allowed.assert_called_once_with()
-
-    def test_close_failure_never_allows_unconfirmed_shutdown(self):
-        service = Mock()
-        service.close_allowed.side_effect = RuntimeError('service unavailable')
-        self.assertFalse(app.build_close_guard(service, Mock())())
-
-    def test_only_confirmed_idle_allows_close(self):
-        for response in (None, {}, {'ok': False}, {'ok': True, 'data': {}}, 'true', 1):
-            with self.subTest(response=response):
-                self.assertFalse(app._close_is_allowed(response))
-        service, window = Mock(), Mock()
-        service.close_allowed.return_value = True
-        self.assertTrue(app.build_close_guard(service, window)())
-        window.minimize.assert_not_called()
-
     def test_shell_uses_local_ui_native_frame_and_webview2(self):
         webview = Mock()
+        webview.settings = {}
         service_module = Mock()
         window = webview.create_window.return_value
-        window.events.closing = []
         # pywebview event supports += callback; model that behavior for the shell.
         class Event:
+            def __init__(self):
+                self.handlers = []
             def __iadd__(self, handler):
-                self.handler = handler
+                self.handlers.append(handler)
                 return self
+            def fire(self):
+                for handler in self.handlers:
+                    handler()
         window.events.closing = Event()
+        window.events.closed = Event()
+        window.events.loaded = Event()
         with patch.dict('sys.modules', {'webview': webview, 'desktop_service': service_module}), \
-                patch.object(app, 'instance_lock', return_value=nullcontext()):
+                patch.object(app, 'instance_lock', return_value=nullcontext()), \
+                patch('update_installer.ensure_launch_allowed') as launch_guard, \
+                patch('update_installer.acknowledge_start') as acknowledge:
+            def native_loop(**kwargs):
+                acknowledge.assert_not_called()
+                window.events.loaded.fire()
+            webview.start.side_effect = native_loop
             self.assertEqual(app.main(), 0)
+            root = Path(app.__file__).resolve().parent
+            launch_guard.assert_called_once_with(root)
+            acknowledge.assert_called_once_with(root)
         kwargs = webview.create_window.call_args.kwargs
         self.assertTrue(kwargs['url'].startswith('file:///'))
         self.assertEqual(kwargs['min_size'], (820, 620))
         self.assertFalse(kwargs['frameless'])
         self.assertEqual(webview.start.call_args.kwargs['gui'], 'edgechromium')
         service_module.DesktopService.return_value.set_window.assert_called_once_with(window)
+        service_module.DesktopService.return_value.shutdown.assert_called_once_with()
 
 
 if __name__ == '__main__':

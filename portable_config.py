@@ -137,7 +137,7 @@ def _initialize_locked(root, identity):
         'source': '游戏窗口', 'window': '', 'monitor': '', 'mic': 'default',
         'game': '自由探索', 'model': 'large-v3', 'device': 'cpu',
         'compute_type': 'float32', 'transcription_provider': 'later',
-        'hotwords': '', 'configured': False, 'games': {},
+        'hotwords': '', 'configured': False, 'games': {}, 'record_inputs': False,
     }
     previous_root = cfg.get('_portable_root')
     changed_machine = cfg.get('_portable_machine') != identity
