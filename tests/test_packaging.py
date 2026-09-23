@@ -212,6 +212,32 @@ class PackagingTests(unittest.TestCase):
             self.make(candidate=False)
         self.assertFalse((self.base / 'out').exists())
 
+    def test_dependency_notices_use_short_deduplicated_paths(self):
+        from scripts.build_portable import compact_dependency_notices
+        content = b'Original upstream notice\r\nUnmodified bytes\r\n'
+        prefix = 'licenses/dependency-materials/'
+        first = prefix + 'native/extracted-notices/libdatachannel-deps-libjuice-' + 'a' * 40 + '.tar.gz/LICENSE'
+        second = prefix + 'native/another-source/LICENSE'
+        self.write(first, content)
+        self.write(second, content)
+        result = self.make()
+        with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
+            index = json.loads(archive.read(prefix + 'index.json'))
+            records = index['files']
+            self.assertEqual(len(records), 2)
+            self.assertEqual(records[0]['file'], records[1]['file'])
+            self.assertEqual({r['origin'] for r in records}, {first[len(prefix):], second[len(prefix):]})
+            target = prefix + records[0]['file']
+            self.assertLess(len(target), 110)
+            self.assertEqual(archive.read(target), content)
+            self.assertNotIn(first, archive.namelist())
+            compact = {name: self.write('reseed/' + name, archive.read(name))
+                       for name in (prefix + 'index.json', target)}
+            self.assertEqual(compact_dependency_notices(compact), (compact, {}))
+            mixed = {**compact, first: self.root / first}
+            with self.assertRaisesRegex(ValueError, 'Mixed compact and original'):
+                compact_dependency_notices(mixed)
+
     def test_reviewed_source_manifest_can_build_public_name(self):
         # Synthetic protocol fixture only, not evidence of real release approval.
         self.source_manifest.update(redistribution_ready=True, gaps=[])

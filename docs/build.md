@@ -168,6 +168,15 @@ contains `package-manifest.json`, its dependency source manifest, application MI
 license, and upstream notices. A candidate suffix and metadata explicitly mark
 the uncompleted public redistribution review.
 
+Collected dependency notices are stored under short content-addressed paths in
+`licenses/dependency-materials/f/`. The adjacent `index.json` maps each original
+acquisition path to its packaged file. Identical notices of the same content type
+share one file; their original bytes are unchanged. HTML and JSON retain their
+extensions. This leaves room for the Windows updater's atomic temporary filenames
+without requiring a system-wide long-path setting. A clean compact package can be
+reused as a seed; a directory mixing an existing compact index and old acquisition
+paths is rejected. Build from clean prepared inputs, not a user's updated install.
+
 Once complete corresponding-source and redistribution evidence has been reviewed,
 the same build command **without** `--candidate` produces the public-named archives.
 Without that evidence the command refuses a public build. This script does not

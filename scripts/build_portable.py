@@ -118,6 +118,36 @@ def collect_files(root):
     return entries
 
 
+def compact_dependency_notices(files):
+    """Keep original notice bytes under short Windows-update-safe paths."""
+    prefix = 'licenses/dependency-materials/'
+    notices = {name: value for name, value in files.items() if name.startswith(prefix)}
+    if not notices:
+        return files, {}
+    index_name = prefix + 'index.json'
+    # A prepared package can itself become a seed. Do not wrap its index again.
+    if index_name in notices and all(name == index_name or re.fullmatch(
+            re.escape(prefix) + r'f/[0-9a-f]{64}\.(txt|html|json)', name)
+            for name in notices):
+        return files, {}
+    if index_name in notices:
+        raise ValueError('Mixed compact and original dependency notices; use a clean prepared seed.')
+    result = {name: value for name, value in files.items() if not name.startswith(prefix)}
+    records = []
+    for name, value in sorted(notices.items()):
+        digest = sha256(value)
+        extension = Path(name).suffix.lower()
+        if extension not in {'.html', '.json'}:
+            extension = '.txt'
+        target = prefix + 'f/' + digest + extension
+        result[target] = value
+        records.append({'origin': name[len(prefix):], 'file': target[len(prefix):],
+                        'bytes': value.stat().st_size, 'sha256': digest})
+    return result, {index_name: json_bytes({'schema': 1,
+        'description': 'Original upstream notice bytes; origin maps the acquisition path to its packaged file.',
+        'files': records})}
+
+
 def launcher_bytes():
     # Exact distlib GUI stub; the appended zip timestamp is fixed, unlike a
     # default ScriptMaker invocation. Relative shebang resolves beside launcher.
@@ -212,7 +242,9 @@ def build(root, outdir, source_dir=None, *, candidate=False, version='0.3.0', la
                and item.get('filename') in source_assets for item in sources['files']):
         raise ValueError('Matching SDL2 source archive missing from dependency sources')
     verify_runtime_seed(root, files)
+    files, compact_notices = compact_dependency_notices(files)
     generated = {
+        **compact_notices,
         'ExperienceRecorder.exe': launcher if launcher is not None else launcher_bytes(),
         'portable.json': json_bytes({'name': 'Experience Recorder', 'version': version,
             'platform': 'windows-x64', 'models': 'optional',
