@@ -19,6 +19,66 @@ SESSION_SETTING_KEYS=('game','language','preset','source','window','monitor','mi
 _obs_process_lock=threading.RLock()
 _owned_obs={}
 _obs_closed_roots=set()
+_OBS_RECEIPT='state/owned-obs.json'
+
+
+class _RecoveredObsProcess:
+    """The exact child from a previous app run, identified by its birth time."""
+    def __init__(self, process):
+        self._process=process
+        self.pid=process.pid
+
+    def poll(self):
+        try:return None if self._process.is_running() else 0
+        except psutil.NoSuchProcess:return 0
+
+    def wait(self, timeout):
+        try:return self._process.wait(timeout=timeout)
+        except psutil.TimeoutExpired as error:
+            raise subprocess.TimeoutExpired('owned OBS',timeout) from error
+
+    def terminate(self):
+        self._process.terminate()
+
+
+def _obs_receipt(root, owned=None, status='running'):
+    path=root/_OBS_RECEIPT
+    if owned is None:
+        if not path.is_file():return None
+        try:return read(path)
+        except (OSError,ValueError,TypeError):return None
+    write(path,dict(schema=1,status=status,root=str(root),exe=str(owned['exe']),
+                    pid=owned['process'].pid,created=owned['created'],
+                    parent_pid=owned['parent_pid']))
+
+
+def _recover_owned_obs(root, cfg):
+    """Reattach only a previous run's exact child from this installation.
+
+    The receipt has no credentials and grants no right to stop an output. The
+    ordinary live socket, idle-output, profile and window checks still apply.
+    """
+    if root in _owned_obs:return _owned_obs[root]
+    receipt=_obs_receipt(root)
+    if not isinstance(receipt,dict) or receipt.get('schema')!=1 or receipt.get('status')!='running':
+        return None
+    exe=(root/'tools/obs/bin/64bit/obs64.exe').resolve()
+    try:
+        if Path(receipt['root']).resolve()!=root or Path(receipt['exe']).resolve()!=exe:
+            return None
+        pid=receipt['pid']; parent_pid=receipt['parent_pid']; created=receipt['created']
+        if type(pid) is not int or type(parent_pid) is not int or type(created) not in (int,float):
+            return None
+        child=psutil.Process(pid)
+        if (not child.is_running() or child.ppid()!=parent_pid
+                or Path(child.exe()).resolve()!=exe or abs(child.create_time()-created)>.01):
+            return None
+    except (KeyError,ValueError,TypeError,OSError,psutil.Error):
+        return None
+    owned=dict(process=_RecoveredObsProcess(child),exe=exe,port=cfg['port'],
+               password=cfg['password'],created=created,parent_pid=parent_pid)
+    _owned_obs[root]=owned
+    return owned
 
 def session_settings(cfg):
     """Session exports contain their own recording choices, not other presets."""
@@ -107,21 +167,36 @@ def obs_connection(*args,**kwargs):
 
 def _connect_obs(launch,progress):
     c=config()
+    root=ROOT.resolve()
+    owned=_recover_owned_obs(root,c)
     try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=8)
     except Exception:
         if not launch:raise
-        progress('正在启动录制引擎，请稍候…')
-        exe=ROOT/'tools/obs/bin/64bit/obs64.exe'
-        root=ROOT.resolve()
-        owned=_owned_obs.get(root)
-        if owned is None or owned['process'].poll() is not None:
+        if owned is not None and owned['process'].poll() is None:
+            progress('正在重新连接录制引擎，请稍候…')
+        else:
+            progress('正在启动录制引擎，请稍候…')
+            exe=ROOT/'tools/obs/bin/64bit/obs64.exe'
             process=subprocess.Popen([str(exe),'--portable','--multi','--profile','Experience','--collection','Experience','--minimize-to-tray','--disable-shutdown-check'],cwd=exe.parent,creationflags=HIDDEN)
-            _owned_obs[root]=dict(process=process,exe=exe.resolve(),port=c['port'],password=c['password'])
+            try:
+                owned=dict(process=process,exe=exe.resolve(),port=c['port'],password=c['password'],
+                           created=psutil.Process(process.pid).create_time(),parent_pid=os.getpid())
+                _obs_receipt(root,owned)
+            except Exception as error:
+                # A child without durable ownership could survive every later
+                # application run. It has not yet been used for recording.
+                process.terminate()
+                process.wait(timeout=5)
+                raise RuntimeError('无法保存录制引擎的进程归属，已取消启动。') from error
+            _owned_obs[root]=owned
         for _ in range(45):
             time.sleep(1)
             try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=2);break
             except Exception:pass
-        else:raise RuntimeError('专用 OBS 未能连接。请查看 tools/obs/config/obs-studio/logs。')
+        else:
+            if owned is not None and owned['process'].poll() is None:
+                raise RuntimeError('上次启动的录制引擎仍在运行，但无法连接。请先确认它已退出。')
+            raise RuntimeError('专用 OBS 未能连接。请查看 tools/obs/config/obs-studio/logs。')
     # Readiness failures must never launch another OBS instance.
     try:wait_obs_ready(r,progress=progress)
     except Exception:
@@ -135,7 +210,9 @@ def _owned_obs_identity(owned,connection=None):
     process=owned['process']
     if process.poll() is not None:return False
     child=psutil.Process(process.pid)
-    if child.ppid()!=os.getpid() or Path(child.exe()).resolve()!=owned['exe']:return False
+    if (child.ppid()!=owned.get('parent_pid',os.getpid())
+            or Path(child.exe()).resolve()!=owned['exe']):return False
+    if 'created' in owned and abs(child.create_time()-owned['created'])>.01:return False
     if connection is not None:
         sock=connection.base_client.ws.sock
         local,peer=sock.getsockname(),sock.getpeername()
@@ -175,20 +252,26 @@ def _request_obs_window_close(process):
     return pid.value==process.pid and bool(user32.PostMessageW(windows[0],0x0010,0,0))
 
 def shutdown_owned_obs(root):
-    """After accepted app close, gracefully exit only our verified idle child.
+    """After accepted app close, exit only our verified idle child.
 
-    No process enumeration/adoption, saved PID, kill, output stop, or launch.
-    Missing identity/status evidence leaves OBS untouched, including old orphans.
+    A durable receipt recognizes our exact child after a recorder restart. If
+    normal close stalls, terminate that already-verified idle child by its
+    original handle; never stop outputs or target an unverified process.
     Returned reasons are fixed codes and never include connection credentials.
     """
     root=Path(root).resolve()
     with _obs_process_lock:
         _obs_closed_roots.add(root)
         owned=_owned_obs.get(root)
+        if owned is None:
+            try:owned=_recover_owned_obs(root,config())
+            except Exception:return {'status':'unverified'}
         if owned is None:return {'status':'not_owned'}
         process=owned['process']
         if process.poll() is not None:
             _owned_obs.pop(root,None)
+            try:_obs_receipt(root,owned,'exited')
+            except OSError:pass
             return {'status':'already_exited'}
         connection=None
         try:
@@ -216,10 +299,22 @@ def shutdown_owned_obs(root):
             connection.disconnect()
             connection=None
             if not _request_obs_window_close(process):return {'status':'close_not_requested'}
-            try:process.wait(timeout=8)
-            except subprocess.TimeoutExpired:return {'status':'close_unconfirmed'}
+            try:
+                process.wait(timeout=8)
+                result='closed'
+            except subprocess.TimeoutExpired:
+                # OBS has begun a normal exit and its outputs were verified
+                # idle immediately before WM_CLOSE. A stalled child otherwise
+                # keeps its executable and DLLs locked indefinitely.
+                if not _owned_obs_identity(owned):return {'status':'close_unconfirmed'}
+                process.terminate()
+                try:process.wait(timeout=5)
+                except subprocess.TimeoutExpired:return {'status':'close_unconfirmed'}
+                result='terminated_after_close_timeout'
             _owned_obs.pop(root,None)
-            return {'status':'closed'}
+            try:_obs_receipt(root,owned,'exited')
+            except OSError:pass
+            return {'status':result}
         except Exception:
             return {'status':'unverified'}
         finally:

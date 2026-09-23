@@ -20,8 +20,11 @@ class ObsLifecycleTests(unittest.TestCase):
         self.process.poll.return_value = None
         self.process.wait.return_value = 0
         self.child = MagicMock()
+        self.child.pid = 12345
         self.child.ppid.return_value = recorder.os.getpid()
         self.child.exe.return_value = str(self.root / 'tools/obs/bin/64bit/obs64.exe')
+        self.child.create_time.return_value = 1790000000.0
+        self.child.is_running.return_value = True
         self.child.net_connections.return_value = [SimpleNamespace(
             laddr=('127.0.0.1', 11223), raddr=('127.0.0.1', 22334),
             status=recorder.psutil.CONN_ESTABLISHED)]
@@ -95,6 +98,21 @@ class ObsLifecycleTests(unittest.TestCase):
             recorder.client()
         self.popen.assert_not_called()
         self.req.assert_not_called()
+
+    def test_restart_recovers_only_the_exact_child_from_its_receipt(self):
+        self.launch()
+        recorder._owned_obs.clear()
+        self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'closed'})
+        self.native_close.assert_called_once()
+        self.popen.assert_called_once()
+        self.assertEqual(recorder.read(self.root / recorder._OBS_RECEIPT)['status'], 'exited')
+
+    def test_stale_receipt_cannot_adopt_a_reused_pid(self):
+        self.launch()
+        recorder._owned_obs.clear()
+        self.child.create_time.return_value += 30
+        self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'not_owned'})
+        self.native_close.assert_not_called()
 
     def test_other_installation_cannot_close_or_block_this_child(self):
         self.launch()
@@ -183,11 +201,19 @@ class ObsLifecycleTests(unittest.TestCase):
             self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'identity_unverified'})
         self.native_close.assert_not_called()
 
-    def test_unconfirmed_normal_close_never_force_kills(self):
+    def test_stalled_normal_close_terminates_only_the_verified_idle_child(self):
+        self.launch()
+        self.process.wait.side_effect = [subprocess.TimeoutExpired('synthetic child', 8), 0]
+        self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'terminated_after_close_timeout'})
+        self.process.kill.assert_not_called()
+        self.process.terminate.assert_called_once()
+        self.assertEqual(self.process.wait.call_args_list[-1].kwargs['timeout'], 5)
+
+    def test_changed_identity_after_close_timeout_never_terminates(self):
         self.launch()
         self.process.wait.side_effect = subprocess.TimeoutExpired('synthetic child', 8)
-        self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'close_unconfirmed'})
-        self.process.kill.assert_not_called()
+        with patch.object(recorder, '_owned_obs_identity', side_effect=[True, True, True, False]):
+            self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'close_unconfirmed'})
         self.process.terminate.assert_not_called()
 
 

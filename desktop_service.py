@@ -1391,7 +1391,7 @@ class DesktopService:
                     if blockers:raise RuntimeError('\n'.join(blockers))
                 prepared=self._updates.prepare_install(os.getpid())
                 result=recorder.shutdown_owned_obs(self.root)
-                if result.get('status') not in ('closed','not_owned','already_exited'):
+                if result.get('status') not in ('closed','terminated_after_close_timeout','not_owned','already_exited'):
                     raise RuntimeError('录制引擎尚未确认正常退出，未开始更新。请检查 OBS 后重试。')
                 with self._lock:self._obs_shutdown_result=dict(result)
                 launched=self._updates.launch_install(prepared)
