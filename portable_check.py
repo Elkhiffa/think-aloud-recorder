@@ -10,6 +10,20 @@ import time
 import traceback
 
 
+def settings_for_check(root, *, synthetic_recording=False):
+    """A diagnostic must not initialize/migrate a moved portable installation."""
+    root = Path(root)
+    if synthetic_recording:
+        from portable_config import load_settings
+        return load_settings(root)
+    path = root / 'config.json'
+    cfg = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+    from portable_config import default_vault_path
+    vault = Path(cfg.get('vault') or default_vault_path(root))
+    cfg['vault'] = str(vault if vault.is_absolute() else (root / vault).resolve())
+    return cfg
+
+
 def main():
     for stream in (sys.stdout, sys.stderr):
         if stream is not None:
@@ -45,8 +59,8 @@ def main():
         window.withdraw()
         checks['tk'] = window.tk.call('info', 'patchlevel')
         window.destroy()
-        from recorder import config, probe, Session, client, open_review, read, FFMPEG
-        cfg = config()
+        from recorder import probe, Session, client, open_review, read, FFMPEG
+        cfg = settings_for_check(root, synthetic_recording=bool(args.sample or args.resume_session))
         assert Path(FFMPEG).resolve().is_relative_to(root)
         checks['ffmpeg'] = str(Path(FFMPEG).relative_to(root))
         from media_runtime import MEDIA_EXECUTABLE, verify_media

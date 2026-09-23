@@ -10,11 +10,11 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from update_installer import (UpdateError, atomic_json, build_plan, extract_package,
-                              install_files, rollback, safe_name, sha256, run_job)
+                              install_files, rollback, safe_name, sha256, run_job, launcher_path, inventory)
 
 
-def fixture(root, version='1.0.0', files=None, public=True):
-    values = {'app.py': b'old code', 'ExperienceRecorder.exe': b'MZ fixture',
+def fixture(root, version='1.0.0', files=None, public=True, launcher='ExperienceRecorder.exe'):
+    values = {'app.py': b'old code', launcher: b'MZ fixture',
               'portable_entry.py': b'entry', 'runtime/python.exe': b'MZ python',
               'runtime/pythonw.exe': b'MZ pythonw', 'ui/index.html': b'page',
               'vocabularies/uiux-terms.txt': b'UX',
@@ -47,6 +47,52 @@ class InstallerTests(unittest.TestCase):
         result=extract_package(self.zip(),self.base/'extracted',expected_version='1.1.0')
         self.assertEqual(result['version'],'1.1.0')
         self.assertEqual((self.base/'extracted/app.py').read_bytes(),b'new code')
+
+    def test_branded_update_and_rollback_keep_old_launcher_and_user_config(self):
+        stage=fixture(self.base/'branded','1.2.0',launcher='Think Aloud.exe')
+        (self.root/'config.json').write_bytes(b'private config')
+        plan=build_plan(self.root,stage,self.work)
+        install_files(plan)
+        self.assertEqual(launcher_path(self.root).name,'Think Aloud.exe')
+        self.assertTrue((self.root/'ExperienceRecorder.exe').is_file())
+        self.assertEqual((self.root/'config.json').read_bytes(),b'private config')
+        rollback(plan)
+        self.assertEqual(launcher_path(self.root).name,'ExperienceRecorder.exe')
+        self.assertFalse((self.root/'Think Aloud.exe').exists())
+        self.assertTrue((self.work/'rollback-new/Think Aloud.exe').is_file())
+
+    def test_new_launcher_package_extracts_and_updates_to_next_version(self):
+        self.stage=fixture(self.base/'new-stage','1.2.0',launcher='Think Aloud.exe')
+        extract_package(self.zip(),self.base/'new-extracted',expected_version='1.2.0')
+        root=fixture(self.base/'new-root','1.1.0',launcher='Think Aloud.exe')
+        build_plan(root,self.stage,self.work)
+        result=run_job(self.work/'job.json',launch=False,checker=lambda root,work: launcher_path(root))
+        self.assertEqual(result['state'],'installed')
+        self.assertEqual(launcher_path(root).name,'Think Aloud.exe')
+
+    def test_launcher_requires_owned_exact_name_and_matching_bytes(self):
+        # A personal same-name file must not become an executable update target.
+        (self.root/'Think Aloud.exe').write_bytes(b'personal file')
+        self.assertEqual(launcher_path(self.root).name,'ExperienceRecorder.exe')
+        stage=fixture(self.base/'branded','1.2.0',launcher='Think Aloud.exe')
+        with self.assertRaises(UpdateError): build_plan(self.root,stage,self.work)
+        (self.root/'ExperienceRecorder.exe').write_bytes(b'tampered launcher')
+        with self.assertRaises(UpdateError): launcher_path(self.root)
+        manifest=json.loads((stage/'package-manifest.json').read_text())
+        manifest['files']=[r for r in manifest['files'] if r['path']!='Think Aloud.exe']
+        with self.assertRaises(UpdateError): inventory(manifest)
+        bad=fixture(self.base/'bad-launcher',launcher='arbitrary.exe')
+        with self.assertRaises(UpdateError): launcher_path(bad)
+
+    def test_branded_self_check_failure_restores_old_launcher(self):
+        stage=fixture(self.base/'branded','1.2.0',launcher='Think Aloud.exe')
+        build_plan(self.root,stage,self.work)
+        def failed(root,work):
+            self.assertEqual(launcher_path(root).name,'Think Aloud.exe')
+            raise UpdateError('synthetic check failure')
+        result=run_job(self.work/'job.json',launch=False,checker=failed)
+        self.assertEqual(result['state'],'rolled_back')
+        self.assertEqual(launcher_path(self.root).name,'ExperienceRecorder.exe')
 
     def test_bad_paths_and_case_aliases_are_rejected(self):
         for value in ('../config.json','C:/test','state/key','a:stream','CON.txt','ui/a.','ui/a ','ui\\a','/a'):

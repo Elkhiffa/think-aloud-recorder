@@ -182,11 +182,16 @@ the same build command **without** `--candidate` produces the public-named archi
 Without that evidence the command refuses a public build. This script does not
 publish, upload, sign, or deploy an archive.
 
-The native `ExperienceRecorder.exe` uses pip's vendored distlib x64 GUI launcher
+The native `Think Aloud.exe` uses pip's vendored distlib x64 GUI launcher
 and a deterministic appended `__main__.py` which imports `portable_entry:main`.
 Its shebang points to `<launcher_dir>\runtime\pythonw.exe`, so launch works from
 another working directory. Build using the supplied 64-bit
 runtime. No absolute developer-machine Python path is embedded.
+
+Before appending the shebang/ZIP, `scripts/brand_launcher.py` embeds `ui/brand.ico`
+(the same warm red quotation/bookmark mark used in the UI) and Think Aloud product,
+file-description and release-version metadata. Other PE resources, including the
+manifest, are preserved. No global compiler or icon tool is required.
 
 ## Validation and boundaries
 
@@ -198,7 +203,7 @@ runtime. No absolute developer-machine Python path is embedded.
   It refuses symlink/path escapes, validates source hashes, checks ZIP CRCs, and
   emits per-file digests. Models, saved settings and logs are outside its allowlist.
 - Extract the real candidate to a fresh directory with a different path (including
-  spaces/Chinese characters). Run `ExperienceRecorder.exe --self-check`, inspect
+  spaces/Chinese characters). Run `Think Aloud.exe --self-check`, inspect
   its report, then perform the real UI/OBS synthetic recording, recovery and review
   checks. Passing fixture tests does not establish these native/live results.
 - External Obsidian installation and provider/GPU behavior require their own real

@@ -90,6 +90,9 @@ class PackagingTests(unittest.TestCase):
         result = self.make()
         with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
             names = set(archive.namelist())
+            self.assertIn('Think Aloud.exe', names)
+            self.assertNotIn('ExperienceRecorder.exe', names)
+            self.assertEqual(json.loads(archive.read('portable.json'))['name'], 'Think Aloud')
             for path in contaminants:
                 if path == 'portable.json':
                     self.assertNotIn(b'PRIVATE_SENTINEL', archive.read(path))
