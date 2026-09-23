@@ -8,6 +8,7 @@ let pollTask=null,booted=false,firstSetupHandled=false,toastTimer=null,step=1,sa
 let downloadDirectory=null,presetSignature='',deviceSignature='',sessionSignature='',expandedSession=null,vocabularySignature='';
 let dialogGeneration=0,connectionMessage='',lastActivitySignature='',actionContext=null;
 let pendingDeviceSetup=null;
+let updatePending='',updateError='',updateChannelDirty=false,updateInstallAccepted=false;
 const firstWizardStep=()=>wizardMode==='edit'?1:0;
 const setText=(id,value)=>{const n=document.getElementById(id);const text=String(value??'');if(n.textContent!==text)n.textContent=text;};
 const show=(id,value)=>document.getElementById(id).classList.toggle('hidden',!value);
@@ -25,6 +26,74 @@ function showDialog(title,body,actions=[]){const generation=++dialogGeneration;i
 function formatTime(value){if(value==null||value==='')return '—';if(typeof value==='string'&&value.includes(':'))return value;const n=Math.max(0,Math.floor(Number(value)||0));return [Math.floor(n/3600),Math.floor(n/60)%60,n%60].map(x=>String(x).padStart(2,'0')).join(':');}
 function formatDate(value){const raw=String(value??'').trim();if(!raw)return '—';const date=new Date(raw);if(Number.isNaN(date.getTime()))return raw;const pad=n=>String(n).padStart(2,'0');return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;}
 function bytes(value){let n=Number(value)||0;if(n<1024)return n+' B';let unit=0;n/=1024;const units=['KiB','MiB','GiB','TiB'];while(n>=1024&&unit<3){n/=1024;unit++;}return n.toFixed(n<10?2:1)+' '+units[unit];}
+function updateState(){return RecorderState.updateView(store.snapshot?.updates,store.connected,$('#updateChannel').value==='preview');}
+function renderLastInstall(raw){
+ const result=RecorderState.lastInstallView(raw);show('updateLastResult',!!result);if(!result)return;
+ $('#updateLastResult').classList.toggle('warning',result.warning);setText('updateLastTitle',result.title);
+ setText('updateLastMeta',[result.version?'v'+result.version.replace(/^v/i,''):'',result.time?formatDate(new Date(result.time*1000).toISOString()):''].filter(Boolean).join(' · '));
+ setText('updateLastMessage',result.message||'未提供详细结果，请保留更新报告。');
+ show('updateBackupArea',!!result.backupPath);if($('#updateBackupPath').value!==result.backupPath)$('#updateBackupPath').value=result.backupPath;
+ const recoveryValue=result.recoveryPath;show('updateRecoveryArea',!!recoveryValue);
+ setText('updateRecoveryLabel','恢复文件 · 可选中复制');if($('#updateRecoveryValue').value!==recoveryValue)$('#updateRecoveryValue').value=recoveryValue;
+ show('updateRecoveryHint',result.recovery);
+ setText('updateRecoveryHint',result.recoveryPath?'请先关闭记录器、回看窗口，以及从该目录启动的 OBS，再双击下面的恢复文件。恢复完成前请保留备份。':'请保留备份与更新事务文件。恢复步骤见软件目录中的 docs/updates.md；恢复前请关闭记录器和回看窗口。');
+}
+function renderUpdates(){
+ const raw=store.snapshot?.updates;
+ if(!updateChannelDirty)$('#updateChannel').value=raw?.include_prerelease===true?'preview':'stable';
+ const u=updateState(),version=value=>String(value||'').replace(/^v/i,''),currentKnown=!!u.current_version&&u.current_version!=='unknown';
+ renderLastInstall(u.last_install);
+ if(updateInstallAccepted&&store.connected&&store.snapshot?.closing===false&&u.error)updateInstallAccepted=false;
+ setText('versionButton',currentKnown?'v'+version(u.current_version):'版本与更新');
+ $('#versionButton').title='版本与更新'+(currentKnown?' · v'+version(u.current_version):'');
+ setText('updateCurrent',currentKnown?'v'+version(u.current_version):u.current_version==='unknown'?'版本未知':'尚未获取');
+ setText('updateLatest',u.latest_version?'v'+version(u.latest_version):u.state==='no_release'?'暂无发布':'尚未检查');
+ const status={idle:['尚未检查更新','点击检查更新，查看当前频道的可用版本。'],checking:['正在检查更新','正在获取 GitHub Release 信息…'],available:['有新版本可用','下载完成并校验后，再由你确认退出更新。'],current:['已是当前频道的最新版本','暂时没有更新版本。'],no_release:['此频道暂无可用版本','稍后重试，或查看 Release 页面。'],downloading:['正在下载更新','关闭此窗口后，下载仍会继续。'],verifying:['正在校验更新','正在确认下载的文件是否完整。'],ready:['更新已下载并校验','准备好后，可退出记录器并安装更新。'],installing:['正在退出并更新','更新完成后会重新打开记录器。'],error:['更新未完成','可以重试，或前往 Release 页面查看。']};
+ let [heading,detail]=status[u.state];
+ if(!u.present){heading='暂时无法读取更新信息';detail='请等待记录器连接，或重新打开软件后再试。';}
+ if(!store.connected){heading='记录器连接已中断';detail='重新连接后才能检查或安装更新。';}
+ if(u.channelChanged&&!u.busy){heading='更新频道已更改';detail='请先检查更新，确认此频道的可用版本。';}
+ if(updateInstallAccepted){heading='正在退出并更新';detail='更新完成后会重新打开记录器。';}
+ if(u.cancelPending){heading='取消尚未确认';detail='请保留记录器窗口。取消确认前不能关闭软件，请重试取消。';}
+ setText('updateStatus',heading);setText('updateDetail',detail);
+ const error=updateError||u.error||'';setText('updateError',error);show('updateError',!!error);
+ const downloading=['downloading','verifying'].includes(u.state);show('updateProgressArea',downloading);
+ setText('updateProgressLabel',u.state==='verifying'?'正在校验':'正在下载');
+ setText('updateBytes',bytes(u.downloaded_bytes)+(u.total_bytes?' / '+bytes(u.total_bytes):''));
+ if(u.total_bytes&&u.state==='downloading')$('#updateProgress').value=Math.min(100,u.downloaded_bytes/u.total_bytes*100);else $('#updateProgress').removeAttribute('value');
+ show('updateReleaseInfo',!!u.latest_version);setText('updateNotes',u.notes||'此版本未提供更新说明。');setText('updateSize',u.total_bytes?'软件包 '+bytes(u.total_bytes):'');
+ show('updateInstallInfo',u.state==='ready'&&!u.cancelPending);setText('updateCloseSummary','将关闭记录器和 '+u.review_count+' 个回看窗口。');
+ const blockers=[...u.blockers];if(u.state==='ready'&&!u.can_install&&!blockers.length)blockers.push('正在等待记录器确认是否可以更新。');
+ $('#updateBlockers').innerHTML=blockers.map(message=>'<li>'+escapeHTML(message)+'</li>').join('');show('updateBlockers',blockers.length>0);
+ const locked=!!updatePending||updateInstallAccepted;
+ $('#updateChannel').disabled=!u.present||!store.connected||u.busy||locked;
+ $('#updateCheck').disabled=!u.canCheck||locked;setText('updateCheck',updatePending==='check'||u.state==='checking'?'正在检查…':u.state==='error'?'重新检查':'检查更新');
+ show('updateCheck',!u.cancelPending&&!['downloading','verifying','installing'].includes(u.state)&&!updateInstallAccepted);
+ show('updateCancel',u.cancelPending||['checking','downloading'].includes(u.state));setText('updateCancel',u.cancelPending?(updatePending==='cancel'?'正在重试…':'重试取消'):u.state==='checking'?'取消检查':'取消下载');$('#updateCancel').disabled=!store.connected||!!updatePending||updateInstallAccepted&&!u.cancelPending;
+ show('updateDownload',!u.cancelPending&&['available','error'].includes(u.state)&&!!u.latest_version);$('#updateDownload').disabled=!u.canDownload||locked;setText('updateDownload',updatePending==='download'?'正在准备…':u.state==='error'?'重试下载':'下载更新');
+ show('updateInstall',!u.cancelPending&&(u.state==='ready'||u.state==='installing'||updateInstallAccepted));$('#updateInstall').disabled=!u.canInstall||locked;setText('updateInstall',updatePending==='install'||updateInstallAccepted||u.state==='installing'?'正在退出…':'退出并更新');
+ $('#updateRelease').disabled=!u.present||!store.connected||locked||u.cancelPending;
+}
+async function updateAction(actionName){
+ const u=updateState();if(updatePending||updateInstallAccepted&&!(actionName==='cancel'&&u.cancelPending))return;
+ if(u.cancelPending&&actionName!=='cancel')return;
+ if(actionName==='check'&&!u.canCheck||actionName==='download'&&!u.canDownload||actionName==='install'&&!u.canInstall)return;
+ if(!u.present||!store.connected)return;
+ updatePending=actionName;updateError='';renderUpdates();
+ try{
+  const request={action:actionName};if(actionName==='check')request.include_prerelease=$('#updateChannel').value==='preview';
+  await api('update_action',request);
+  if(actionName==='install')updateInstallAccepted=true;
+  if(actionName==='check')updateChannelDirty=false;
+  await freshPoll();
+ }catch(error){updateError=error.message||'更新未完成，请重试。';}
+ finally{updatePending='';renderUpdates();}
+}
+$('#versionButton').onclick=()=>{updateChannelDirty=false;renderUpdates();$('#updateDialog').showModal();$('#updateClose').focus();};
+$('#updateClose').onclick=()=>$('#updateDialog').close();
+$('#updateDialog').addEventListener('close',()=>$('#versionButton').focus());
+$('#updateChannel').onchange=()=>{updateChannelDirty=true;updateError='';renderUpdates();};
+$('#updateCheck').onclick=()=>updateAction('check');$('#updateDownload').onclick=()=>updateAction('download');$('#updateCancel').onclick=()=>updateAction('cancel');$('#updateInstall').onclick=()=>updateAction('install');$('#updateRelease').onclick=()=>updateAction('open_release');
 function render(){renderHome();renderPresets();if(store.draft){completeDeviceSetup();renderDeviceOptions();renderResources();renderSummary();renderVaultChoice();}renderSessions();renderControls();const a=store.activity;const signature=JSON.stringify([a.kind,a.status,a.detail]);if(signature!==lastActivitySignature){lastActivitySignature=signature;if($('#wizard').open&&a.status==='操作未完成'&&a.detail)wizardError(a.detail);else if(!$('#wizard').open&&store.readiness.ready&&a.status==='操作未完成'&&a.detail)notify('上次操作未完成：'+a.detail);if($('#wizard').open&&actionContext==='verify'&&a.kind==='idle'&&a.detail)setText('cloudFeedback',a.detail);}
  if(!firstSetupHandled&&store.snapshot){firstSetupHandled=true;if(!store.presets.length&&!store.recording)openWizard('new',0,true);}}
 function renderHome(){
@@ -45,6 +114,8 @@ function renderHome(){
  else if(r.ready)label='准备就绪';
  else if(store.activeId)label='录制条件尚未满足，请重新检查';
  if(closing){label='正在安全关闭';button='正在安全关闭…';}
+ const cancelPending=store.snapshot?.updates?.cancel_pending===true;
+ if(cancelPending){label='取消尚未确认，请保留窗口';button='等待取消确认';}
  let blockers=[];
  if(!closing&&!store.connected&&connectionMessage)blockers=[connectionMessage];
  else if(!closing&&!recording&&!foreground&&!checking&&!store.requestPending){
@@ -62,13 +133,13 @@ function renderHome(){
  if(changed)$('#statusSlot').scrollTop=0;
  $('#statusSlot').tabIndex=$('#statusSlot').scrollHeight>$('#statusSlot').clientHeight?0:-1;
  setText('recordButtonText',button);$('#recordButton').classList.toggle('stopping',recording);
- show('jobDetail',closing||foreground&&!!a.detail);
- setText('jobDetail',closing?'正在保存并等待现有整理完成，完成后此窗口会自动关闭。':foreground?a.detail:'');
+ show('jobDetail',cancelPending||closing||foreground&&!!a.detail);
+ setText('jobDetail',cancelPending?'更新助手尚未确认取消，请打开顶部“版本与更新”重试取消。':closing?'正在保存并等待现有整理完成，完成后此窗口会自动关闭。':foreground?a.detail:'');
  setText('savedLocation',store.activeId&&store.saved.vault?'保存到 '+store.saved.vault:'尚未选择保存位置');
  $('#openVault').title=store.saved.vault||'';
 }
 function renderPresets(){const signature=JSON.stringify([store.presets,store.activeId]);if(signature===presetSignature)return;presetSignature=signature;$('#presetSelect').innerHTML=(store.activeId?'':'<option value="">选择录制预设</option>')+store.presets.map(p=>`<option value="${escapeHTML(p.id)}">${escapeHTML(p.name)}</option>`).join('');$('#presetSelect').value=store.activeId||'';}
-function renderControls(){renderHome();const locked=!store.connected||store.requestPending||store.busy;$('#recordButton').disabled=store.recording?(!store.connected||store.requestPending||!!store.activity.busy):!store.canStart;$('#presetSelect').disabled=locked||!store.presets.length;$('#newPresetButton').disabled=locked;$('#settingsButton').disabled=locked||!store.activeId;$('#openVault').disabled=!store.connected||store.requestPending||!store.activeId;
+function renderControls(){renderHome();renderUpdates();const locked=!store.connected||store.requestPending||store.busy;$('#recordButton').disabled=store.recording?(!store.connected||store.requestPending||!!store.activity.busy):!store.canStart;$('#presetSelect').disabled=locked||!store.presets.length;$('#newPresetButton').disabled=locked;$('#settingsButton').disabled=locked||!store.activeId;$('#openVault').disabled=!store.connected||store.requestPending||!store.activeId;
  const requestLocked=!store.connected||store.requestPending||saving;const conflict=store.recording||!!store.activity.busy&&store.activity.kind!=='devices';const fieldsLocked=requestLocked||conflict;$('#deviceFields').disabled=fieldsLocked;$('#recordingFields').disabled=fieldsLocked;
  ['game','source','target','mic','preset','language','hotwords','cloudKey'].forEach(id=>$('#'+id).disabled=fieldsLocked);
  $$('[data-provider]').forEach(button=>button.disabled=fieldsLocked);renderInputRecording(fieldsLocked);

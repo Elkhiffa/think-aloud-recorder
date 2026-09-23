@@ -35,6 +35,7 @@ EXPECTED_EXPORTS = {
     'verify_cloud_key': [],
     'recover_cloud_task': ['id', 'task_id'],
     'model_action': ['action', 'path'],
+    'update_action': ['payload'],
 }
 
 

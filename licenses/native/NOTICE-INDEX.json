@@ -1,0 +1,131 @@
+{
+  "scope": "Original upstream notices; version and binary binding limits are stated per entry. These do not change the application MIT license.",
+  "files": [
+    {
+      "bytes": 1115,
+      "sha256": "54aa79d9fe3c09e67a16dcd95b9e88676405a6ec174efda31036983cf7672ecb",
+      "basis": "Exact release-tag license equals archived source member; wheel/stage separately byte-bound.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/CTranslate2-4.8.2/LICENSE.txt"
+    },
+    {
+      "bytes": 29574,
+      "sha256": "295a1b7118d3417f5d6a943e5f87b59e2a0631fb277129c3b15dee6248adc7cf",
+      "basis": "Original complete license from same official archive whose DLL member matches stage.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/NVIDIA-cuDNN-9.10.2.21/LICENSE"
+    },
+    {
+      "bytes": 31578,
+      "sha256": "f8ce918fe7311ce279e68380a2e233f8a42b1cd3dda8f4c48d6de97a0255c1d7",
+      "basis": "Exact stage-matching official wheel; preserve EULA and component notices together.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/Intel-OpenMP-2025.3.0/third-party-programs.txt"
+    },
+    {
+      "bytes": 25224,
+      "sha256": "febfb69a5b058f55892dc7f341108a9ca29d50e9fe85723a57eebbb826436958",
+      "basis": "Exact stage-matching official wheel; preserve EULA and component notices together.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/Intel-OpenMP-2025.3.0/LICENSE.txt"
+    },
+    {
+      "bytes": 5234,
+      "sha256": "1f1224af12a7d3e51150ce6f762e32472076a31f6e44db41d3b651a7fa20f2f5",
+      "basis": "Official same-version license package; recipe/header/binary marker version association. Preserve all supplied notice attachments without asserting all components ship.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneMKL-2025.3.0/third-party-programs-benchmarks.txt"
+    },
+    {
+      "bytes": 77510,
+      "sha256": "82fa46762c37662a52ab9df58781813c1dc6c268ae2b6f9cf2d83183e706aa09",
+      "basis": "Official same-version license package; recipe/header/binary marker version association. Preserve all supplied notice attachments without asserting all components ship.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneMKL-2025.3.0/third-party-programs-IntelMPI.txt"
+    },
+    {
+      "bytes": 1124,
+      "sha256": "cfe7d2ba4b4cd53271c7f91937e906256c0f14ea62ba33ffb556664b8d39aa59",
+      "basis": "Official same-version license package; recipe/header/binary marker version association. Preserve all supplied notice attachments without asserting all components ship.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneMKL-2025.3.0/third-party-programs-level-zero.txt"
+    },
+    {
+      "bytes": 6777,
+      "sha256": "2ba4e9858c253331691370f4e8e3899ca6a5baa20907f189f5970635870b860d",
+      "basis": "Official same-version license package; recipe/header/binary marker version association. Preserve all supplied notice attachments without asserting all components ship.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneMKL-2025.3.0/third-party-programs-oneMath.txt"
+    },
+    {
+      "bytes": 19504,
+      "sha256": "d507da4fffae647ebc1bbb7e12cc5cca8087d36b0d78cc75caa96cae37688cb1",
+      "basis": "Official same-version license package; recipe/header/binary marker version association. Preserve all supplied notice attachments without asserting all components ship.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneMKL-2025.3.0/third-party-programs-oneTBB.txt"
+    },
+    {
+      "bytes": 31028,
+      "sha256": "8fdfbbdfed13bca3641da35182e7ee1bb92a99f302ce8b0deb981ac1f18adee2",
+      "basis": "Official same-version license package; recipe/header/binary marker version association. Preserve all supplied notice attachments without asserting all components ship.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneMKL-2025.3.0/third-party-programs-openmp.txt"
+    },
+    {
+      "bytes": 2448,
+      "sha256": "415000d1887939ffc6826e0ed3f099cebcab6aaeda2da0acb017110a456b3d42",
+      "basis": "Official same-version license package; recipe/header/binary marker version association. Preserve all supplied notice attachments without asserting all components ship.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneMKL-2025.3.0/third-party-programs-safestring.txt"
+    },
+    {
+      "bytes": 65770,
+      "sha256": "6fb57367c2107b8b3347e0e9db10d368c7b9ea898a08132b2f841b24b86f076f",
+      "basis": "Official same-version license package; recipe/header/binary marker version association. Preserve all supplied notice attachments without asserting all components ship.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneMKL-2025.3.0/third-party-programs.txt"
+    },
+    {
+      "bytes": 4105,
+      "sha256": "7721633d0ddff43fae25ebfd405f8166a0ce730cbcec44f2f3ad9d5eb8ac9a6f",
+      "basis": "Official same-version license package; recipe/header/binary marker version association. Preserve all supplied notice attachments without asserting all components ship.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneMKL-2025.3.0/LICENSE.txt"
+    },
+    {
+      "bytes": 19503,
+      "sha256": "1f6de0bd498c04c9283c6306379e2db2492e1c4e7d2b248c8de0e8fe9124cd03",
+      "basis": "Actual libiomp TBBmalloc 2022.2.0 marker; exact-version official wheel notices.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneTBB-2022.2.0/third-party-programs.txt"
+    },
+    {
+      "bytes": 4105,
+      "sha256": "7721633d0ddff43fae25ebfd405f8166a0ce730cbcec44f2f3ad9d5eb8ac9a6f",
+      "basis": "Actual libiomp TBBmalloc 2022.2.0 marker; exact-version official wheel notices.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneTBB-2022.2.0/LICENSE.txt"
+    },
+    {
+      "bytes": 11521,
+      "sha256": "dd12452e1ae11e3282271aa5895d8175296b83e936a027209f9399d26a407d0f",
+      "basis": "Official v3.1.1 source tag matches recipe and actual binary embedded build paths.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneDNN-3.1.1/LICENSE.txt"
+    },
+    {
+      "bytes": 29825,
+      "sha256": "9117585dfc6b5cd0fafc063312f28a86ec82eb97bf68316dcefcaaa7fc11428e",
+      "basis": "Official v3.1.1 source tag matches recipe and actual binary embedded build paths.",
+      "upstream_notice_candidate_only": false,
+      "path": "licenses/native/oneDNN-3.1.1/THIRD-PARTY-PROGRAMS.txt"
+    },
+    {
+      "bytes": 11357,
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "basis": "Official matching tag license fills observed missing notice; separate wheel/source binding was not performed.",
+      "upstream_notice_candidate_only": true,
+      "path": "licenses/native/Tokenizers-0.23.2/LICENSE.txt"
+    }
+  ]
+}

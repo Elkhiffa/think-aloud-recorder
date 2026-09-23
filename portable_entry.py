@@ -20,6 +20,8 @@ def main():
         if '--self-check' in sys.argv:
             from portable_check import main as check
             return check()
+        from update_installer import ensure_launch_allowed
+        ensure_launch_allowed(root)
         from portable_config import initialize
         initialize(root)
         runpy.run_module('app', run_name='__main__')

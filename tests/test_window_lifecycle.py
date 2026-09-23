@@ -78,6 +78,55 @@ class LifecycleTests(unittest.TestCase):
         self.assertIsNone(manager._shutdown_thread)
         service.shutdown.assert_not_called()
 
+    def test_update_close_requires_native_commit_and_closes_reviews_before_main(self):
+        manager,service,window=self.setup_manager()
+        other=Mock()
+        manager._viewers['review']=other
+        service.update_close_ready.return_value=False
+        with self.assertRaisesRegex(RuntimeError,'安全退出'):manager.close_for_update(timeout=.02)
+        other.destroy.assert_not_called()
+        service.update_close_ready.return_value=True
+        calls=[]
+        def review_closed():
+            calls.append('review')
+            manager._viewers.pop('review')
+        other.destroy.side_effect=review_closed
+        window.destroy.side_effect=lambda:(calls.append('main'),window.events.closed.handler())
+        manager.close_for_update(timeout=.2)
+        self.assertEqual(calls,['review','main'])
+        self.assertEqual(manager.review_count(),0)
+
+    def test_unclosed_review_keeps_main_available_for_update_error(self):
+        manager,service,window=self.setup_manager()
+        service.update_close_ready.return_value=True
+        manager._viewers['review']=Mock()
+        with self.assertRaisesRegex(RuntimeError,'回看窗口尚未关闭'):manager.close_for_update(timeout=.01)
+        window.destroy.assert_not_called()
+        self.assertFalse(manager._updating)
+
+    def test_manual_close_during_update_preparation_does_not_spawn_normal_exit(self):
+        manager,service,window=self.setup_manager()
+        service.update_in_progress.return_value=True
+        service.close_allowed.return_value=False
+        self.assertFalse(manager.close_main())
+        window.create_confirmation_dialog.assert_not_called()
+        service.finish_for_close.assert_not_called()
+
+    def test_helper_ready_does_not_allow_manual_main_close_while_viewers_remain(self):
+        manager,service,window=self.setup_manager()
+        service.update_in_progress.return_value=True
+        service.update_close_ready.return_value=True
+        service.close_allowed.return_value=True
+        viewer=Mock()
+        manager._viewers['review']=viewer
+        viewer.destroy.side_effect=lambda:self.assertFalse(manager.close_main())
+        with self.assertRaisesRegex(RuntimeError,'回看窗口尚未关闭'):
+            manager.close_for_update(timeout=.01)
+        window.destroy.assert_not_called()
+        service.close_allowed.assert_not_called()
+        self.assertFalse(manager._update_main_closing)
+        self.assertFalse(manager.close_main())
+
 
 if __name__ == '__main__':
     unittest.main()

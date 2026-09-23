@@ -64,6 +64,13 @@ class DesktopService:
         self._background_thread = None
         self._active = None
         self._exit_pending = False
+        self._update_installing = False
+        self._update_commit = False
+        self._update_install_error = None
+        self._update_pending_cancel = None
+        self._update_thread = None
+        self._update_review_count = lambda: 0
+        self._update_close_windows = None
         self._review_opener = None
         self._review_opening = 0
         self._uncertain_ids = set()
@@ -80,6 +87,8 @@ class DesktopService:
         self._cfg.pop('obsidian_exe', None)
         self._initialize_presets()
         self._model = ModelManager(self.root)
+        from updater import UpdateManager
+        self._updates = UpdateManager(self.root)
         self._activity = dict(busy=False, kind='idle', status='待开始', detail='',
                               active_id=None, elapsed_seconds=0)
         self._launch('recovery', self._startup, status='检查上次场次')
@@ -339,6 +348,7 @@ class DesktopService:
                          'total_bytes', 'error', 'source', 'revision')}
                 model['error'] = self._safe_text(model.get('error'))
                 return ok(dict(config=self._public_config(), sessions=sessions, closing=self._exit_pending,
+                               updates=self._update_snapshot(model),
                                default_vault=self._default_vault(),
                                default_hotword_files=deepcopy(self._default_hotword_files),
                                readiness=self._visible_readiness(),
@@ -566,14 +576,14 @@ class DesktopService:
 
     def _request_readiness(self, *, invalidate=False):
         with self._lock:
-            if (self._closed.is_set() or self._active is not None or self._activity['busy']
+            if (self._closed.is_set() or self._exit_pending or self._active is not None or self._activity['busy']
                     or (self._readiness_thread and self._readiness_thread.is_alive())):
                 return False
             self._mark_readiness_checking(invalidate)
             def work():
                 with self._operation_lock:
                     with self._lock:
-                        if self._closed.is_set() or self._active is not None or self._activity['busy']:
+                        if self._closed.is_set() or self._exit_pending or self._active is not None or self._activity['busy']:
                             self._readiness.update(ready=False, checking=False)
                             return
                     self._update_readiness(invalidate=invalidate)
@@ -1274,6 +1284,168 @@ class DesktopService:
             except Exception as error:
                 return self._error(error)
 
+    def set_update_lifecycle(self, review_count, close_windows):
+        """Native callbacks stay outside the JavaScript bridge."""
+        with self._lock:
+            self._update_review_count = review_count
+            self._update_close_windows = close_windows
+
+    def _update_blockers(self, model=None, *, installing=False):
+        """Read-only eligibility. Never call close_allowed or pause a worker."""
+        reasons=[]
+        if self._update_pending_cancel is not None:
+            reasons.append('更新助手尚未确认取消，请重试取消后再关闭应用。')
+        elif self._closed.is_set() or (self._exit_pending and not installing):
+            reasons.append('应用正在关闭，请等待当前操作完成。')
+        if self._active is not None:
+            reasons.append('请先结束录制并等待录像保存完成。')
+        if self._uncertain_ids or self._obs_uncertain:
+            reasons.append('尚无法确认录制已结束，请先重新连接录制引擎。')
+        if self._activity['busy'] and self._activity['kind'] not in ('devices','idle'):
+            reasons.append('当前操作尚未完成，请等待保存、整理或导出结束。')
+        if self._background_jobs or (self._background_thread and self._background_thread.is_alive()):
+            reasons.append('还有场次正在整理或排队，请等待完成。')
+        state=(model if model is not None else self._model.status()).get('state')
+        if state in ('downloading','verifying') or self._model.wait(timeout=0) is False:
+            reasons.append('本地模型正在下载或校验，请先暂停并等待文件保存。')
+        if self._dialog_open:
+            reasons.append('请先完成或取消当前文件选择。')
+        if self._review_opening:
+            reasons.append('回看窗口正在打开，请稍候。')
+        if self._update_close_windows is None:
+            reasons.append('更新窗口尚未就绪，请稍候。')
+        return reasons
+
+    def _update_snapshot(self, model=None):
+        snapshot=dict(self._updates.snapshot())
+        blockers=self._update_blockers(model)
+        try:count=max(0,int(self._update_review_count()))
+        except Exception:
+            count=0
+            blockers.append('暂时无法确认回看窗口状态。')
+        snapshot.update(can_install=snapshot.get('state')=='ready' and not blockers and not self._update_installing,
+                        install_blockers=blockers,review_count=count,
+                        cancel_pending=self._update_pending_cancel is not None)
+        if self._update_install_error:
+            snapshot['error']=self._update_install_error
+        if snapshot.get('error'):snapshot['error']=self._safe_text(snapshot['error'])
+        return snapshot
+
+    def update_action(self, payload):
+        try:
+            if not isinstance(payload,dict):raise ValueError('更新操作无效。')
+            action=payload.get('action')
+            if action not in ('check','download','cancel','install','open_release'):
+                raise ValueError('更新操作无效。')
+            with self._lock:
+                if action=='cancel' and self._update_pending_cancel is not None:
+                    if self._update_thread and self._update_thread.is_alive():
+                        return ok({'started':True})
+                    self._update_thread=threading.Thread(target=self._retry_update_cancel,daemon=False,
+                        name='portable-update-cancel')
+                    self._update_thread.start()
+                    return ok({'started':True})
+                if self._closed.is_set() or self._exit_pending:
+                    raise RuntimeError('应用正在关闭，请等待当前操作完成。')
+                if action=='install':
+                    blockers=self._update_blockers()
+                    if blockers:raise RuntimeError('\n'.join(blockers))
+                    if self._updates.snapshot().get('state')!='ready':
+                        raise RuntimeError('请先完成更新包下载与校验。')
+                    self._exit_pending=self._update_installing=True
+                    self._update_install_error=None
+                    self._update_thread=threading.Thread(target=self._install_update,daemon=False,name='portable-update-close')
+                    self._update_thread.start()
+                    return ok({'started':True})
+                self._update_install_error=None
+                if action=='check':
+                    include=payload.get('include_prerelease',False)
+                    if type(include) is not bool:raise ValueError('预览版选项必须为开启或关闭。')
+                    result=self._updates.check(include_prerelease=include)
+                elif action=='download':result=self._updates.download()
+                elif action=='cancel':result=self._updates.cancel()
+                else:
+                    from urllib.parse import urlsplit
+                    url=self._updates.snapshot().get('release_url') or 'https://github.com/Elkhiffa/think-aloud-recorder/releases'
+                    parts=urlsplit(url)
+                    if (parts.scheme!='https' or parts.netloc!='github.com' or parts.query or parts.fragment
+                            or not (parts.path=='/Elkhiffa/think-aloud-recorder/releases'
+                                    or parts.path.startswith('/Elkhiffa/think-aloud-recorder/releases/tag/'))):
+                        raise ValueError('更新发布页地址无效。')
+                    if not webbrowser.open(url):raise RuntimeError('未能打开 GitHub 发布页，请稍后重试。')
+                    result=None
+                if isinstance(result,dict) and result.get('ok') is False:
+                    raise RuntimeError(result.get('error') or '更新操作未完成。')
+                return ok(self._update_snapshot())
+        except Exception as error:
+            return self._error(error)
+
+    def _install_update(self):
+        prepared=None
+        try:
+            # Admission set _exit_pending under the same lock used by record,
+            # model, processing and viewer creation. Drain any idle OBS probe.
+            with self._operation_lock:
+                with self._lock:
+                    blockers=self._update_blockers(installing=True)
+                    if blockers:raise RuntimeError('\n'.join(blockers))
+                prepared=self._updates.prepare_install(os.getpid())
+                result=recorder.shutdown_owned_obs(self.root)
+                if result.get('status') not in ('closed','not_owned','already_exited'):
+                    raise RuntimeError('录制引擎尚未确认正常退出，未开始更新。请检查 OBS 后重试。')
+                with self._lock:self._obs_shutdown_result=dict(result)
+                launched=self._updates.launch_install(prepared)
+                if not isinstance(launched,dict) or launched.get('ready') is not True:
+                    raise RuntimeError('更新助手尚未确认就绪，未关闭应用窗口。')
+                with self._lock:self._update_commit=True
+                self._update_close_windows()
+        except Exception as error:
+            if prepared is not None:
+                # Revoke native close permission before attempting cancellation.
+                # A failed durable write must never turn into a later install
+                # when the user closes the app through the ordinary window X.
+                with self._lock:
+                    self._update_commit=False
+                    self._closed.clear()
+                    self._update_pending_cancel=prepared
+                try:self._cancel_prepared_update(prepared)
+                except Exception:
+                    with self._lock:
+                        self._update_install_error='更新助手尚未确认取消。应用已阻止关闭，请点击“重试取消”。'
+                    return
+            self._restore_after_update_failure(error)
+
+    def _cancel_prepared_update(self, prepared):
+        result=self._updates.cancel_install(prepared)
+        if not isinstance(result,dict) or result.get('cancelled') is not True:
+            raise RuntimeError('更新助手未确认取消。')
+
+    def _retry_update_cancel(self):
+        with self._lock:prepared=self._update_pending_cancel
+        if prepared is None:return
+        try:self._cancel_prepared_update(prepared)
+        except Exception:
+            with self._lock:
+                self._update_install_error='更新助手尚未确认取消。应用已阻止关闭，请点击“重试取消”。'
+            return
+        self._restore_after_update_failure('已取消这次安装，当前版本保留。')
+
+    def _restore_after_update_failure(self, error):
+        # Reopen only this app's connection gate, never adopt or kill OBS.
+        # Do not reach here while an unrevoked helper could still install.
+        with recorder._obs_process_lock:
+            recorder._obs_closed_roots.discard(self.root)
+        with self._lock:
+            self._obs_shutdown_result=None
+            self._closed.clear()
+            self._update_pending_cancel=None
+            self._exit_pending=self._update_installing=self._update_commit=False
+            self._update_install_error=self._safe_text(error)
+            if not self._monitor.is_alive():
+                self._monitor=threading.Thread(target=self._monitor_loop,daemon=True,name='recording-health')
+                self._monitor.start()
+        self._request_readiness(invalidate=True)
+
 
     def _recover(self):
         connected = False
@@ -1409,9 +1581,13 @@ class DesktopService:
         else:
             self._progress('OBS 正在录制 ' + str(getattr(state, 'output_timecode', '')) + '；未开始电平检测。', status='录制中')
 
-    def close_allowed(self):
+    def close_allowed(self, *, for_update=False):
         """Only durable work blocks close. Idle readiness never owns the window."""
         with self._lock:
+            if self._update_installing:
+                allowed=for_update and self._update_commit
+                if allowed:self._closed.set()
+                return allowed
             foreground = self._activity['busy'] and self._activity['kind'] not in ('devices', 'idle')
             blocked = (foreground or self._active is not None or bool(self._uncertain_ids)
                        or bool(self._background_jobs) or self._obs_uncertain or self._dialog_open
@@ -1423,6 +1599,12 @@ class DesktopService:
                 return False
             self._closed.set()
             return True
+
+    def update_close_ready(self):
+        with self._lock:return self._update_installing and self._update_commit
+
+    def update_in_progress(self):
+        with self._lock:return self._update_installing
 
     def close_reason(self):
         with self._lock:

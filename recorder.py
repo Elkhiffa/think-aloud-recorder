@@ -3,7 +3,7 @@ from pathlib import Path
 from datetime import datetime
 import json, os, re, shutil, subprocess, time, uuid, zipfile, hashlib, math
 import av
-import imageio_ffmpeg
+from media_runtime import resolve_ffmpeg
 import obsws_python as obs
 from obsws_python.error import OBSSDKRequestError
 import functools,msvcrt,threading
@@ -11,7 +11,7 @@ from contextlib import contextmanager
 import psutil
 
 ROOT=Path(__file__).resolve().parent
-FFMPEG=imageio_ffmpeg.get_ffmpeg_exe()
+FFMPEG=resolve_ffmpeg(ROOT)
 HIDDEN=0x08000000 if os.name=='nt' else 0
 PRESETS={'均衡 1080p30':(1920,1080,30),'流畅 1080p60':(1920,1080,60),'省空间 720p30':(1280,720,30)}
 SESSION_SETTING_KEYS=('game','language','preset','source','window','monitor','mic',

@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const {State,vocabularyWords} = require('../ui/state.js');
+const {State,vocabularyWords,updateView,lastInstallView} = require('../ui/state.js');
 
 function snapshot(overrides={}) {
   return {
@@ -476,4 +476,87 @@ test('failed OBS setup keeps existing draft choices and shows the concrete failu
   f.data.snapshot.device_refresh={id:'refresh-1',state:'failed',error:'OBS 未能启动'};await f.run('poll()');
   assert.equal(f.run('store.draft.source'),'游戏窗口');assert.equal(f.run('store.draft.mic'),'microphone');
   assert.match(f.elements.get('wizardError').textContent,/OBS 未能启动/);
+});
+
+test('update eligibility fails closed and does not use recording readiness',()=>{
+  assert.equal(updateView(undefined).canCheck,false);
+  for(const raw of [null,{}, {state:'ready'}, {state:'ready',can_install:'true'}, {state:'future',can_install:true}])assert.equal(updateView(raw).canInstall,false);
+  const ready={state:'ready',can_install:true,review_count:2};
+  assert.equal(updateView(ready).canInstall,true);
+  assert.equal(updateView({...ready,install_blockers:['场次正在整理']}).canInstall,false);
+  assert.equal(updateView(ready,false).canInstall,false);
+  assert.equal(updateView(ready,true,true).canInstall,false);
+  assert.equal(updateView({...ready,review_count:-1,total_bytes:-10,downloaded_bytes:Infinity}).review_count,0);
+  assert.equal(updateView({...ready,downloaded_bytes:Infinity}).downloaded_bytes,0);
+});
+
+test('version dialog is safe on older snapshots and never checks on opening',async()=>{
+  const f=await fixture();const before=f.calls.length;
+  f.elements.get('versionButton').onclick();
+  assert.equal(f.elements.get('updateDialog').open,true);
+  assert.equal(f.elements.get('updateCheck').disabled,true);
+  assert.equal(f.elements.get('updateCurrent').textContent,'尚未获取');
+  assert.equal(f.elements.get('recordButton').disabled,false);
+  assert.equal(f.calls.length,before);
+  f.data.snapshot.updates={current_version:'unknown',state:'idle'};await f.run('poll()');
+  assert.equal(f.elements.get('versionButton').textContent,'版本与更新');assert.equal(f.elements.get('updateCurrent').textContent,'版本未知');
+});
+
+test('update channel is local until explicit check and never enters a preset',async()=>{
+  const f=await fixture(snapshot({updates:{current_version:'0.6.0-preview.3',state:'idle'}}));
+  f.elements.get('versionButton').onclick();assert.equal(f.elements.get('updateChannel').value,'stable');
+  f.elements.get('updateChannel').value='preview';f.elements.get('updateChannel').onchange();
+  await f.run('poll()');assert.equal(f.elements.get('updateChannel').value,'preview');
+  assert.equal(f.calls.some(c=>c.name==='update_action'),false);
+  await f.elements.get('updateCheck').onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls.find(c=>c.name==='update_action').args)),[{action:'check',include_prerelease:true}]);
+  f.run("store.openDraft('edit')");assert.equal(f.run('store.presetPayload().include_prerelease'),undefined);
+});
+
+test('update progress and channel changes cannot enable installation or disable recording',async()=>{
+  const f=await fixture(snapshot({updates:{state:'downloading',latest_version:'0.7.0',downloaded_bytes:25,total_bytes:100}}));
+  assert.equal(f.elements.get('updateProgress').value,25);
+  assert.equal(f.elements.get('recordButton').disabled,false);assert.equal(f.elements.get('updateInstall').disabled,true);
+  f.data.snapshot.updates={state:'ready',latest_version:'0.7.0',can_install:true,review_count:3,install_blockers:['等待整理完成']};await f.run('poll()');
+  assert.equal(f.elements.get('updateInstall').disabled,true);assert.ok(f.elements.get('updateBlockers').innerHTML.includes('等待整理完成'));
+  assert.equal(f.elements.get('updateCloseSummary').textContent,'将关闭记录器和 3 个回看窗口。');
+  f.data.snapshot.updates.install_blockers=[];await f.run('poll()');assert.equal(f.elements.get('updateInstall').disabled,false);
+  f.elements.get('updateChannel').value='preview';f.elements.get('updateChannel').onchange();assert.equal(f.elements.get('updateInstall').disabled,true);
+  await f.elements.get('updateInstall').onclick();assert.equal(f.calls.some(c=>c.name==='update_action'),false);
+});
+
+test('accepted install returns to retryable state on asynchronous backend failure',async()=>{
+  const f=await fixture(snapshot({closing:false,updates:{state:'ready',current_version:'0.6.0',latest_version:'0.7.0',can_install:true}}));
+  f.data.snapshot.closing=true;await f.elements.get('updateInstall').onclick();
+  assert.equal(f.run('updateInstallAccepted'),true);assert.equal(f.elements.get('updateInstall').disabled,true);
+  f.data.snapshot.closing=false;f.data.snapshot.updates.error='回看窗口未能关闭，请重试。';await f.run('poll()');
+  assert.equal(f.run('updateInstallAccepted'),false);assert.equal(f.elements.get('updateInstall').disabled,false);
+  assert.equal(f.elements.get('updateError').textContent,'回看窗口未能关闭，请重试。');
+});
+
+test('unconfirmed cancellation remains actionable after install acceptance and does not promise safe exit',async()=>{
+  const f=await fixture(snapshot({closing:true,updates:{state:'ready',can_install:true,cancel_pending:true,error:'取消未确认'}}));
+  f.run('updateInstallAccepted=true;renderUpdates()');
+  assert.equal(f.elements.get('updateCancel').textContent,'重试取消');assert.equal(f.elements.get('updateCancel').disabled,false);
+  assert.equal(f.elements.get('updateInstall').classList.contains('hidden'),true);
+  assert.equal(f.elements.get('updateStatus').textContent,'取消尚未确认');
+  assert.ok(!f.elements.get('homeStatus').textContent.includes('安全关闭'));
+  assert.ok(!f.elements.get('jobDetail').textContent.includes('自动关闭'));
+  await f.elements.get('updateCancel').onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls.filter(c=>c.name==='update_action').at(-1).args)),[{action:'cancel'}]);
+  assert.equal(f.elements.get('updateCancel').disabled,false);
+  f.data.snapshot.updates.cancel_pending=false;f.data.snapshot.closing=false;f.data.snapshot.updates.error='已取消这次安装，当前版本保留。';await f.run('poll()');
+  assert.equal(f.run('updateInstallAccepted'),false);assert.equal(f.elements.get('updateCancel').classList.contains('hidden'),true);
+});
+
+test('last update failure and recovery details remain separate from idle discovery state',async()=>{
+  for(const raw of [null,[],{},false])assert.equal(lastInstallView(raw),null);
+  assert.equal(lastInstallView({state:'failed',time:1e30}).time,0);
+  const f=await fixture(snapshot({updates:{state:'idle',last_install:{state:'recovery_required',version:'0.7.0',time:1790130434,message:'保留备份，等待恢复。',backup_path:'D:\\synthetic-only\\transaction\\backup',recovery_path:'synthetic recovery file'}}}));
+  assert.equal(f.elements.get('updateLastTitle').textContent,'上次更新需要恢复');
+  assert.equal(f.elements.get('updateLastResult').classList.contains('hidden'),false);
+  assert.equal(f.elements.get('updateBackupPath').value,'D:\\synthetic-only\\transaction\\backup');
+  assert.equal(f.elements.get('updateRecoveryValue').value,'synthetic recovery file');
+  await f.run('poll()');assert.equal(f.elements.get('updateLastTitle').textContent,'上次更新需要恢复');
+  assert.equal(f.calls.some(c=>c.name==='update_action'),false);
 });

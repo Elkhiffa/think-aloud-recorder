@@ -10,6 +10,10 @@ class WindowManager:
         self._closing = False
         self._shutdown_thread = None
         self._viewers = {}
+        self._viewer_changed = threading.Condition(self._lock)
+        self._main_gone = threading.Event()
+        self._updating = False
+        self._update_main_closing = False
 
     def bind_main(self, window):
         self.main = window
@@ -17,6 +21,7 @@ class WindowManager:
         window.events.closed += self._main_closed
 
     def _main_closed(self):
+        self._main_gone.set()
         # Review windows do not need OBS. Finish engine cleanup even while they
         # remain open; a non-daemon worker also survives the last window closing.
         with self._lock:
@@ -27,8 +32,17 @@ class WindowManager:
 
     def close_main(self):
         # Native close events must not wait on dialogs or worker completion.
+        if self.service.update_in_progress() is True:
+            # Helper readiness alone is not permission for the user's X to
+            # remove the error/cancellation surface while viewers remain.
+            with self._lock:programmatic=self._update_main_closing
+            return programmatic and self.service.close_allowed(for_update=True)
         if self.service.close_allowed():
             return True
+        # Update admission can race the first read above. Its native-only
+        # close permission must also be explicit in the service lock.
+        if self.service.update_in_progress() is True:
+            return False
         with self._lock:
             if not self._closing:
                 self._closing = True
@@ -51,6 +65,8 @@ class WindowManager:
                 self._closing = False
 
     def open_review(self, session):
+        with self._lock:
+            if self._updating:raise RuntimeError('应用正在退出以完成更新。')
         from review_runtime import ReviewAPI, prepare_window
         page, payload = prepare_window(self.service.root, session)
         api = ReviewAPI(session.path, payload, self.service.root / 'state/review-layout.json')
@@ -64,8 +80,9 @@ class WindowManager:
                 self._viewers[window.uid] = window
 
             def closed():
-                with self._lock:
+                with self._viewer_changed:
                     self._viewers.pop(window.uid, None)
+                    self._viewer_changed.notify_all()
                 page.unlink(missing_ok=True)
             window.events.closed += closed
             if not api._ready.wait(15):
@@ -76,4 +93,34 @@ class WindowManager:
         except Exception:
             if 'window' not in locals():
                 page.unlink(missing_ok=True)
+            raise
+
+    def review_count(self):
+        with self._lock:return len(self._viewers)
+
+    def close_for_update(self, timeout=5):
+        """Only the admitted update flow closes viewers; ordinary close does not."""
+        import time
+        if self.service.update_close_ready() is not True:
+            raise RuntimeError('尚未完成安全退出检查，未关闭回看窗口。')
+        with self._lock:
+            self._updating=True
+            viewers=list(self._viewers.values())
+        try:
+            for window in viewers:window.destroy()
+            deadline=time.monotonic()+timeout
+            with self._viewer_changed:
+                while self._viewers:
+                    remaining=deadline-time.monotonic()
+                    if remaining<=0:raise RuntimeError('回看窗口尚未关闭，更新未开始；请关闭后重试。')
+                    self._viewer_changed.wait(remaining)
+            # Keep the main error/status surface until all viewers are gone.
+            with self._lock:self._update_main_closing=True
+            self.main.destroy()
+            if not self._main_gone.wait(timeout):
+                raise RuntimeError('主窗口尚未关闭，更新未开始；请稍后重试。')
+        except Exception:
+            with self._lock:
+                self._updating=False
+                self._update_main_closing=False
             raise

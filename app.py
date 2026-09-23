@@ -8,7 +8,7 @@ BRIDGE_METHODS = ('get_state', 'refresh_devices', 'save_settings', 'save_preset'
                   'start_recording', 'stop_recording',
                   'process_session', 'open_review', 'rename_session', 'package_session', 'open_folder',
                   'open_raw', 'save_cloud_key', 'verify_cloud_key', 'recover_cloud_task',
-                  'model_action')
+                  'model_action', 'update_action')
 
 
 class DesktopAPI:
@@ -37,6 +37,8 @@ def instance_lock(root):
 
 def main():
     root = Path(__file__).resolve().parent
+    from update_installer import ensure_launch_allowed
+    ensure_launch_allowed(root)
     with instance_lock(root):
         return run_window(root)
 
@@ -56,6 +58,9 @@ def run_window(root):
     windows.bind_main(window)
     service.set_window(window)
     service.set_review_opener(windows.open_review)
+    service.set_update_lifecycle(windows.review_count, windows.close_for_update)
+    from update_installer import acknowledge_start
+    window.events.loaded += lambda: acknowledge_start(root)
     # Explicit renderer prevents silent fallback to the obsolete MSHTML engine.
     webview.settings['ALLOW_FILE_URLS'] = True
     try:

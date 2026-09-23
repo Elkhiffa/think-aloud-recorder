@@ -158,6 +158,18 @@ async function bridge(page, state = snapshot(), requestedTheme = 'light') {
       const fixture = window.__syntheticFixture;
       if (method === 'get_state') { fixture.polls++; return { ok: true, data: JSON.parse(JSON.stringify(fixture.snapshot)) }; }
       fixture.calls.push({ method, args });
+      if (method === 'update_action') {
+        if (fixture.updateFailure) return {ok:false,error:fixture.updateFailure};
+        const u=fixture.snapshot.updates, request=args[0];
+        if(request.action==='check')Object.assign(u,{state:'checking',include_prerelease:request.include_prerelease,error:''});
+        if(request.action==='download')Object.assign(u,{state:'downloading',downloaded_bytes:0,error:''});
+        if(request.action==='cancel'){
+          if(u.cancel_pending){if(fixture.confirmUpdateCancel){u.cancel_pending=false;u.error='已取消这次安装，当前版本保留。';fixture.snapshot.closing=false;}}
+          else Object.assign(u,{state:u.latest_version?'available':'idle',downloaded_bytes:0,error:''});
+        }
+        if(request.action==='install')fixture.snapshot.closing=true;
+        return {ok:true,data:JSON.parse(JSON.stringify(u))};
+      }
       if (method === 'refresh_devices') {
         const id = fixture.refreshSequence++ ? `fixture-refresh-${fixture.refreshSequence}` : 'fixture-refresh';
         if (fixture.refreshSnapshot) Object.assign(fixture.snapshot, JSON.parse(JSON.stringify(fixture.refreshSnapshot)));
@@ -636,7 +648,7 @@ async function main() {
   const origin = `http://127.0.0.1:${server.address().port}`;
   const browser = await chromium.launch({ headless: true, channel: process.env.TAR_UI_CHANNEL || 'msedge' });
   try {
-    await makeSyntheticVideo(browser, origin);
+    if(!process.env.TAR_UI_ONLY||process.env.TAR_UI_ONLY==='review')await makeSyntheticVideo(browser, origin);
     const context = await browser.newContext({ viewport: { width: 1240, height: 900 }, deviceScaleFactor: 1 });
     context.setDefaultTimeout(6000); context.setDefaultNavigationTimeout(10000);
     await context.route('**/*', route => {
@@ -644,7 +656,9 @@ async function main() {
       evidence.errors.push(`Blocked non-fixture request: ${route.request().url()}`); return route.abort();
     });
     context.on('page', page => page.on('pageerror', error => evidence.errors.push(error.message)));
-    for (const [name, task] of [['recorder scenarios', homeChecks], ['first launch scenario', firstUseChecks], ['device setup scenarios', deviceSetupChecks], ['vocabulary scenarios', vocabularyChecks], ['review scenarios', reviewChecks]]) {
+    for (const [name, task] of [['recorder scenarios', homeChecks], ['first launch scenario', firstUseChecks], ['device setup scenarios', deviceSetupChecks], ['vocabulary scenarios', vocabularyChecks], ['update scenarios', updateChecks], ['review scenarios', reviewChecks]]) {
+      if(process.env.TAR_UI_ONLY&&!name.startsWith(process.env.TAR_UI_ONLY+' '))continue;
+      (evidence.scenarios||=[]).push(name);
       await check(name, () => task(context, origin));
     }
     await check('no browser exceptions or unexpected network requests', () => assert.deepEqual(evidence.errors, []));
@@ -656,3 +670,133 @@ async function main() {
   if (!evidence.passed) process.exitCode = 1;
 }
 main().catch(error => { console.error(error.stack); server.close(); process.exitCode = 1; });
+
+async function updateChecks(context,origin){
+  const page=await context.newPage();await page.setViewportSize({width:1060,height:780});await bridge(page);
+  await page.goto(origin+'/ui/index.html');await page.waitForFunction(()=>!document.querySelector('#recordButton').disabled);
+  const base={current_version:'0.6.0-preview.3',state:'idle',latest_version:null,include_prerelease:false,can_install:false,install_blockers:[],review_count:0};
+  const updates=async value=>{await patchSnapshot(page,{updates:{...base,...value},closing:false});await page.evaluate(()=>poll());};
+  await check('updates absent on older bridge: safe dialog, no automatic requests and stable main CTA',async()=>{
+    const initial=await box(page,'#recordButton');await page.locator('#versionButton').click();
+    assert.equal(await page.locator('#updateCheck').isDisabled(),true);assert.equal(await page.locator('#updateCurrent').textContent(),'尚未获取');
+    assert.equal((await calls(page,'update_action')).length,0);await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#versionButton').evaluate(n=>n===document.activeElement),true);
+    const after=await box(page,'#recordButton');assert.deepEqual(after,initial);
+    await updates({});assert.equal(await page.locator('#versionButton').textContent(),'v0.6.0-preview.3');
+    assert.deepEqual(await box(page,'#recordButton'),initial);await screen(page,'updates-home-1060');
+  });
+  await check('stable is default and opening dialog does not check; explicit check and cancel use bridge',async()=>{
+    await page.locator('#versionButton').click();assert.equal(await page.locator('#updateChannel').inputValue(),'stable');
+    assert.equal((await calls(page,'update_action')).length,0);await screen(page,'updates-idle-light');
+    await page.locator('#updateCheck').click();await page.waitForFunction(()=>document.querySelector('#updateStatus').textContent==='正在检查更新');
+    assert.deepEqual((await calls(page,'update_action')).at(-1).args,[{action:'check',include_prerelease:false}]);
+    assert.equal(await page.locator('#updateChannel').isDisabled(),true);await page.locator('#updateCancel').click();
+    await page.waitForFunction(()=>document.querySelector('#updateStatus').textContent==='尚未检查更新');
+    assert.equal((await calls(page,'update_action')).at(-1).args[0].action,'cancel');
+  });
+  await check('latest, no release and release notes states are concrete; notes cannot inject HTML',async()=>{
+    await updates({state:'current',latest_version:'0.6.0-preview.3'});assert.equal(await page.locator('#updateStatus').textContent(),'已是当前频道的最新版本');
+    assert.equal(await page.locator('#updateDownload').isVisible(),false);
+    await updates({state:'no_release'});assert.equal(await page.locator('#updateLatest').textContent(),'暂无发布');
+    await updates({state:'available',latest_version:'0.7.0',notes:'改进时间轴拖动与操作记录的可读性。\n修复回看窗口关闭时的状态同步。\n<script>window.__badRelease=true</script>',total_bytes:251658240,release_url:'https://github.com/Elkhiffa/think-aloud-recorder/releases/tag/v0.7.0'});
+    assert.equal(await page.locator('#updateLatest').textContent(),'v0.7.0');assert.ok((await page.locator('#updateSize').textContent()).includes('240.0 MiB'));
+    assert.ok((await page.locator('#updateNotes').textContent()).includes('<script>'));assert.equal(await page.locator('#updateNotes script').count(),0);
+    await page.locator('#updateRelease').click();assert.equal((await calls(page,'update_action')).at(-1).args[0].action,'open_release');
+    await screen(page,'updates-available-light');
+  });
+  await check('switching channel is explicit, requires a fresh check and never saves recording presets',async()=>{
+    const count=(await calls(page,'update_action')).length;
+    await page.locator('#updateChannel').selectOption('preview');assert.equal((await calls(page,'update_action')).length,count);
+    assert.equal(await page.locator('#updateDownload').isDisabled(),true);
+    await page.evaluate(()=>poll());assert.equal(await page.locator('#updateChannel').inputValue(),'preview');
+    await page.locator('#updateCheck').click();assert.deepEqual((await calls(page,'update_action')).at(-1).args,[{action:'check',include_prerelease:true}]);
+    assert.equal((await calls(page,'save_preset')).length,0);await page.locator('#updateCancel').click();
+  });
+  await check('download progress is determinate when sized, cancellable and leaves recording available',async()=>{
+    await updates({state:'available',latest_version:'0.7.0',total_bytes:251658240,notes:'改进时间轴拖动与操作记录的可读性。'});
+    await page.locator('#updateDownload').click();await page.waitForFunction(()=>document.querySelector('#updateStatus').textContent==='正在下载更新');
+    assert.equal((await calls(page,'update_action')).at(-1).args[0].action,'download');
+    await updates({state:'downloading',latest_version:'0.7.0',downloaded_bytes:100663296,total_bytes:251658240,notes:'改进时间轴拖动与操作记录的可读性。'});
+    assert.equal(await page.locator('#updateProgress').evaluate(n=>n.value),40);
+    assert.equal(await page.locator('#recordButton').isDisabled(),false);await screen(page,'updates-downloading-light');
+    await page.locator('#updateClose').click();assert.equal(await page.locator('#recordButton').isEnabled(),true);
+    await page.locator('#versionButton').click();assert.equal(await page.locator('#updateProgress').evaluate(n=>n.value),40);
+    await updates({state:'downloading',latest_version:'0.7.0',downloaded_bytes:12345});assert.equal(await page.locator('#updateProgress').getAttribute('value'),null);
+    await page.locator('#updateCancel').click();assert.equal((await calls(page,'update_action')).at(-1).args[0].action,'cancel');
+    await updates({state:'verifying',latest_version:'0.7.0',total_bytes:100,downloaded_bytes:100});
+    assert.equal(await page.locator('#updateInstall').isVisible(),false);assert.equal(await page.locator('#updateCancel').isVisible(),false);
+  });
+  await check('network failure is readable, supports explicit retry and does not affect capture CTA',async()=>{
+    await updates({state:'error',latest_version:'0.7.0',error:'无法连接 GitHub，请检查网络后重试。'});
+    assert.equal(await page.locator('#updateError').isVisible(),true);assert.equal(await page.locator('#updateDownload').textContent(),'重试下载');
+    await page.locator('#updateDownload').click();assert.equal((await calls(page,'update_action')).at(-1).args[0].action,'download');
+    await updates({state:'idle'});await page.evaluate(()=>window.__syntheticFixture.updateFailure='更新服务器暂时不可用。');
+    await page.locator('#updateCheck').click();await page.waitForFunction(()=>document.querySelector('#updateError').textContent==='更新服务器暂时不可用。');
+    assert.equal(await page.locator('#recordButton').isDisabled(),false);assert.equal(await page.locator('#updateCheck').isDisabled(),false);
+    await screen(page,'updates-error-light');await page.evaluate(()=>window.__syntheticFixture.updateFailure='');
+    await page.locator('#updateCheck').click();await page.locator('#updateCancel').click();
+  });
+  await check('verified installation uses backend blockers and exact review count, survives polling and races',async()=>{
+    const ready={state:'ready',latest_version:'0.7.0',can_install:false,review_count:2,notes:'改进时间轴拖动与操作记录的可读性。\n新增软件内更新。',total_bytes:251658240,install_blockers:['还有场次正在整理或排队，请等待完成。','本地模型正在下载或校验，请先暂停并等待文件保存。']};
+    await updates(ready);assert.equal(await page.locator('#updateInstall').isDisabled(),true);
+    assert.equal(await page.locator('#updateCloseSummary').textContent(),'将关闭记录器和 2 个回看窗口。');
+    assert.equal(await page.locator('#updateBlockers li').count(),2);await screen(page,'updates-blocked-light');
+    await updates({...ready,can_install:true,install_blockers:['还有场次正在整理或排队，请等待完成。']});assert.equal(await page.locator('#updateInstall').isDisabled(),true);
+    await updates({...ready,can_install:true,install_blockers:[]});assert.equal(await page.locator('#updateInstall').isDisabled(),false);
+    await page.evaluate(()=>window.__syntheticFixture.updateFailure='请先结束录制并等待录像保存完成。');
+    await page.locator('#updateInstall').click();await page.waitForFunction(()=>document.querySelector('#updateError').textContent==='请先结束录制并等待录像保存完成。');
+    assert.equal(await page.locator('#updateInstall').isDisabled(),false);await page.evaluate(()=>window.__syntheticFixture.updateFailure='');
+    await page.locator('#updateInstall').click();assert.equal((await calls(page,'update_action')).at(-1).args[0].action,'install');
+    assert.equal(await page.locator('#updateInstall').isDisabled(),true);
+    await updates({...ready,can_install:true,install_blockers:[],error:'回看窗口未能关闭，请重试。'});
+    assert.equal(await page.locator('#updateInstall').isDisabled(),false);assert.equal(await page.locator('#updateError').textContent(),'回看窗口未能关闭，请重试。');
+  });
+  await check('unconfirmed cancellation can retry after install acceptance and cannot imply safe shutdown',async()=>{
+    await updates({state:'ready',latest_version:'0.7.0',can_install:true});await page.locator('#updateInstall').click();
+    await patchSnapshot(page,{closing:true,updates:{...base,state:'ready',latest_version:'0.7.0',cancel_pending:true,error:'更新助手尚未确认取消。应用已阻止关闭，请点击“重试取消”。'}});await page.evaluate(()=>poll());
+    assert.equal(await page.locator('#updateStatus').textContent(),'取消尚未确认');assert.equal(await page.locator('#updateCancel').textContent(),'重试取消');
+    assert.equal(await page.locator('#updateCancel').isEnabled(),true);assert.equal(await page.locator('#updateInstall').isVisible(),false);
+    assert.ok(!(await page.locator('#homeStatus').textContent()).includes('安全关闭'));assert.ok(!(await page.locator('#jobDetail').textContent()).includes('自动关闭'));
+    await page.evaluate(()=>window.__syntheticFixture.updateFailure='取消标记暂时无法保存，请重试。');await page.locator('#updateCancel').click();
+    await page.waitForFunction(()=>document.querySelector('#updateError').textContent==='取消标记暂时无法保存，请重试。');assert.equal(await page.locator('#updateCancel').isEnabled(),true);
+    await page.evaluate(()=>window.__syntheticFixture.updateFailure='');await page.locator('#updateCancel').click();
+    assert.deepEqual((await calls(page,'update_action')).at(-1).args,[{action:'cancel'}]);assert.equal(await page.locator('#updateStatus').textContent(),'取消尚未确认');
+    await screen(page,'updates-cancel-unconfirmed-light');
+    await page.evaluate(()=>window.__syntheticFixture.confirmUpdateCancel=true);await page.locator('#updateCancel').click();
+    await page.waitForFunction(()=>document.querySelector('#updateCancel').classList.contains('hidden'));
+    assert.equal(await page.locator('#updateError').textContent(),'已取消这次安装，当前版本保留。');assert.equal(await page.locator('#recordButton').isEnabled(),true);
+  });
+  await check('previous update results survive idle polling with selectable backup and recovery instructions',async()=>{
+    const names={failed:'上次更新未完成',rolled_back:'上次更新已回滚',recovery_required:'上次更新需要恢复',startup_unconfirmed:'上次更新尚未确认启动',complete:'上次更新已完成'};
+    for(const [state,title] of Object.entries(names)){
+      await updates({last_install:{state,version:'0.7.0',message:'合成测试结果：'+state,time:1790130434,backup_path:'D:\\synthetic-only\\事务目录\\backup'}});
+      assert.equal(await page.locator('#updateLastResult').isVisible(),true);assert.equal(await page.locator('#updateLastTitle').textContent(),title);
+      assert.equal(await page.locator('#updateLastMessage').textContent(),'合成测试结果：'+state);await page.evaluate(()=>poll());assert.equal(await page.locator('#updateLastTitle').textContent(),title);
+    }
+    await updates({last_install:{state:'recovery_required',version:'0.7.0',message:'更新未完成，请使用保留的安装助手恢复；不要删除备份。',time:1790130434,backup_path:'D:\\synthetic-only\\事务目录\\backup'}});
+    assert.ok((await page.locator('#updateRecoveryHint').textContent()).includes('docs/updates.md'));
+    assert.equal(await page.locator('#updateRecoveryArea').isVisible(),false);await page.locator('#updateBackupPath').click();await page.keyboard.press('Control+A');
+    assert.equal(await page.locator('#updateBackupPath').evaluate(n=>n.selectionEnd-n.selectionStart),await page.locator('#updateBackupPath').evaluate(n=>n.value.length));
+    await page.evaluate(()=>poll());assert.equal(await page.locator('#updateBackupPath').evaluate(n=>n.selectionEnd-n.selectionStart),await page.locator('#updateBackupPath').evaluate(n=>n.value.length));
+    await screen(page,'updates-previous-recovery-light');
+    await updates({last_install:{state:'rolled_back',version:'0.7.0',message:'新版本未通过检查，已恢复旧版本；备份和报告保留。',time:1790130434,backup_path:'D:\\synthetic-only\\事务目录\\backup'}});await screen(page,'updates-previous-rollback-light');
+    await updates({last_install:{state:'recovery_required',version:'0.7.0',time:1790130434,backup_path:'D:\\synthetic-only\\事务目录\\backup',recovery_path:'D:\\synthetic-only\\事务目录\\恢复更新前版本.cmd',message:'更新未完成，请使用保留的安装助手恢复；不要删除备份。'}});
+    assert.equal(await page.locator('#updateRecoveryValue').getAttribute('readonly'),'');await page.locator('#updateRecoveryValue').click();await page.keyboard.press('Control+A');
+    assert.ok(await page.locator('#updateRecoveryValue').evaluate(n=>n.selectionEnd===n.value.length));
+    assert.ok((await page.locator('#updateRecoveryHint').textContent()).includes('双击下面的恢复文件'));await screen(page,'updates-recovery-file-light');
+    await page.setViewportSize({width:390,height:640});await assertInsideViewport(page,'#updateDialog');
+    assert.equal(await page.locator('#updateDialog').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);await page.locator('#updateRecoveryValue').scrollIntoViewIfNeeded();await screen(page,'updates-recovery-file-compact');
+  });
+  await check('compact and dark update dialog scrolls inside viewport with reachable footer and no overflow',async()=>{
+    await page.locator('#updateClose').click();await page.setViewportSize({width:390,height:640});await theme(page,'dark');
+    await updates({state:'ready',latest_version:'0.7.0',current_version:'0.6.0-preview.3',can_install:false,review_count:3,install_blockers:['还有场次正在整理或排队，请等待完成。'],notes:Array.from({length:25},(_,i)=>(i+1)+'. 合成测试更新说明：保留原有资料库与录制设置。').join('\n')});
+    await noHorizontalOverflow(page);await screen(page,'updates-home-compact-dark');await page.locator('#versionButton').click();
+    await assertInsideViewport(page,'#updateDialog');await assertInsideViewport(page,'.update-footer');
+    assert.equal(await page.locator('#updateDialog').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
+    await page.locator('.update-body').hover();await page.mouse.wheel(0,1200);await page.waitForFunction(()=>document.querySelector('.update-body').scrollTop>0);
+    await assertInsideViewport(page,'#updateInstall');await screen(page,'updates-compact-dark');
+    await page.keyboard.press('Escape');assert.equal(await page.locator('#versionButton').evaluate(n=>n===document.activeElement),true);
+    await page.setViewportSize({width:1060,height:780});await theme(page,'light');
+  });
+  await page.close();
+}

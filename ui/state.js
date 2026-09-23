@@ -9,6 +9,31 @@
   const clone = value => JSON.parse(JSON.stringify(value));
   const splitWords = text => String(text||'').replace(/^\uFEFF/,'').split(/[,，;；、\r\n]+/).map(word=>word.normalize('NFC').trim()).filter(Boolean);
   const vocabularyWords = draft => [...new Set([...(draft?.hotword_files||[]).flatMap(file=>file.words||[]),...splitWords(draft?.hotword_manual)].map(word=>word.normalize('NFC').trim()).filter(Boolean))];
+  // Update availability is independent of recording presets and readiness.
+  function updateView(raw,connected=true,includePrerelease=false) {
+    const present=!!raw&&typeof raw==='object'&&!Array.isArray(raw),u=present?raw:{};
+    const states=['idle','checking','available','current','no_release','downloading','verifying','ready','installing','error'];
+    const state=states.includes(u.state)?u.state:'idle';
+    const blockers=Array.isArray(u.install_blockers)?u.install_blockers.filter(x=>typeof x==='string'&&x.trim()):[];
+    const count=value=>Number.isFinite(Number(value))?Math.max(0,Number(value)):0;
+    const channelChanged=includePrerelease!==(u.include_prerelease===true);
+    const cancelPending=u.cancel_pending===true;
+    const busy=cancelPending||['checking','downloading','verifying','installing'].includes(state);
+    return {...u,present,state,blockers,channelChanged,busy,cancelPending,review_count:Math.floor(count(u.review_count)),
+      downloaded_bytes:count(u.downloaded_bytes),total_bytes:count(u.total_bytes),
+      canCheck:present&&connected&&!busy,
+      canDownload:present&&connected&&!busy&&!channelChanged&&!!u.latest_version&&['available','error'].includes(state),
+      canInstall:present&&connected&&!cancelPending&&!channelChanged&&state==='ready'&&u.can_install===true&&!blockers.length};
+  }
+  function lastInstallView(raw) {
+    if(!raw||typeof raw!=='object'||Array.isArray(raw)||typeof raw.state!=='string')return null;
+    const titles={complete:'上次更新已完成',installed:'上次更新已安装',rolled_back:'上次更新已回滚',failed:'上次更新未完成',startup_unconfirmed:'上次更新尚未确认启动',awaiting_start:'上次更新等待启动确认',applying:'上次更新需要恢复',files_installed:'上次更新需要恢复',rolling_back:'上次更新需要恢复',recovery_required:'上次更新需要恢复'};
+    const recovery=['applying','files_installed','rolling_back','recovery_required','startup_unconfirmed','awaiting_start'].includes(raw.state);
+    const text=value=>typeof value==='string'?value:'';
+    return {title:titles[raw.state]||'上次更新结果',warning:!['complete','installed'].includes(raw.state),recovery,
+      message:text(raw.message),version:text(raw.version),time:Number.isFinite(raw.time)&&raw.time>0&&raw.time<=8640000000000?raw.time:0,
+      backupPath:text(raw.backup_path),recoveryPath:text(raw.recovery_path)};
+  }
   function defaults(vault='') {
     return {game:'',vault,preset:'均衡 1080p30',source:'游戏窗口',window:'',monitor:'',mic:'',language:'zh',hotwords:'',hotword_files:[],hotword_manual:'',transcription_provider:'local',record_inputs:false};
   }
@@ -63,5 +88,5 @@
       return '';
     }
   }
-  return {State,FIELDS,defaults,splitWords,vocabularyWords};
+  return {State,FIELDS,defaults,splitWords,vocabularyWords,updateView,lastInstallView};
 });

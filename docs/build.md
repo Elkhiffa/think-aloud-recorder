@@ -64,7 +64,29 @@ install packages globally on a user's working computer.
    upstream zlib license. No global installation or PATH changes. Existing
    differing files are preserved and cause a failure. Add the verified source
    archive to a successor dependency-source manifest before packaging.
-7. Copy the application's allowlisted source/assets/licenses into `<stage>`.
+7. Prepare the independently versioned media CLI:
+
+   ```powershell
+   runtime/python.exe scripts/fetch_media_runtime.py --root <stage>
+   ```
+
+   This verifies the pinned official OBS-project `windows-deps-2026-07-15-x64.zip`,
+   then extracts only the FFmpeg n8.1.2 CLI and its 11 dependency DLLs into
+   `runtime/Lib/think_aloud_media`. Three VC runtime files from the prepared
+   Python seed are copied beside the CLI so it does not rely on a system VC
+   installation. `--archive <zip>` reuses a download, with the same hash check.
+   Existing different files stop preparation. OBS's own DLLs are not replaced.
+   Retain the fixed obs-deps recipe, source revisions, patches and upstream
+   notices in a successor source bundle. Bind the media `provenance.json` SHA256
+   in `source-manifest.json` as `provenance.media_runtime_manifest_sha256`.
+   The packager checks the full closure and excludes imageio's old bundled EXE.
+   `scripts/runtime-seed.json` independently fixes the previously verified
+   Python/OBS/input seed. Both the builder and release preflight check its full
+   file set and hashes; changing a dependency requires reviewing and committing
+   a successor lock, not regenerating it from an unreviewed candidate. This is
+   accepted-seed identity, not a claim of all upstream signatures or reproducible
+   native compilation.
+8. Copy the application's allowlisted source/assets/licenses into `<stage>`.
    Model weights remain optional. Run the tests and native launcher checks below.
 
 ## Acquire source materials
@@ -75,6 +97,8 @@ From the prepared checkout:
 runtime/python.exe scripts/fetch_runtime.py --outdir build/dependency-sources
 ```
 
+This older acquisition command is retained for inspecting the previous private
+seed. **It is not the source preparation command for the new media CLI.**
 Despite the historical script name, this command only downloads source materials
 and captures local FFmpeg version/configuration; it never installs a runtime.
 It obtains and hashes:
@@ -91,7 +115,7 @@ Partial downloads are retained. If acquisition failed with a `.part` file, choos
 a fresh `--outdir`; the fetcher does not overwrite or delete evidence. The OBS
 asset's hash is independently available in the upstream GitHub release API.
 
-The current Gyan static FFmpeg build enables GPLv3 and many external libraries.
+The previous Gyan static FFmpeg build enables GPLv3 and many external libraries.
 Its core source archive and configure line are now present, but matching external
 library source snapshots and exact build scripts are not yet archived. Review the
 OBS dependency and binary-wheel source/license coverage too. Until those concrete
@@ -115,15 +139,20 @@ evidence. Pass `--source-dir build/dependency-sources-v2` to the packager to inc
 this successor material. Put the extracted WebView2 LICENSE/NOTICE beside the
 software notices as well when assembling the final release.
 
-The concrete outstanding source blocker is the Gyan FFmpeg 7.1 external libraries
-and exact build recipe. Its maintainer points script requesters to generic MABS,
-not a versioned recipe for this binary. Changing the FFmpeg binary or replacing
-its work with PyAV/OBS libav would require media regression work; it is not a
-notice-only change. In particular, preserve all-stream recovery, selected video
-plus mixed-audio remux, microphone-only track selection, asynchronous resampling
-with `first_pts=0`, FLAC encoding and 600-second chunk timing. Do not replace a
-validated media path merely to remove a license label without proving those
-behaviors and the replacement's own matching-source materials.
+The approved replacement uses the same CLI interface, with fixed upstream
+build inputs. Its 19 source/recipe files and original patches have been gathered;
+see `docs/release-readiness.md` for the current overall package review. Run the
+real, opt-in synthetic regression against the actual prepared application:
+
+```powershell
+<stage>/runtime/python.exe scripts/verify_media_runtime.py --app-root <stage> --ffmpeg <stage>/runtime/Lib/think_aloud_media/ffmpeg.exe --fixture-ffmpeg <fixture-encoder.exe> --require-selected-cli --outdir work/media-new-check
+```
+
+It exercises all-stream recovery, selected video/mix remux, microphone-only
+extraction, asynchronous resampling with `first_pts=0`, FLAC encoding and exact
+600-second chunk timing. It never captures a real device, reads an API key,
+uploads audio or runs a model. The fixture encoder is separate from the CLI
+under test; a previous private encoder may generate the test input.
 
 ## Build a private evaluation candidate
 

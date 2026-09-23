@@ -49,6 +49,15 @@ def main():
         cfg = config()
         assert Path(FFMPEG).resolve().is_relative_to(root)
         checks['ffmpeg'] = str(Path(FFMPEG).relative_to(root))
+        from media_runtime import MEDIA_EXECUTABLE, verify_media
+        assert checks['ffmpeg'].replace('\\', '/') == MEDIA_EXECUTABLE, '未使用独立音视频组件'
+        media = verify_media(root)
+        import subprocess
+        result = subprocess.run([FFMPEG, '-version'], capture_output=True, timeout=20,
+                                creationflags=0x08000000 if os.name == 'nt' else 0)
+        assert result.returncode == 0, '音视频组件无法启动'
+        checks['media_runtime'] = {'version': media['version'], 'files': len(media['files']),
+                                  'version_output': result.stdout.decode(errors='replace').splitlines()[0]}
         checks['library'] = cfg['vault']
         from model_manager import ModelManager
         checks['model_available'] = ModelManager(root).resolve_model() is not None

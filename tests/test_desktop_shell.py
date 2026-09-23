@@ -24,17 +24,31 @@ class DesktopShellTests(unittest.TestCase):
         webview.settings = {}
         service_module = Mock()
         window = webview.create_window.return_value
-        window.events.closing = []
         # pywebview event supports += callback; model that behavior for the shell.
         class Event:
+            def __init__(self):
+                self.handlers = []
             def __iadd__(self, handler):
-                self.handler = handler
+                self.handlers.append(handler)
                 return self
+            def fire(self):
+                for handler in self.handlers:
+                    handler()
         window.events.closing = Event()
         window.events.closed = Event()
+        window.events.loaded = Event()
         with patch.dict('sys.modules', {'webview': webview, 'desktop_service': service_module}), \
-                patch.object(app, 'instance_lock', return_value=nullcontext()):
+                patch.object(app, 'instance_lock', return_value=nullcontext()), \
+                patch('update_installer.ensure_launch_allowed') as launch_guard, \
+                patch('update_installer.acknowledge_start') as acknowledge:
+            def native_loop(**kwargs):
+                acknowledge.assert_not_called()
+                window.events.loaded.fire()
+            webview.start.side_effect = native_loop
             self.assertEqual(app.main(), 0)
+            root = Path(app.__file__).resolve().parent
+            launch_guard.assert_called_once_with(root)
+            acknowledge.assert_called_once_with(root)
         kwargs = webview.create_window.call_args.kwargs
         self.assertTrue(kwargs['url'].startswith('file:///'))
         self.assertEqual(kwargs['min_size'], (820, 620))

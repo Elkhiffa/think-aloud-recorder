@@ -13,6 +13,12 @@ Windows 游戏体验记录器：录下游戏画面与口述，在独立窗口同
 
 需要 Windows 10/11 x64 和 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。软件不安装全局 Python、不改变系统代理。
 
+## 软件更新
+
+点击主窗口顶部的版本号，打开「版本与更新」。手动检查 GitHub Release、下载并校验后，在工作结束时点击「退出并更新」。正式版为默认通道，预览版需要主动选择；没有 Release、已经是最新版和网络失败会分别显示。
+
+安装沿用当前目录，保留预设、资料库路径、本机密钥、模型、回看偏好和用户词库。录制、保存、整理、导出等工作尚未结束时不能安装；确认更新会关闭全部回看窗口。更新事务保留旧版备份，失败时恢复或给出明确的恢复入口。详见[更新说明与发布准备](docs/updates.md)。
+
 ## 转写方式
 
 - **本地 Whisper large-v3**：在本机处理；模型约 3.09 GB，独立于软件包。向导可下载固定版本，或校验并直接引用已有模型文件夹，不复制权重。默认使用 CPU。
@@ -73,6 +79,8 @@ runtime/python.exe scripts/build_portable.py --outdir dist/candidate --candidate
 ```
 
 准备运行环境、构建范围与依赖源码材料见 [构建说明](docs/build.md)。`--candidate` 生成供本地验证的包；公开二进制发行需满足构建器检查的第三方源码条件。源码许可证不自动涵盖第三方二进制。
+
+GitHub 首次发行、三件套校验和当前依赖缺口见 [Release 准备状态](docs/release-readiness.md)。发布前运行 `scripts/prepare_release.py`；它仅检查本地产物并准备草稿，不上传文件或公开发布。候选包不能作为软件内更新的发布附件。
 
 实现约定见 [AGENTS.md](AGENTS.md)，体验要求见 [recorder-experience.md](docs/recorder-experience.md)，桌面接口见 [bridge-contract.md](docs/bridge-contract.md)。运行数据、密钥、模型与个人词库不进入 Git。
 

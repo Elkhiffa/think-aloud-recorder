@@ -125,9 +125,12 @@ def supplement(root, existing, out):
         'microsoft_vc_terms': 'Full runtime end-user terms and VS Community 2022 distributor terms archived. VS section 4 is the redistribution grant; the runtime EULA alone is not.',
     }
     manifest['redistribution_ready'] = False
-    manifest['gaps'] = [
+    # Adding Microsoft notices is not evidence that other upstream dependency
+    # reviews have completed. Preserve inherited gaps in the successor bundle.
+    manifest['gaps'] = list(dict.fromkeys([*manifest.get('gaps', []),
         'Exact Gyan FFmpeg 7.1 external-library source snapshots and build scripts are not supplied by its release assets; the archived FFmpeg core is not complete corresponding source.',
-    ]
+        'OBS binary dependencies and bundled native-wheel source/license coverage still require component-level review; top-level source archives and package labels do not close this review.',
+    ]))
     manifest['release_conditions'] = [
         'Preserve WebView2 SDK LICENSE and NOTICE with the binaries.',
         'VC runtime redistribution must follow the applicable Visual Studio license and unmodified redistributable-file list; merely possessing the runtime does not establish the distributor grant.',

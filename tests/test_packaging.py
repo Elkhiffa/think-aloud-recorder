@@ -4,12 +4,15 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import tarfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from scripts.build_portable import (ROOT_FILES, build, collect_files,
                                     launcher_bytes, read_sources, sha256)
 from scripts.fetch_runtime import extract_webview_notices, supplement
+from scripts.verify_runtime_seed import seed_managed_path
 
 
 class PackagingTests(unittest.TestCase):
@@ -39,6 +42,16 @@ class PackagingTests(unittest.TestCase):
         self.write('tools/input/provenance.json', json.dumps({'version': 'synthetic',
             'dll_sha256': sha256(self.root / 'tools/input/SDL2.dll'),
             'assets': [{'name': source.name, 'sha256': sha256(source)}]}).encode())
+        binary = self.write('runtime/Lib/think_aloud_media/ffmpeg.exe', b'MZ synthetic CLI')
+        media = self.write('runtime/Lib/think_aloud_media/provenance.json', json.dumps({
+            'schema': 1, 'version': 'synthetic', 'executable': 'ffmpeg.exe', 'files': [
+                {'filename': 'ffmpeg.exe', 'bytes': binary.stat().st_size, 'sha256': sha256(binary)}]}).encode())
+        self.source_manifest['provenance'] = {'media_runtime_manifest_sha256': sha256(media)}
+        seed = [{'path': name, 'bytes': file.stat().st_size, 'sha256': sha256(file)}
+                for name, file in collect_files(self.root).items() if seed_managed_path(name)]
+        self.write('scripts/runtime-seed.json', json.dumps({'schema': 1,
+            'baseline': {'version': 'synthetic', 'package_manifest_sha256': 'a' * 64},
+            'files': seed}).encode())
         self.save_manifest()
 
     def tearDown(self):
@@ -113,6 +126,52 @@ class PackagingTests(unittest.TestCase):
             self.assertEqual((self.base / 'one' / item['filename']).read_bytes(),
                              (self.base / 'two' / item['filename']).read_bytes())
 
+    def test_legacy_ffmpeg_binary_never_ships(self):
+        legacy = 'runtime/Lib/site-packages/imageio_ffmpeg/binaries/ffmpeg-win-x86_64-v7.1.exe'
+        self.write(legacy, b'MZ legacy CLI must not ship')
+        results = self.make()
+        with zipfile.ZipFile(self.base / 'out' / results[1]['filename']) as archive:
+            self.assertNotIn(legacy, archive.namelist())
+            self.assertIn('runtime/Lib/think_aloud_media/ffmpeg.exe', archive.namelist())
+
+    def test_media_runtime_must_match_bound_inventory(self):
+        self.write('runtime/Lib/think_aloud_media/ffmpeg.exe', b'changed')
+        with self.assertRaisesRegex(ValueError, 'Media runtime mismatch'):
+            self.make()
+        self.assertFalse((self.base / 'out').exists())
+
+    def test_media_inventory_is_bound_to_source_manifest(self):
+        self.source_manifest['provenance']['media_runtime_manifest_sha256'] = '0' * 64
+        self.save_manifest()
+        with self.assertRaisesRegex(ValueError, 'dependency-source provenance'):
+            self.make()
+
+    def test_modified_prepared_python_dependency_cannot_be_repackaged(self):
+        self.write('runtime/Lib/site-packages/fixture/config.json', b'changed seed')
+        with self.assertRaisesRegex(ValueError, 'Runtime seed content mismatch'):
+            self.make()
+
+    def test_package_version_uses_the_update_protocol_semver(self):
+        for version in ('01.0.0', '1.0.0-01', '1.0.0-a..b', '1.0.0-', 'v1.0.0'):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                build(self.root, self.base / 'invalid-version', candidate=True,
+                      version=version, launcher=b'MZ synthetic launcher fixture')
+        self.assertFalse((self.base / 'invalid-version').exists())
+        results = build(self.root, self.base / 'valid-version', candidate=True,
+                        version='1.0.0-RC.1+build.2', launcher=b'MZ synthetic launcher fixture')
+        with zipfile.ZipFile(self.base / 'valid-version' / results[1]['filename']) as archive:
+            self.assertEqual(json.loads(archive.read('portable.json'))['version'], '1.0.0-RC.1+build.2')
+
+    def test_existing_checksum_prevents_partial_release_set(self):
+        output = self.base / 'existing-sums'
+        output.mkdir()
+        sums = output / 'ExperienceRecorder-0.3.0-windows-x64-candidate-SHA256SUMS.txt'
+        sums.write_bytes(b'previous release evidence')
+        with self.assertRaises(FileExistsError):
+            self.make('existing-sums')
+        self.assertEqual(list(output.iterdir()), [sums])
+        self.assertEqual(sums.read_bytes(), b'previous release evidence')
+
     def test_inventory_matches_every_shipped_byte(self):
         result = self.make()
         with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
@@ -124,6 +183,29 @@ class PackagingTests(unittest.TestCase):
                 self.assertEqual(len(data), item['bytes'])
                 self.assertEqual(hashlib.sha256(data).hexdigest(), item['sha256'])
             self.assertFalse(manifest['dependency_source_status'])
+            metadata=json.loads(archive.read('portable.json'))
+            self.assertEqual(metadata['update_protocol'],1)
+            self.assertEqual(metadata['update_repository'],'Elkhiffa/think-aloud-recorder')
+            for name in ('updater.py','update_installer.py','docs/updates.md'):
+                self.assertIn(name,archive.namelist())
+
+    def test_generated_ffmpeg_license_supersedes_seed_once(self):
+        self.write('licenses/FFmpeg-GPL-3.0.txt', b'previous seed notice')
+        source = self.sources / 'synthetic-ffmpeg.tar.gz'
+        content = b'synthetic pinned license fixture'
+        with tarfile.open(source, 'w:gz') as archive:
+            item = tarfile.TarInfo('ffmpeg/COPYING.GPLv3')
+            item.size = len(content)
+            archive.addfile(item, io.BytesIO(content))
+        self.source_manifest['files'].append({'component': 'FFmpeg core',
+            'filename': source.name, 'bytes': source.stat().st_size, 'sha256': sha256(source)})
+        self.save_manifest()
+        result = self.make()
+        with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
+            records = json.loads(archive.read('package-manifest.json'))['files']
+            names = [r['path'].casefold() for r in records]
+            self.assertEqual(len(names), len(set(names)))
+            self.assertEqual(archive.read('licenses/FFmpeg-GPL-3.0.txt'), content)
 
     def test_public_build_rejects_known_source_gap_before_output(self):
         with self.assertRaisesRegex(ValueError, 'source review is incomplete'):
@@ -227,6 +309,18 @@ class PackagingTests(unittest.TestCase):
         before = (self.sources / 'source-manifest.json').read_bytes()
         with self.assertRaises(FileExistsError):
             supplement(self.root, self.sources, self.sources)
+        self.assertEqual((self.sources / 'source-manifest.json').read_bytes(), before)
+
+    def test_microsoft_supplement_keeps_unresolved_component_reviews(self):
+        self.source_manifest['gaps'] = ['Synthetic OBS dependency review remains open']
+        self.save_manifest()
+        before = (self.sources / 'source-manifest.json').read_bytes()
+        with patch('scripts.fetch_runtime.download_definition'), patch(
+                'scripts.fetch_runtime.extract_webview_notices', return_value={}):
+            result = supplement(self.root, self.sources, self.base / 'successor')
+        self.assertIn('Synthetic OBS dependency review remains open', result['gaps'])
+        self.assertTrue(any('native-wheel' in gap for gap in result['gaps']))
+        self.assertFalse(result['redistribution_ready'])
         self.assertEqual((self.sources / 'source-manifest.json').read_bytes(), before)
 
 

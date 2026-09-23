@@ -4,6 +4,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import json
+import hashlib
+import os
+import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -11,6 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import desktop_service as bridge
 import hotword_files
+from updater import UpdateManager as RealUpdateManager
 
 
 class DesktopServiceTests(unittest.TestCase):
@@ -40,7 +45,13 @@ class DesktopServiceTests(unittest.TestCase):
         self.model.resolve_model.return_value = None
         self.model.wait.return_value = True
         self.model.start_download.return_value = {'ok': True}
+        self.updates = MagicMock()
+        self.updates.snapshot.return_value = dict(current_version='0.6.0',state='idle',latest_version=None,
+            release_url=None,notes='',downloaded_bytes=0,total_bytes=0,error=None,include_prerelease=False)
+        self.updates.launch_install.return_value={'ready':True}
+        self.updates.cancel_install.return_value={'cancelled':True}
         self.patches = [
+            patch.dict('sys.modules',{'updater':SimpleNamespace(UpdateManager=MagicMock(return_value=self.updates))}),
             patch.object(bridge, 'load_settings', return_value=deepcopy(self.config)),
             patch.object(bridge, 'ModelManager', return_value=self.model),
             patch.object(bridge.recorder, 'client', side_effect=ConnectionRefusedError('offline')),
@@ -60,6 +71,9 @@ class DesktopServiceTests(unittest.TestCase):
         self.wait()
 
     def wait(self, background=True):
+        if self.service._update_thread:
+            self.service._update_thread.join(5)
+            self.assertFalse(self.service._update_thread.is_alive(),'synthetic update did not finish')
         if self.service._job:
             self.service._job.join(5)
             self.assertFalse(self.service._job.is_alive(), 'synthetic job did not finish')
@@ -1703,6 +1717,345 @@ class DesktopServiceTests(unittest.TestCase):
             self.assertFalse(self.service.open_bailian_console()['ok'])
         with patch.object(bridge.webbrowser, 'open', side_effect=OSError('synthetic failure')):
             self.assertFalse(self.service.open_bailian_console()['ok'])
+
+    def test_update_polling_is_read_only_and_startup_never_checks_network(self):
+        self.service.set_update_lifecycle(lambda:2,MagicMock())
+        self.updates.snapshot.return_value['state']='ready'
+        before=deepcopy(self.service._readiness)
+        with patch.object(self.service,'close_allowed',side_effect=AssertionError('poll changed close state')):
+            for _ in range(3):
+                state=self.service.get_state()['data']['updates']
+                self.assertTrue(state['can_install'])
+                self.assertEqual(state['review_count'],2)
+        self.updates.check.assert_not_called()
+        self.updates.download.assert_not_called()
+        self.model.pause_download.assert_not_called()
+        self.assertEqual(before,self.service._readiness)
+        self.assertFalse(self.service._closed.is_set())
+        self.assertFalse(self.service._exit_pending)
+
+    def test_update_check_download_and_cancel_do_not_claim_recording_activity(self):
+        session=self.session(state='录制中')
+        self.service._active=session
+        before=(deepcopy(self.service._activity),deepcopy(self.service._readiness))
+        for payload in ({'action':'check'},{'action':'check','include_prerelease':True},
+                        {'action':'download'},{'action':'cancel'}):
+            self.assertTrue(self.service.update_action(payload)['ok'])
+        self.assertEqual(self.updates.check.call_args_list[0].kwargs,{'include_prerelease':False})
+        self.assertEqual(self.updates.check.call_args_list[1].kwargs,{'include_prerelease':True})
+        self.updates.download.assert_called_once()
+        self.updates.cancel.assert_called_once()
+        self.assertEqual(before,(self.service._activity,self.service._readiness))
+        self.assertIs(self.service._active,session)
+        self.assertFalse(self.service.update_action({'action':'check','include_prerelease':'yes'})['ok'])
+
+    def test_update_install_gate_covers_work_and_rechecks_server_side(self):
+        self.service.set_update_lifecycle(lambda:1,MagicMock())
+        self.updates.snapshot.return_value['state']='ready'
+        cases=[('_active',self.session()),('_obs_uncertain',True),('_uncertain_ids',{'uncertain'}),
+               ('_background_jobs',{'queued':{}}),('_dialog_open',True),('_review_opening',1)]
+        for field,value in cases:
+            with self.subTest(field=field),patch.object(self.service,field,value):
+                self.assertFalse(self.service._update_snapshot()['can_install'])
+                self.assertFalse(self.service.update_action({'action':'install'})['ok'])
+        for kind in ('saving','processing','export','recovery'):
+            with self.subTest(kind=kind),patch.dict(self.service._activity,busy=True,kind=kind):
+                self.assertFalse(self.service.update_action({'action':'install'})['ok'])
+        for state in ('downloading','verifying'):
+            with self.subTest(model=state),patch.dict(self.model.status.return_value,state=state):
+                self.assertFalse(self.service.update_action({'action':'install'})['ok'])
+        self.model.wait.return_value=False
+        self.assertFalse(self.service.update_action({'action':'install'})['ok'])
+        self.updates.prepare_install.assert_not_called()
+        self.assertFalse(self.service._exit_pending)
+
+    def test_update_release_link_is_fixed_to_project_without_arbitrary_url(self):
+        with patch.object(bridge.webbrowser,'open',return_value=True) as browser:
+            self.assertTrue(self.service.update_action({'action':'open_release'})['ok'])
+            browser.assert_called_once_with('https://github.com/Elkhiffa/think-aloud-recorder/releases')
+        self.updates.snapshot.return_value['release_url']='https://example.org/collect'
+        with patch.object(bridge.webbrowser,'open') as browser:
+            self.assertFalse(self.service.update_action({'action':'open_release'})['ok'])
+            browser.assert_not_called()
+
+    def test_update_install_prepares_before_cleanup_and_closes_only_after_helper_launch(self):
+        calls=[]
+        prepared={'synthetic':'prepared-job'}
+        self.updates.snapshot.return_value['state']='ready'
+        self.updates.prepare_install.side_effect=lambda pid:(calls.append(('prepare',pid)) or prepared)
+        self.updates.launch_install.side_effect=lambda plan:(calls.append(('launch',plan)) or {'ready':True})
+        def close_windows():
+            self.assertTrue(self.service.update_close_ready())
+            self.assertFalse(self.service.close_allowed())
+            self.assertTrue(self.service.close_allowed(for_update=True))
+            calls.append(('close',None))
+        self.service.set_update_lifecycle(lambda:2,close_windows)
+        with patch.object(bridge.recorder,'shutdown_owned_obs',side_effect=lambda root:(calls.append(('obs',root)) or {'status':'closed'})):
+            self.assertTrue(self.service.update_action({'action':'install'})['ok'])
+            self.wait()
+        self.assertEqual([call[0] for call in calls],['prepare','obs','launch','close'])
+        self.assertEqual(calls[0][1],bridge.os.getpid())
+        self.assertTrue(self.service._closed.is_set())
+        self.updates.cancel_install.assert_not_called()
+
+    def test_update_admission_atomically_blocks_new_work_and_double_install(self):
+        entered,release=threading.Event(),threading.Event()
+        self.updates.snapshot.return_value['state']='ready'
+        self.updates.prepare_install.side_effect=lambda pid:(entered.set(),release.wait(3),{})[-1]
+        self.service.set_update_lifecycle(lambda:0,MagicMock())
+        with patch.object(bridge.recorder,'shutdown_owned_obs',return_value={'status':'not_owned'}):
+            try:
+                self.assertTrue(self.service.update_action({'action':'install'})['ok'])
+                self.assertTrue(entered.wait(1))
+                self.assertFalse(self.service.update_action({'action':'install'})['ok'])
+                self.assertFalse(self.service.start_recording({})['ok'])
+                self.assertFalse(self.service.model_action('download')['ok'])
+                self.assertFalse(self.service.open_review('not-admitted')['ok'])
+                self.assertFalse(self.service.close_allowed())
+                self.model.start_download.assert_not_called()
+                self.assertFalse(self.service._closed.is_set())
+            finally:
+                release.set();self.wait()
+
+    def test_update_prepare_failure_keeps_windows_engine_and_app_available(self):
+        self.updates.snapshot.return_value['state']='ready'
+        self.updates.prepare_install.side_effect=RuntimeError('synthetic helper preparation failure')
+        close=MagicMock()
+        self.service.set_update_lifecycle(lambda:1,close)
+        with patch.object(bridge.recorder,'shutdown_owned_obs') as shutdown:
+            self.assertTrue(self.service.update_action({'action':'install'})['ok'])
+            self.wait()
+        shutdown.assert_not_called();close.assert_not_called()
+        self.assertFalse(self.service._exit_pending)
+        self.assertFalse(self.service._closed.is_set())
+        self.assertIn('preparation failure',self.service.get_state()['data']['updates']['error'])
+
+    def test_unconfirmed_obs_cleanup_cancels_update_and_reopens_app_connection_gate(self):
+        self.updates.snapshot.return_value['state']='ready'
+        prepared={'synthetic':'prepared-job'}
+        self.updates.prepare_install.return_value=prepared
+        close=MagicMock()
+        self.service.set_update_lifecycle(lambda:1,close)
+        with bridge.recorder._obs_process_lock:bridge.recorder._obs_closed_roots.add(self.root)
+        with patch.object(bridge.recorder,'shutdown_owned_obs',return_value={'status':'close_unconfirmed'}):
+            self.assertTrue(self.service.update_action({'action':'install'})['ok'])
+            self.wait()
+        self.updates.launch_install.assert_not_called();close.assert_not_called()
+        self.updates.cancel_install.assert_called_once_with(prepared)
+        self.assertNotIn(self.root,bridge.recorder._obs_closed_roots)
+        self.assertFalse(self.service._closed.is_set())
+        self.assertFalse(self.service._exit_pending)
+        self.assertIn('未开始更新',self.service.get_state()['data']['updates']['error'])
+
+    def test_failed_window_close_cancels_prepared_helper_before_later_normal_exit(self):
+        self.updates.snapshot.return_value['state']='ready'
+        prepared={'synthetic':'prepared-job'}
+        self.updates.prepare_install.return_value=prepared
+        self.service.set_update_lifecycle(lambda:1,MagicMock(side_effect=RuntimeError('synthetic review remains open')))
+        with patch.object(bridge.recorder,'shutdown_owned_obs',return_value={'status':'already_exited'}):
+            self.assertTrue(self.service.update_action({'action':'install'})['ok'])
+            self.wait()
+        self.updates.cancel_install.assert_called_once_with(prepared)
+        self.assertFalse(self.service.update_in_progress())
+        self.assertFalse(self.service._exit_pending)
+        self.assertFalse(self.service._closed.is_set())
+        self.assertIn('remains open',self.service.get_state()['data']['updates']['error'])
+
+    def test_failed_durable_cancel_blocks_close_until_explicit_retry_succeeds(self):
+        self.updates.snapshot.return_value['state']='ready'
+        prepared={'synthetic':'prepared-job'}
+        self.updates.prepare_install.return_value=prepared
+        self.updates.cancel_install.side_effect=OSError('synthetic disk unavailable')
+        self.service.set_update_lifecycle(lambda:1,MagicMock(side_effect=RuntimeError('viewer remains open')))
+        with patch.object(bridge.recorder,'shutdown_owned_obs',return_value={'status':'closed'}):
+            self.assertTrue(self.service.update_action({'action':'install'})['ok'])
+            self.wait()
+        self.assertIs(self.service._update_pending_cancel,prepared)
+        self.assertTrue(self.service._exit_pending)
+        self.assertTrue(self.service.update_in_progress())
+        self.assertFalse(self.service.update_close_ready())
+        self.assertFalse(self.service.close_allowed())
+        self.assertEqual(self.service.shutdown(),{'status':'close_not_accepted'})
+        self.assertFalse(self.service.start_recording({})['ok'])
+        self.assertFalse(self.service.update_action({'action':'check'})['ok'])
+        snapshot=self.service.get_state()['data']['updates']
+        self.assertTrue(snapshot['cancel_pending'])
+        self.assertFalse(snapshot['can_install'])
+        self.assertIn('重试取消',snapshot['error'])
+        # Retrying unsuccessfully must not clear the admission or descriptor.
+        self.assertTrue(self.service.update_action({'action':'cancel'})['ok'])
+        self.wait()
+        self.assertFalse(self.service.close_allowed())
+        self.updates.cancel_install.side_effect=None
+        self.assertTrue(self.service.update_action({'action':'cancel'})['ok'])
+        self.wait()
+        self.assertFalse(self.service.get_state()['data']['updates']['cancel_pending'])
+        self.assertIsNone(self.service._update_pending_cancel)
+        self.assertFalse(self.service._exit_pending)
+        self.assertTrue(self.service.close_allowed())
+
+    def test_missing_helper_ack_never_closes_windows(self):
+        self.updates.snapshot.return_value['state']='ready'
+        self.updates.prepare_install.return_value={'synthetic':'prepared-job'}
+        self.updates.launch_install.return_value={'ready':False}
+        close=MagicMock()
+        self.service.set_update_lifecycle(lambda:1,close)
+        with patch.object(bridge.recorder,'shutdown_owned_obs',return_value={'status':'closed'}):
+            self.assertTrue(self.service.update_action({'action':'install'})['ok'])
+            self.wait()
+        close.assert_not_called()
+        self.updates.cancel_install.assert_called_once()
+        self.assertFalse(self.service._exit_pending)
+
+    def test_update_manual_main_close_cannot_remove_surface_before_failed_viewer_and_cancel(self):
+        from window_manager import WindowManager
+        class Event:
+            def __iadd__(self,handler):
+                self.handler=handler
+                return self
+        main=MagicMock()
+        main.events=SimpleNamespace(closing=Event(),closed=Event())
+        manager=WindowManager(self.service,MagicMock())
+        manager.bind_main(main)
+        viewer=MagicMock()
+        manager._viewers['review']=viewer
+        def try_manual_close():
+            self.assertTrue(self.service.update_close_ready())
+            self.assertFalse(main.events.closing.handler())
+        viewer.destroy.side_effect=try_manual_close
+        self.service.set_update_lifecycle(manager.review_count,lambda:manager.close_for_update(timeout=.01))
+        self.updates.snapshot.return_value['state']='ready'
+        self.updates.prepare_install.return_value={'synthetic':'prepared-job'}
+        self.updates.cancel_install.side_effect=OSError('synthetic durable cancel failure')
+        with patch.object(bridge.recorder,'shutdown_owned_obs',return_value={'status':'closed'}):
+            self.assertTrue(self.service.update_action({'action':'install'})['ok'])
+            self.wait()
+        viewer.destroy.assert_called_once()
+        main.destroy.assert_not_called()
+        self.assertTrue(self.service.get_state()['data']['updates']['cancel_pending'])
+        self.assertFalse(main.events.closing.handler())
+        self.assertFalse(self.service._closed.is_set())
+        # The last viewer later closing must still leave the main surface alive
+        # and blocked until the durable cancellation has succeeded.
+        manager._viewers.clear()
+        self.assertFalse(main.events.closing.handler())
+        self.updates.cancel_install.side_effect=None
+        self.assertTrue(self.service.update_action({'action':'cancel'})['ok'])
+        self.wait()
+        self.assertTrue(main.events.closing.handler())
+
+    def test_update_admission_between_native_close_reads_still_refuses_ordinary_close(self):
+        from window_manager import WindowManager
+        manager=WindowManager(self.service,MagicMock())
+        manager.main=MagicMock()
+        def raced_read():
+            self.service._update_installing=True
+            self.service._update_commit=True
+            self.service._exit_pending=True
+            return False
+        with patch.object(self.service,'update_in_progress',side_effect=[raced_read(),True]):
+            self.assertFalse(manager.close_main())
+        manager.main.create_confirmation_dialog.assert_not_called()
+        self.assertFalse(self.service._closed.is_set())
+
+    def test_real_update_manager_check_uses_production_snapshot_without_recording_side_effects(self):
+        import httpx
+        (self.root/'portable.json').write_text(json.dumps({'version':'0.6.0'}),encoding='utf-8')
+        calls=[]
+        def response(request):
+            calls.append(str(request.url))
+            return httpx.Response(200,json=[])
+        manager=RealUpdateManager(self.root,client_factory=lambda:httpx.Client(transport=httpx.MockTransport(response)))
+        self.service._updates=manager
+        self.service._active=self.session(state='录制中')
+        before=(deepcopy(self.service._activity),deepcopy(self.service._readiness))
+        self.assertEqual(self.service.get_state()['data']['updates']['state'],'idle')
+        self.assertEqual(calls,[])
+        self.assertTrue(self.service.update_action({'action':'check'})['ok'])
+        self.assertTrue(manager.wait(2))
+        snapshot=self.service.get_state()['data']['updates']
+        self.assertEqual(snapshot['state'],'no_release')
+        self.assertFalse(snapshot['include_prerelease'])
+        self.assertFalse(snapshot['can_install'])
+        self.assertEqual(len(calls),1)
+        self.assertTrue(calls[0].startswith('https://api.github.com/repos/Elkhiffa/think-aloud-recorder/releases?'))
+        self.assertEqual(before,(self.service._activity,self.service._readiness))
+
+    @unittest.skipUnless(os.name=='nt','external helper uses Windows process handles and file locks')
+    def test_real_manager_helper_handshake_and_cancel_after_viewer_close_failure(self):
+        """Real helper/native wait; synthetic package, OBS, view and self-check.
+
+        The borrowed test interpreter executes the copied helper outside the
+        target. Full packaged-runtime install/restart is a separate smoke test.
+        """
+        from update_installer import atomic_json
+        # The class was imported before the constructor mock. Its globals are
+        # the production module, independent from setUp's sys.modules adapter.
+        module_globals=RealUpdateManager.prepare_install.__globals__
+        def package(folder,version,code):
+            files={'app.py':code,'portable_entry.py':b'entry','ExperienceRecorder.exe':b'MZ synthetic',
+                   'runtime/python.exe':b'MZ fixture','runtime/pythonw.exe':b'MZ fixture',
+                   'ui/index.html':b'<p>fixture</p>',
+                   'portable.json':json.dumps({'version':version,'platform':'windows-x64','release_status':'public'}).encode()}
+            for name,content in files.items():
+                path=folder/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
+            atomic_json(folder/'package-manifest.json',{'schema':1,'dependency_source_status':True,
+                'files':[{'path':name,'bytes':len(content),'sha256':hashlib.sha256(content).hexdigest()} for name,content in files.items()]})
+        with TemporaryDirectory() as directory:
+            base=Path(directory);root=base/'installation';work=base/'transaction';stage=work/'package'
+            package(root,'0.6.0',b'old synthetic code');package(stage,'0.7.0',b'new synthetic code')
+            manager=RealUpdateManager(root)
+            manager._stage,manager._work=stage,work
+            manager._set(state='ready',latest_version='0.7.0')
+            self.service._updates=manager
+            self.service.root=root
+            def close_failed():
+                attempt=Path(manager._prepared['job_path']).parent
+                ready=json.loads((attempt/'helper-ready.json').read_text(encoding='utf-8'))
+                self.assertEqual(ready['phase'],'waiting_parent')
+                self.assertEqual(ready['pid'],manager._installer.pid)
+                self.assertIsNone(manager._installer.poll())
+                self.assertEqual((root/'app.py').read_bytes(),b'old synthetic code')
+                raise RuntimeError('synthetic viewer remains open')
+            self.service.set_update_lifecycle(lambda:1,close_failed)
+            real_popen=subprocess.Popen
+            def borrowed_runtime(command,**kwargs):
+                self.assertEqual(Path(command[0]),stage/'runtime/pythonw.exe')
+                return real_popen([sys.executable,*command[1:]],**kwargs)
+            def fail_cancel_write(path,value):
+                if Path(path).name=='cancel.json':raise OSError('synthetic disk failure writing cancel fence')
+                return atomic_json(path,value)
+            try:
+                with patch.dict(module_globals,{'self_check':lambda *_:None,'atomic_json':fail_cancel_write}), \
+                     patch.object(subprocess,'Popen',side_effect=borrowed_runtime), \
+                     patch.object(bridge.recorder,'shutdown_owned_obs',return_value={'status':'not_owned'}):
+                    self.assertTrue(self.service.update_action({'action':'install'})['ok'])
+                    self.wait()
+                self.assertIsNotNone(manager._installer,self.service._update_install_error)
+                attempt=Path(manager._prepared['job_path']).parent
+                self.assertEqual(attempt.parent,work)
+                self.assertIsNone(manager._installer.poll())
+                self.assertFalse((attempt/'cancel.json').exists())
+                self.assertTrue(self.service.get_state()['data']['updates']['cancel_pending'])
+                self.assertFalse(self.service.close_allowed())
+                self.assertEqual((root/'app.py').read_bytes(),b'old synthetic code')
+                # Retry the real durable cancellation while the original
+                # parent is still alive. Only this fence restores normal X.
+                self.assertTrue(self.service.update_action({'action':'cancel'})['ok'])
+                self.wait()
+                self.assertEqual(manager._installer.wait(timeout=5),1)
+                self.assertTrue((attempt/'cancel.json').is_file())
+                self.assertEqual(json.loads((attempt/'job.json').read_text(encoding='utf-8'))['state'],'failed')
+                self.assertEqual((root/'app.py').read_bytes(),b'old synthetic code')
+                self.assertFalse((attempt/'backup').exists())
+                self.assertFalse(self.service.get_state()['data']['updates']['cancel_pending'])
+                self.assertFalse(self.service._exit_pending)
+                self.assertIn('已取消',self.service.get_state()['data']['updates']['error'])
+                self.assertTrue(self.service.close_allowed())
+            finally:
+                # Cooperative only: leave the durable fence and wait for helper.
+                if manager._prepared is not None:manager.cancel_install(manager._prepared)
+                if manager._installer is not None:manager._installer.wait(timeout=5)
 
 
 if __name__ == '__main__':
