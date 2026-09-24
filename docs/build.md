@@ -1,5 +1,24 @@
 # Build and reconstruction
 
+## OBS smoke tests and Windows Firewall prompts
+
+Use one fixed, isolated OBS executable location per development machine. Keep
+per-run reports and synthetic output in separately named evidence directories,
+instead of copying OBS to a new executable path for every attempt. Serialize
+these tests and retain the exact process ownership and cleanup checks. Do not
+use the user's recorder installation or personal OBS as a test runtime.
+
+The bundled OBS WebSocket server enables local app control. OBS 32.2.2 listens
+on wildcard interfaces and has no supported loopback-only setting; selecting
+IPv4-only does not change that. The recorder connects to `127.0.0.1` with
+authentication, but that client address does not restrict server binding.
+Ordinary [Windows Firewall application rules](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules)
+match full executable paths, so fresh test/install locations can trigger new
+network-access prompts. Keep the user installation path stable during updates.
+Never suppress these prompts by changing firewall settings or adding rules
+without explicit authorization. A loopback-only third-party build requires a
+separately reviewed dependency-build and redistribution change.
+
 ## Installed directory layout
 
 Portable archives contain `Think Aloud.exe`, `app/`, and `vocabularies/` at the

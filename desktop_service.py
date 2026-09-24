@@ -1034,7 +1034,15 @@ class DesktopService:
             raise ValueError('转写方式无效。')
 
     def start_recording(self, payload=None):
+        def progress(stage):
+            details = {
+                '正在启动录像': '正在连接录制引擎并等待录像开始确认。',
+                '正在准备操作记录': '录像已开始，正在确认操作记录的时间同步并启动采集。',
+            }
+            self._progress(details.get(stage, stage), status=stage)
+
         def work():
+            self._progress('正在确认保存的预设、设备和保存位置。', status='正在检查录制条件')
             readiness = self._update_readiness()
             if not readiness['ready']:
                 raise RuntimeError('\n'.join(item['message'] for item in readiness['errors']))
@@ -1044,10 +1052,10 @@ class DesktopService:
                     raise RuntimeError('录制预设已变化，请重新开始录制。')
                 cfg['window'] = selection['resolved']
             try:
-                session = recorder.Session.start(cfg)
+                session = recorder.Session.start(cfg, progress=progress)
                 with self._lock:
                     self._active = session
-                self._progress('OBS 已确认录制开始；未开始电平检测。', status='录制中')
+                self._report_recording_state(session, '录像已开始。')
             except Exception:
                 # A lost start acknowledgement can leave OBS recording. Reattach
                 # before reporting failure; never silently abandon ownership.
@@ -1070,9 +1078,18 @@ class DesktopService:
                 cfg.pop('active_preset_id', None)
                 cfg.pop('games', None)
                 before = set(self._session_paths())
-                return self._launch('starting', work, status='正在启动录制')
+                return self._launch('starting', work, status='正在检查录制条件')
             except Exception as error:
                 return self._error(error)
+
+    def _report_recording_state(self, session, detail):
+        meta = session.meta
+        if meta.get('settings', {}).get('record_inputs') and meta.get('input_state') != 'recording':
+            status = '录制中 · 操作记录已中断' if meta.get('input_clock') else '录制中 · 操作记录未启动'
+            self._progress(meta.get('warning') or meta.get('input_error')
+                           or '操作记录不可用，录像仍在继续。', status=status)
+        else:
+            self._progress(detail, status='录制中')
 
     def stop_recording(self):
         with self._lock:
@@ -1709,7 +1726,8 @@ class DesktopService:
                 self._active = None
             self._progress(session.meta['warning'], status='待整理')
         else:
-            self._progress('OBS 正在录制 ' + str(getattr(state, 'output_timecode', '')) + '；未开始电平检测。', status='录制中')
+            self._report_recording_state(session,
+                'OBS 正在录制 ' + str(getattr(state, 'output_timecode', '')) + '；未开始电平检测。')
 
     def close_allowed(self, *, for_update=False):
         """Only durable work blocks close. Idle readiness never owns the window."""

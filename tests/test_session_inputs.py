@@ -42,8 +42,8 @@ class SessionInputTests(unittest.TestCase):
              patch.object(recorder, 'configure_scene'), patch.object(recorder.shutil, 'disk_usage', return_value=SimpleNamespace(free=10*1024**3)), \
              patch('input_capture.prepare_capture', return_value=capture), patch.object(recorder.time, 'sleep'), \
              patch.object(recorder.time, 'perf_counter', side_effect=[100,100.002,100.4,100.402,100.5,100.502,100.6,100.602,100.7,100.702]):
-            session = recorder.Session.start(self.cfg)
-        self.assertEqual(calls, ['obs', 'inputs'])
+            session = recorder.Session.start(self.cfg, progress=lambda stage: calls.append(stage))
+        self.assertEqual(calls, ['正在启动录像', 'obs', '正在准备操作记录', 'inputs'])
         self.assertEqual(capture.start.call_count, 1)
         self.assertAlmostEqual(capture.start.call_args.kwargs['origin'], 100.701)
         self.assertEqual(capture.start.call_args.kwargs['video_offset'], .3)
@@ -128,13 +128,15 @@ class SessionInputTests(unittest.TestCase):
 
     def test_unconfirmed_start_never_starts_listeners_and_finalizes_failure(self):
         client, capture = MagicMock(), MagicMock()
+        stages = []
         client.get_record_status.return_value = SimpleNamespace(output_active=False)
         capture.stop.return_value = {'state': 'failed'}
         with patch.object(recorder, 'client', return_value=client), patch.object(recorder, 'ensure_idle'), \
              patch.object(recorder, 'configure_scene'), patch.object(recorder.shutil, 'disk_usage', return_value=SimpleNamespace(free=10*1024**3)), \
              patch('input_capture.prepare_capture', return_value=capture), patch.object(recorder.time, 'sleep'):
             with self.assertRaisesRegex(RuntimeError, '尚未确认'):
-                recorder.Session.start(self.cfg)
+                recorder.Session.start(self.cfg, progress=stages.append)
+        self.assertEqual(stages, ['正在启动录像'])
         capture.start.assert_not_called()
         capture.stop.assert_called_once()
         client.disconnect.assert_called_once()
@@ -153,6 +155,37 @@ class SessionInputTests(unittest.TestCase):
         self.assertEqual(session.meta['state'], '录制中')
         self.assertEqual(session.meta['input_state'], 'failed')
         client.stop_record.assert_not_called()
+
+    def test_opt_out_start_reports_video_only_and_keeps_existing_call_compatible(self):
+        client = MagicMock()
+        client.get_record_status.return_value = SimpleNamespace(output_active=True)
+        stages = []
+        with patch.object(recorder, 'client', return_value=client), patch.object(recorder, 'ensure_idle'), \
+             patch.object(recorder, 'configure_scene'), patch.object(recorder.shutil, 'disk_usage', return_value=SimpleNamespace(free=10*1024**3)), \
+             patch('input_capture.prepare_capture', return_value=None):
+            session = recorder.Session.start({**self.cfg, 'record_inputs': False}, None, progress=stages.append)
+        self.assertEqual(stages, ['正在启动录像'])
+        self.assertEqual(session.meta['state'], '录制中')
+        self.assertNotIn('input_clock', session.meta)
+        client.start_record.assert_called_once_with()
+        client.disconnect.assert_called_once_with()
+
+    def test_progress_callback_failure_cannot_abort_confirmed_recording(self):
+        client, capture = MagicMock(), MagicMock()
+        client.get_record_status.side_effect = [SimpleNamespace(output_active=True, output_duration=ms) for ms in (200, 300, 400)]
+        progress = MagicMock(side_effect=RuntimeError('Synthetic presentation failure'))
+        with patch.object(recorder, 'client', return_value=client), patch.object(recorder, 'ensure_idle'), \
+             patch.object(recorder, 'configure_scene'), patch.object(recorder.shutil, 'disk_usage', return_value=SimpleNamespace(free=10*1024**3)), \
+             patch('input_capture.prepare_capture', return_value=capture), patch.object(recorder.time, 'sleep'), \
+             patch.object(recorder.time, 'perf_counter', side_effect=[100, 100.002, 100.1, 100.102, 100.2, 100.202]):
+            session = recorder.Session.start(self.cfg, progress=progress)
+        self.assertEqual([call.args[0] for call in progress.call_args_list], ['正在启动录像', '正在准备操作记录'])
+        self.assertEqual(session.meta['state'], '录制中')
+        self.assertEqual(session.meta['input_state'], 'recording')
+        self.assertAlmostEqual(capture.start.call_args.kwargs['origin'], 100.201)
+        self.assertEqual(capture.start.call_args.kwargs['video_offset'], .4)
+        client.stop_record.assert_not_called()
+        client.disconnect.assert_called_once_with()
 
     def test_stop_releases_listeners_before_obs_request_and_media_work(self):
         session = self.session()

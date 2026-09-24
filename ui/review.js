@@ -25,6 +25,7 @@
   const inputGroup=device=>device==='mouse'?'keyboard':device;
   function axisDirection(x,y){if(!Number.isFinite(x)||!Number.isFinite(y)||Math.hypot(x,y)<.01)return '';return ['→','↘','↓','↙','←','↖','↑','↗'][(Math.round(Math.atan2(y,x)/(Math.PI/4))+8)%8];}
   function inputChannel(item){return /^D[Pp]ad/.test(item.code)?'dpad':item.code==='LeftStick'||(item.device==='keyboard'&&['W','A','S','D','KeyW','KeyA','KeyS','KeyD'].includes(item.code))?'direction':['MouseMove','RightStick'].includes(item.code)?'pointing':'other';}
+  function startupPreparation(source,gap){return source?.state==='complete'&&!source.error&&gap?.type==='capture'&&gap.start===0&&gap.end>0&&gap.end<source.duration&&gap.reason==='录像启动确认前尚未采集操作';}
   function normalizeInputs(source,override=null){
     if(!source)return {state:'missing',intervals:[],gaps:[],duration:0};
     const valid=item=>item&&Number.isFinite(item.start)&&Number.isFinite(item.end)&&item.start>=0&&item.end>=item.start;
@@ -34,7 +35,15 @@
     const inside=item=>valid(item)&&item.end+offset>=0&&item.start+offset<limit;
     return {...source,state:String(source.state||'ready'),duration:Number.isFinite(limit)?limit:Math.max(0,(Number(source.duration)||0)+offset),
       intervals:(Array.isArray(source.intervals)?source.intervals:[]).filter(inside).map((item,i)=>({...shift(item),id:String(item.id??i),direction:item.direction||axisDirection(item.x,item.y)})).sort((a,b)=>a.start-b.start||b.end-a.end||a.id.localeCompare(b.id)),
-      gaps:(Array.isArray(source.gaps)?source.gaps:[]).filter(inside).map(item=>shift(item,true)).sort((a,b)=>a.start-b.start)};
+      gaps:(Array.isArray(source.gaps)?source.gaps:[]).filter(inside).map(item=>({...shift(item,true),preparation:startupPreparation(source,item)})).sort((a,b)=>a.start-b.start)};
+  }
+  function initialReviewTime(source,videoDuration){
+    const alignment=source?.alignment;
+    if(!['measured','manual'].includes(alignment?.source)||!Number.isFinite(alignment.offset_seconds)||Math.abs(alignment.offset_seconds)>30||!(videoDuration>0))return null;
+    const prepared=normalizeInputs(source).gaps.filter(gap=>gap.preparation);
+    if(prepared.length!==1)return null;
+    const time=prepared[0].end;
+    return time>0&&time<videoDuration-.05?time:null;
   }
   function inputLabel(item){return ({ControlLeft:'Ctrl',ControlRight:'Ctrl',ShiftLeft:'Shift',ShiftRight:'Shift',AltLeft:'Alt',AltRight:'Alt',WinLeft:'Win',WinRight:'Win',Space:'␣',Backspace:'⌫',Escape:'Esc',ArrowUp:'↑',ArrowDown:'↓',ArrowLeft:'←',ArrowRight:'→',DPadUp:'↑',DPadDown:'↓',DPadLeft:'←',DPadRight:'→',DpadUp:'↑',DpadDown:'↓',DpadLeft:'←',DpadRight:'→',Cross:'×',Square:'□',Triangle:'△',Circle:'○'}[item.code])||item.label||item.code;}
   // These are display groups, not inferred physical presses. Original samples
@@ -135,7 +144,7 @@
   function playheadDirection(time,viewStart,span){return time<viewStart-1e-6?-1:time>viewStart+span+1e-6?1:0;}
   function visibleLabelTop(start,end,viewStart,scale,height=28){return Math.max(0,Math.min((viewStart-start)*scale,Math.max(0,(end-start)*scale-height)));}
   function inputHighlight(item,time){if(!item||time<item.start)return 0;return time<item.end?1:Math.max(0,1-(time-item.end)/2)*.7;}
-  if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds,sourceFit,inputChannel,axisDirection,normalizeInputs,inputLabel,inputVisualBands,inputSampleAt,packInputIntervals,intervalIndex,intervalsInRange,meaningfulDevice,recentInputs,anchoredZoom,timelinePointerTime,timelineGesture,isLongPress,playheadDirection,visibleLabelTop,inputHighlight};return;}
+  if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds,sourceFit,inputChannel,axisDirection,normalizeInputs,startupPreparation,initialReviewTime,inputLabel,inputVisualBands,inputSampleAt,packInputIntervals,intervalIndex,intervalsInRange,meaningfulDevice,recentInputs,anchoredZoom,timelinePointerTime,timelineGesture,isLongPress,playheadDirection,visibleLabelTop,inputHighlight};return;}
   const data=JSON.parse(document.getElementById('review-data').textContent);
   const $=id=>document.getElementById(id),video=$('video'),lines=$('lines');
   let segments=Array.isArray(data.segments)?data.segments:[],nodes=[],inputUI=null;
@@ -183,6 +192,12 @@
   function resetCopyFeedback(){root.clearTimeout(copyFeedbackTimer);$('copyPath').classList.remove('copied');$('copyLabel').textContent='复制资料库路径';}
   function showCopyFeedback(){resetCopyFeedback();$('copyPath').classList.add('copied');$('copyLabel').textContent='copied!';copyFeedbackTimer=root.setTimeout(resetCopyFeedback,2000);}
   let current=-1,follow=true,ready=false,mediaError=null,pendingSeek=null;
+  let initialPositionUsed=false,initialPositionTouched=false;
+  const keepInitialPosition=()=>{initialPositionTouched=true;};
+  document.addEventListener('pointerdown',keepInitialPosition,{capture:true,once:true});
+  document.addEventListener('keydown',keepInitialPosition,{capture:true,once:true});
+  video.addEventListener('play',keepInitialPosition,{once:true});
+  video.addEventListener('seeking',keepInitialPosition,{once:true});
   const status=(message,error=false)=>{$('status').textContent=message;$('status').classList.toggle('error',error);};
   function updateTitle(){const title=data.session_name||data.title||data.game||'体验片段';$('title').textContent=title;$('title').title=title;document.title=title+' · 回看';const date=new Date(data.created);const created=Number.isNaN(date.getTime())?'':date.toLocaleString('zh-CN',{year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});$('sessionInfo').textContent=[data.game,created].filter(Boolean).join(' · ');}
   updateTitle();
@@ -354,7 +369,21 @@
   lines.addEventListener('keydown',event=>{if(['PageDown','PageUp','Home','End','ArrowDown','ArrowUp'].includes(event.key))setFollow(false);});
   function filter(){const query=$('search').value.trim().toLocaleLowerCase();let count=0;nodes.forEach((node,i)=>{node.hidden=!segments[i].text.toLocaleLowerCase().includes(query);if(!node.hidden)count++;});$('lineCount').textContent=count+' 条';$('empty').hidden=count>0;$('empty').textContent=segments.length?'没有匹配的原话。':'没有识别出语音，可以继续查看录像。';}
   $('search').oninput=filter;buildTranscript();video.addEventListener('timeupdate',sync);
-  video.addEventListener('loadedmetadata',()=>{ready=true;mediaError=null;status('');scheduleSplit();if(pendingSeek!==null){seek(pendingSeek);pendingSeek=null;}reportReady();});
+  video.addEventListener('loadedmetadata',()=>{
+    ready=true;mediaError=null;status('');scheduleSplit();
+    if(pendingSeek!==null){initialPositionUsed=true;seek(pendingSeek);pendingSeek=null;}
+    else if(!initialPositionUsed){
+      initialPositionUsed=true;
+      const start=initialReviewTime(data.inputs,video.duration);
+      if(!initialPositionTouched&&video.paused&&video.currentTime===0&&start!==null){
+        // Seek once in the existing calibrated video clock, without trimming
+        // media, shifting events again or starting playback.
+        video.currentTime=start;
+        status('已从准备完成处打开，可拖回查看开头。');
+      }
+    }
+    reportReady();
+  });
   video.addEventListener('resize',scheduleSplit);
   video.addEventListener('error',()=>{ready=true;mediaError='录像无法加载，请检查录像.mp4 是否存在，并将资料包完整解压后打开。';status(mediaError,true);reportReady();});
   root.addEventListener('pywebviewready',reportReady);
@@ -447,7 +476,7 @@
     function duration(){return Math.max(Number.isFinite(video.duration)?video.duration:0,source.duration,segments.at(-1)?.end||0,1);}
     function glyph(item){if(item.movement)return `<span class="movement-glyph">${escape(item.direction||'•')}</span>`;if(item.device==='mouse'){const fill=item.code==='MouseLeft'?'<path fill="currentColor" stroke="none" d="M4 10a7 7 0 0 1 6-7v7Z"/>':item.code==='MouseRight'?'<path fill="currentColor" stroke="none" d="M12 3a7 7 0 0 1 6 7h-6Z"/>':item.code==='MouseMiddle'?'<rect fill="currentColor" x="9" y="4" width="4" height="7" rx="2"/>':'';const direction=item.direction||({WheelUp:'↑',WheelDown:'↓',WheelLeft:'←',WheelRight:'→',MouseX1:'4',MouseX2:'5'}[item.code])||'';return mouseIcon.replace('</svg>',fill+'</svg>')+(direction?`<span class="mouse-arrow">${escape(direction)}</span>`:'');}if(item.kind==='axis')return `<span class="axis-glyph">${item.code==='LeftStick'?'L':'R'}<span>${escape(item.direction||'•')}</span></span>`;if(/^D[Pp]ad/.test(item.code))return `<span class="dpad-glyph"><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M6 1h6v5h5v6h-5v5H6v-5H1V6h5Z"/></svg><span>${escape(inputLabel(item))}</span></span>`;return escape(inputLabel(item));}
     function inputMessage(){if(source.state==='disabled'&&source.error?.includes('旧场次'))return '旧场次没有操作记录';return ({missing:'此场次没有操作记录',disabled:'此场次未启用操作记录',failed:'操作记录采集失败',unavailable:'操作记录文件不可用',invalid:'操作记录文件不可用',interrupted:'操作记录未完整保存',pending:'操作记录正在保存',recording:'操作记录正在保存'}[source.state]||'');}
-    function gapName(gap){return ({focus:'已切出目标程序',focus_lost:'已切出目标程序',disconnect:'设备连接中断',device_disconnected:'设备连接中断',error:'采集异常'}[gap.type]||'采集缺口');}
+    function gapName(gap){return gap.preparation?'录制准备':({focus:'已切出目标程序',focus_lost:'已切出目标程序',disconnect:'设备连接中断',device_disconnected:'设备连接中断',error:'采集异常'}[gap.type]||'采集缺口');}
     function seekKeep(time,followPlayback=true){if(!video.readyState)return;const limit=Number.isFinite(video.duration)?video.duration:duration();video.currentTime=Math.max(0,Math.min(limit,time));setFollow(followPlayback);render(followPlayback);}
     function setTab(tab){if(tab==='transcript'&&$('transcriptTab').disabled)return;state.tab=tab;$('inputTab').setAttribute('aria-selected',String(tab==='inputs'));$('transcriptTab').setAttribute('aria-selected',String(tab==='transcript'));$('inputTimelinePanel').hidden=tab!=='inputs';lines.hidden=tab!=='transcript';$('transcriptSearch').hidden=tab!=='transcript';$('empty').hidden=tab!=='transcript'||nodes.some(node=>!node.hidden);closeQuote();if(tab==='transcript')scrollCurrent();else render(true);}
     $('inputTab').onclick=()=>setTab('inputs');$('transcriptTab').onclick=()=>setTab('transcript');
@@ -565,7 +594,7 @@
       $('timelineTicks').innerHTML=ticks.join('').replace(/<time>.*?<\/time>/g,'');ruler.innerHTML=ticks.join('');
       $('timelineInputs').innerHTML=visible.map(item=>{const c=column(item,g);return `<button class="key-bar${isLongPress(item)?' long-press':''}${item.activity?' activity-band':''}${item.fixed?' fixed-band':''}${item.end===item.start?' instant':''}" data-input-id="${escape(item.id)}" data-start="${item.start}" data-end="${item.end}" data-lane="${item.lane}" data-channel="${item.channel}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.displayEnd-item.start)*state.scale}px;left:${c.left}px;width:${c.width}px" aria-label="${escape(`${deviceName(group(item.device))} ${item.label||item.code}，${isLongPress(item)?'长按，':''}${clock(item.start)} 至 ${clock(item.end)}，点击定位`)}" aria-describedby="inputDetail"><span class="bar-glyph">${glyph(item)}</span><span class="bar-duration" style="height:${Math.max(1,(item.end-item.start)*state.scale)}px" aria-hidden="true"></span>${heldSections(item)}${inputMarks(item)}${holdLabels(item)}</button>`;}).join('');
       $('timelineSpeech').innerHTML=quotes.map(item=>`<button class="quote-bar${state.pinned&&state.quote===item.index?' pinned':''}" data-quote="${item.index}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.end-item.start)*state.scale}px;left:${g.time+7}px;width:${g.speech-14}px" aria-label="原话 ${item.index+1}，${clock(item.start)}，点击固定全文">${quoteIcon}<span>${String(item.index+1).padStart(2,'0')}</span></button>`).join('');
-      $('timelineGaps').innerHTML=gaps.map(gap=>`<div class="timeline-gap" style="top:${(gap.start-renderStart)*state.scale}px;height:${(gap.end-gap.start)*state.scale}px;left:${g.time+g.speech}px" title="${escape(gap.reason||gapName(gap))}"><span>${escape(gapName(gap))}</span></div>`).join('');
+      $('timelineGaps').innerHTML=gaps.map(gap=>`<div class="timeline-gap${gap.preparation?' preparation':''}" style="top:${(gap.start-renderStart)*state.scale}px;height:${(gap.end-gap.start)*state.scale}px;left:${g.time+g.speech}px" title="${escape(gap.reason||gapName(gap))}"><span>${escape(gapName(gap))}</span></div>`).join('');
       $('timelineInputs').querySelectorAll('button').forEach(button=>{const item=displayed.get(button.dataset.inputId);
         button.onclick=event=>{if(event.detail&&event.clientX<horizontal.getBoundingClientRect().left+g.time)return;hideInputDetail();seekKeep(item.samples&&event.detail?Math.max(item.start,Math.min(item.end,pointerTime(event,item))):item.start);};
         button.onpointermove=event=>{if(!gesture||gesture.kind==='pending')showInputDetail(item,event);};button.onfocus=()=>showInputDetail(item,{currentTarget:button});button.onmouseleave=hideInputDetail;button.onblur=hideInputDetail;
@@ -727,7 +756,7 @@
       state.signature=next;source=normalizeInputs(data.inputs,previewInputOffset);bands=inputVisualBands(source.intervals,source.gaps);repack();index=intervalIndex(source.intervals);gapIndex=intervalIndex(source.gaps);
       const transcript=data.transcription?.state||'ready',isReady=transcript==='ready';quoteIndex=intervalIndex(isReady?segments.map((item,i)=>({...item,index:i})):[]);$('transcriptTab').disabled=!isReady;$('transcriptTab').textContent=isReady?'原话':transcript==='failed'?'转写失败':'转写中';$('transcriptTab').title=data.transcription?.error||'';
       if(!isReady&&state.tab==='transcript')setTab('inputs');
-      const message=inputMessage();$('timelineState').textContent=message||`${bands.length} 段记录${source.gaps.length?' · '+source.gaps.length+' 处缺口':''}`;$('timelineState').title=source.error||message||`${source.intervals.length} 个原始采样区间；暖色实线为超过 0.5 秒的长按，深色为短按；虚线浅色为合并活动，短横线为实际输入。内容区滚轮浏览，时间刻度区滚轮缩放。`;
+      const message=inputMessage(),gapCount=source.gaps.filter(gap=>!gap.preparation).length;$('timelineState').textContent=message||`${bands.length} 段记录${gapCount?' · '+gapCount+' 处缺口':''}`;$('timelineState').title=source.error||message||`${source.intervals.length} 个原始采样区间；暖色实线为超过 0.5 秒的长按，深色为短按；虚线浅色为合并活动，短横线为实际输入。内容区滚轮浏览，时间刻度区滚轮缩放。`;
       if(state.pinned&&pinnedQuote)state.quote=segments.findIndex(s=>s.start===pinnedQuote.start&&s.end===pinnedQuote.end&&s.text===pinnedQuote.text);
       state.lastInput='';closeQuote();setTab(state.tab);render(true);
     }

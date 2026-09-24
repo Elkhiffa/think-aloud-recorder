@@ -239,6 +239,81 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertEqual(len(start.call_args.args), 1)
         self.assertNotIn('test_file', start.call_args.kwargs)
 
+    def test_start_reports_real_stages_and_waits_for_input_preparation_result(self):
+        prepared, release = threading.Event(), threading.Event()
+        session = self.session(test=False, input_state='recording', settings={**self.config, 'record_inputs': True})
+        stages = []
+
+        def readiness():
+            stages.append(self.service.get_state()['data']['activity']['status'])
+            return {'ready': True}
+
+        def start(cfg, *, progress):
+            for stage in ('正在启动录像', '正在准备操作记录'):
+                progress(stage)
+                stages.append(self.service.get_state()['data']['activity']['status'])
+            prepared.set()
+            release.wait(3)
+            return session
+
+        with patch.object(self.service, '_update_readiness', side_effect=readiness), \
+             patch.object(bridge.recorder.Session, 'start', side_effect=start):
+            try:
+                self.assertTrue(self.service.start_recording()['ok'])
+                self.assertTrue(prepared.wait(2))
+                activity = self.service.get_state()['data']['activity']
+                self.assertEqual(stages, ['正在检查录制条件', '正在启动录像', '正在准备操作记录'])
+                self.assertEqual(activity['kind'], 'starting')
+                self.assertTrue(activity['busy'])
+                self.assertIn('录像已开始', activity['detail'])
+                self.assertIsNone(self.service._active)
+            finally:
+                release.set()
+                self.wait()
+        activity = self.service.get_state()['data']['activity']
+        self.assertFalse(activity['busy'])
+        self.assertEqual(activity['kind'], 'recording')
+        self.assertEqual(activity['status'], '录制中')
+        self.assertIs(self.service._active, session)
+
+    def test_input_start_failure_is_visible_while_video_continues_and_survives_health_check(self):
+        session = self.session(test=False, input_state='failed', settings={**self.config, 'record_inputs': True},
+                               warning='操作采集未能启动，录像仍在继续。')
+        with patch.object(bridge.recorder.Session, 'start', return_value=session):
+            self.assertTrue(self.service.start_recording()['ok'])
+            self.wait()
+        activity = self.service.get_state()['data']['activity']
+        self.assertIs(self.service._active, session)
+        self.assertEqual(activity['kind'], 'recording')
+        self.assertEqual(activity['status'], '录制中 · 操作记录未启动')
+        self.assertEqual(activity['detail'], session.meta['warning'])
+        client = MagicMock()
+        client.get_record_status.return_value = SimpleNamespace(output_active=True, output_timecode='00:00:05.000')
+        client.send.return_value = SimpleNamespace(record_directory=str(session.path))
+        with patch.object(bridge.recorder, 'client', return_value=client), \
+             patch.object(bridge.shutil, 'disk_usage', return_value=SimpleNamespace(free=10*1024**3)):
+            self.service._inspect_recording()
+        after = self.service.get_state()['data']['activity']
+        self.assertEqual(after['status'], activity['status'])
+        self.assertEqual(after['detail'], activity['detail'])
+        client.stop_record.assert_not_called()
+
+    def test_input_interruption_does_not_revert_to_all_clear_on_health_check(self):
+        session = self.session(test=False, input_state='interrupted',
+            settings={**self.config, 'record_inputs': True}, input_clock={'initial_seconds': .3},
+            input_error='操作采集已停止，录像仍在继续。')
+        self.service._active = session
+        client = MagicMock()
+        client.get_record_status.return_value = SimpleNamespace(output_active=True, output_timecode='00:00:05.000')
+        client.send.return_value = SimpleNamespace(record_directory=str(session.path))
+        with patch.object(bridge.recorder, 'client', return_value=client), \
+             patch.object(bridge.shutil, 'disk_usage', return_value=SimpleNamespace(free=10*1024**3)):
+            self.service._inspect_recording()
+        activity = self.service.get_state()['data']['activity']
+        self.assertEqual(activity['status'], '录制中 · 操作记录已中断')
+        self.assertEqual(activity['detail'], session.meta['input_error'])
+        client.stop_record.assert_not_called()
+
     def test_finished_startup_recovery_reports_ready_and_keeps_existing_errors(self):
         activity = self.service.get_state()['data']['activity']
         self.assertFalse(activity['busy'])
@@ -272,7 +347,7 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertFalse(self.service.close_allowed())
 
     def test_start_lost_acknowledgement_preserves_uncertain_ownership(self):
-        def failed_start(cfg):
+        def failed_start(cfg, *, progress=None):
             self.session('new-start', state='失败', test=False, error='acknowledgement lost')
             raise ConnectionError('lost start acknowledgement')
         with patch.object(bridge.recorder.Session, 'start', side_effect=failed_start):

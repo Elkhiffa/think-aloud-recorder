@@ -854,8 +854,14 @@ class Session:
             # precision. Review retains explicit manual per-session alignment.
             return
     @classmethod
-    def start(cls,c,test_file=None):
+    def start(cls,c,test_file=None,*,progress=None):
+        def report(stage):
+            # Presentation must not change recording ownership or its clocks.
+            if progress is not None:
+                try:progress(stage)
+                except Exception:pass
         c=dict(c)
+        report('正在启动录像')
         with obs_connection() as r:
             ensure_idle(r)
             vault=Path(c['vault']);vault.mkdir(parents=True,exist_ok=True)
@@ -883,6 +889,7 @@ class Session:
                     time.sleep(0.1)
                 else:raise RuntimeError('OBS 尚未确认录制状态，请在场次列表恢复后检查。')
                 if s._input_capture is not None:
+                    report('正在准备操作记录')
                     try:
                         state,before,after=s.await_input_clock(r,state,before,after)
                         s._video_seconds=s.output_seconds(state)
