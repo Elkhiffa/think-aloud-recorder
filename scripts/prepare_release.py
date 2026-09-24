@@ -24,6 +24,7 @@ from update_installer import (HIDDEN, MAX_ARCHIVE, MAX_ENTRIES, MAX_EXPANDED,
                               safe_name, sha256)
 from updater import REPOSITORY, SemVer, release_assets, tag_version
 from scripts.build_portable import ROOT_FILES
+from app_paths import application_root, installation_root, manifest_path
 from scripts.verify_runtime_seed import verify_runtime_seed
 from media_runtime import MEDIA_DIRECTORY, verify_media
 
@@ -89,8 +90,9 @@ def zip_json(path, name, limit=MAX_MANIFEST):
     with zipfile.ZipFile(path) as archive:
         if len(archive.infolist()) > MAX_ENTRIES + 1:
             raise ValueError('ZIP entry count exceeds the limit.')
-        entries = [item for item in archive.infolist() if item.filename.casefold() == name.casefold()]
-        if len(entries) != 1 or entries[0].filename != name:
+        candidates = {name, 'app/' + name} if name == 'dependency-source-manifest.json' else {name}
+        entries = [item for item in archive.infolist() if item.filename.casefold() in {n.casefold() for n in candidates}]
+        if len(entries) != 1 or entries[0].filename not in candidates:
             raise ValueError('ZIP metadata is missing or ambiguous: ' + name)
         item = entries[0]
         if item.file_size > limit or item.flag_bits & 1 or stat.S_ISLNK(item.external_attr >> 16):
@@ -194,9 +196,11 @@ def verify_commit_files(repo, commit, stage):
         mode, kind, oid, size = metadata.split()
         if kind == b'blob':
             tracked[name.decode('utf-8')] = (oid.decode('ascii'), int(size))
-    packaged_names = {item['path'] for item in parse_json((stage / 'package-manifest.json').read_bytes())['files']}
+    packaged_names = {item['path'] for item in parse_json(manifest_path(stage).read_bytes())['files']}
     names = set(KEY_APPLICATION_FILES)
     for name in packaged_names:
+        if application_root(stage) != Path(stage) and name.startswith('app/'):
+            name = name[4:]
         # The repository retains a historical portable.json template. The
         # builder generates release metadata; protocol/version checks above
         # validate it instead of comparing it to that development template.
@@ -207,7 +211,7 @@ def verify_commit_files(repo, commit, stage):
             names.add(name)
     names = sorted(names)
     for name in names:
-        path = stage / name
+        path = (installation_root(stage) if name.startswith('vocabularies/') else application_root(stage)) / name
         if not path.is_file():
             raise ValueError('Key application file missing from package: ' + name)
         if name not in tracked:
@@ -221,7 +225,7 @@ def verify_commit_files(repo, commit, stage):
                        input=''.join(tracked[name][0] + '\n' for name in names).encode('ascii'))
     offset = 0
     for name in names:
-        path = stage / name
+        path = (installation_root(stage) if name.startswith('vocabularies/') else application_root(stage)) / name
         end = blobs.index(b'\n', offset)
         oid, kind, size = blobs[offset:end].split()
         size = int(size)
@@ -389,7 +393,7 @@ def prepare_release(*, tag, commit, artifacts, notes, outdir, runtime_evidence=N
                     return True
                 check('fixed_update_repository_protocol', package_metadata)
                 packaged_sources = check('packaged_source_manifest', lambda: parse_json(
-                    safe_file(stage / 'dependency-source-manifest.json', MAX_MANIFEST).read_bytes()))
+                    safe_file(application_root(stage) / 'dependency-source-manifest.json', MAX_MANIFEST).read_bytes()))
                 if source_result and packaged_sources is not None:
                     def same_sources():
                         if source_result[0] != packaged_sources:
@@ -410,11 +414,11 @@ def prepare_release(*, tag, commit, artifacts, notes, outdir, runtime_evidence=N
                     if not isinstance(packaged_sources, dict) or not isinstance(packaged_sources.get('provenance'), dict):
                         raise ValueError('Packaged dependency source provenance must be an object.')
                     try:
-                        manifest = verify_media(stage)
+                        manifest = verify_media(application_root(stage))
                     except AttributeError as error:
                         raise ValueError('Media runtime provenance has an invalid object shape.') from error
                     expected = packaged_sources['provenance'].get('media_runtime_manifest_sha256')
-                    if not expected or sha256(stage / MEDIA_DIRECTORY / 'provenance.json') != expected:
+                    if not expected or sha256(application_root(stage) / MEDIA_DIRECTORY / 'provenance.json') != expected:
                         raise ValueError('Media runtime inventory differs from dependency source provenance.')
                     return {'version': manifest.get('version'), 'files': len(manifest['files']),
                             'manifest_sha256': expected}

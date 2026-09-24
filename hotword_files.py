@@ -13,6 +13,8 @@ MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_DICTIONARY_FILES = 128
 MAX_MANUAL_CHARS = 128000
 SOGOU_DICTIONARIES = 'https://pinyin.sogou.com/dict/'
+from app_paths import installation_root
+
 BUNDLED_DICTIONARY = Path('vocabularies/uiux-terms.txt')
 
 
@@ -153,7 +155,7 @@ def bundled_dictionary_snapshots(root):
     presets from loading. Release validation requires this file separately.
     """
     try:
-        files = read_dictionary_snapshots([Path(root) / BUNDLED_DICTIONARY])
+        files = read_dictionary_snapshots([installation_root(root) / BUNDLED_DICTIONARY])
         return compile_hotword_snapshots(files, '', qwen=True)['hotword_files']
     except (OSError, ValueError):
         return []

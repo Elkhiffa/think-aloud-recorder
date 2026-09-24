@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -25,6 +25,23 @@ def fixture(root, version='1.0.0', files=None, public=True, launcher='Experience
         path = root/name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(content)
     atomic_json(root/'package-manifest.json', {'schema':1, 'dependency_source_status':public,
         'files':[{'path':name,'bytes':len(content),'sha256':hashlib.sha256(content).hexdigest()} for name,content in values.items()]})
+    return root
+
+
+def compact_fixture(root, version='1.0.0', files=None, public=True):
+    metadata = {'version':version, 'platform':'windows-x64', 'layout':'compact-v1',
+                'update_protocol':1, 'release_status':'public' if public else 'candidate'}
+    values = {'Think Aloud.exe':b'MZ launcher', 'app/app.py':b'old code',
+              'app/portable_entry.py':b'entry', 'app/runtime/python.exe':b'MZ python',
+              'app/runtime/pythonw.exe':b'MZ pythonw', 'app/ui/index.html':b'page',
+              'app/portable.json':json.dumps(metadata).encode(),
+              'vocabularies/uiux-terms.txt':b'UX'}
+    values.update(files or {})
+    for name, content in values.items():
+        path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
+    atomic_json(root/'app/package-manifest.json',{'schema':1,'dependency_source_status':public,
+        'files':[{'path':name,'bytes':len(content),'sha256':hashlib.sha256(content).hexdigest()}
+                 for name,content in values.items()]})
     return root
 
 
@@ -229,6 +246,166 @@ class InstallerTests(unittest.TestCase):
         result=run_job(self.work/'job.json',recover=True,launch=False)
         self.assertEqual(result['state'],'rolled_back')
         self.assertEqual((self.root/'app.py').read_bytes(),b'old code')
+
+
+class CompactInstallerTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.base=Path(self.tmp.name).resolve()
+        self.root=compact_fixture(self.base/'installed')
+        self.stage=compact_fixture(self.base/'package','1.1.0',{'app/app.py':b'new code',
+            'Think Aloud.exe':b'MZ new launcher','app/new_module.py':b'new module'})
+        self.work=self.base/'transaction'
+
+    def archive(self):
+        path=self.base/'package.zip'
+        with zipfile.ZipFile(path,'w',zipfile.ZIP_DEFLATED) as archive:
+            for item in self.stage.rglob('*'):
+                if item.is_file():archive.write(item,item.relative_to(self.stage).as_posix())
+        return path
+
+    def test_extract_and_inventory_accept_outer_and_inner_roots(self):
+        from update_installer import verified_inventory
+        dest=self.base/'extracted'
+        result=extract_package(self.archive(),dest,expected_version='1.1.0')
+        self.assertEqual(result['layout'],'compact-v1')
+        self.assertEqual((dest/'app/app.py').read_bytes(),b'new code')
+        self.assertEqual(verified_inventory(dest),verified_inventory(dest/'app'))
+        self.assertEqual(launcher_path(dest/'app'),dest/'Think Aloud.exe')
+
+    def test_update_and_rollback_preserve_private_data_and_edited_vocabulary(self):
+        saved={'app/config.json':b'private config', 'app/state/secrets/key.dpapi':b'key',
+               'app/state/webview/data':b'preferences', 'app/models/model.bin':b'model',
+               'app/tools/obs/config/basic.ini':b'obs config', 'app/staging/raw.mkv':b'video',
+               'vocabularies/personal.txt':b'private words','vocabularies/uiux-terms.txt':b'edited UX'}
+        for name,content in saved.items():
+            path=self.root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(content)
+        plan=build_plan(self.root/'app',self.stage/'app',self.work)
+        self.assertEqual(Path(plan['root']),self.root)
+        self.assertEqual(Path(plan['stage']),self.stage)
+        self.assertEqual(plan['layout'],'compact-v1')
+        self.assertEqual(plan['preserved'],['vocabularies/uiux-terms.txt'])
+        install_files(plan)
+        self.assertEqual((self.root/'app/app.py').read_bytes(),b'new code')
+        self.assertEqual((self.root/'Think Aloud.exe').read_bytes(),b'MZ new launcher')
+        self.assertTrue((self.root/'app/state/update-result.json').is_file())
+        self.assertFalse((self.root/'state').exists())
+        rollback(plan)
+        self.assertEqual((self.root/'app/app.py').read_bytes(),b'old code')
+        self.assertEqual((self.root/'Think Aloud.exe').read_bytes(),b'MZ launcher')
+        self.assertFalse((self.root/'app/new_module.py').exists())
+        self.assertTrue((self.work/'rollback-new/app/new_module.py').is_file())
+        for name,content in saved.items():self.assertEqual((self.root/name).read_bytes(),content)
+
+    def test_recovery_uses_persisted_layout_and_inner_locks(self):
+        from update_installer import file_lock, status
+        plan=build_plan(self.root,self.stage,self.work)
+        def interrupt(count):raise OSError('synthetic interruption')
+        with self.assertRaises(OSError):install_files(plan,after_replace=interrupt)
+        with patch('update_installer.blockers',return_value=[]) as blockers:
+            result=run_job(self.work/'job.json',recover=True,launch=False)
+        self.assertEqual(result['state'],'rolled_back')
+        blockers.assert_called_with(self.root)
+        self.assertTrue((self.root/'app/app.lock').is_file())
+        self.assertTrue((self.root/'app/update.lock').is_file())
+        self.assertFalse((self.root/'app.lock').exists())
+        with file_lock(self.root/'app/app.lock'),file_lock(self.root/'app/update.lock'):pass
+        # The recovery journal remains in app even if the live marker is missing.
+        marker=self.root/'app/portable.json';marker.rename(marker.with_suffix('.retained'))
+        status(result,'recovery_required','synthetic')
+        self.assertEqual(json.loads((self.root/'app/state/update-result.json').read_text(encoding='utf-8'))['state'],'recovery_required')
+        self.assertFalse((self.root/'state').exists())
+
+    def test_failed_installed_self_check_restores_inner_and_outer_files(self):
+        build_plan(self.root,self.stage,self.work)
+        def checker(root,work):
+            self.assertEqual(root,self.root)
+            self.assertEqual(launcher_path(root),self.root/'Think Aloud.exe')
+            raise UpdateError('synthetic check failure')
+        result=run_job(self.work/'job.json',launch=False,checker=checker)
+        self.assertEqual(result['state'],'rolled_back')
+        self.assertEqual((self.root/'Think Aloud.exe').read_bytes(),b'MZ launcher')
+        self.assertEqual((self.root/'app/app.py').read_bytes(),b'old code')
+
+    def test_successful_install_waits_for_inner_start_ack_and_leaves_root_clean(self):
+        from update_installer import acknowledge_start
+        plan=build_plan(self.root/'app',self.stage,self.work)
+        def launched(args,**kwargs):
+            self.assertEqual(args,[str(self.root/'Think Aloud.exe')])
+            self.assertEqual(kwargs['cwd'],self.root)
+            acknowledge_start(self.root/'app')
+            return MagicMock()
+        with patch('update_installer.subprocess.Popen',side_effect=launched):
+            result=run_job(self.work/'job.json',checker=lambda *args:None)
+        self.assertEqual(result['state'],'complete')
+        self.assertEqual((self.root/'app/app.py').read_bytes(),b'new code')
+        self.assertEqual({path.name for path in self.root.iterdir()},{'Think Aloud.exe','app','vocabularies'})
+        self.assertEqual(json.loads((self.root/'app/state/update-started.json').read_text())['id'],plan['id'])
+
+    def test_self_check_launches_outer_executable_and_outer_working_directory(self):
+        from update_installer import self_check
+        self.work.mkdir();atomic_json(self.work/'installed-self-check.json',{'ok':True})
+        process=MagicMock();process.wait.return_value=0
+        with patch('update_installer.subprocess.Popen',return_value=process) as popen:
+            self_check(self.root/'app',self.work)
+        self.assertEqual(popen.call_args.args[0][0],str(self.root/'Think Aloud.exe'))
+        self.assertEqual(popen.call_args.kwargs['cwd'],self.root)
+
+    def test_launch_guard_and_acknowledgment_use_inner_state(self):
+        from update_installer import ensure_launch_allowed, acknowledge_start, status
+        plan=build_plan(self.root,self.stage,self.work)
+        status(plan,'applying','synthetic')
+        for root in (self.root,self.root/'app'):
+            with self.assertRaises(UpdateError):ensure_launch_allowed(root)
+        plan['version']='1.0.0';status(plan,'startup_unconfirmed','synthetic')
+        acknowledge_start(self.root)
+        self.assertEqual(json.loads((self.root/'app/state/update-started.json').read_text())['id'],plan['id'])
+        self.assertEqual(json.loads((self.root/'app/state/update-result.json').read_text(encoding='utf-8'))['state'],'complete')
+        self.assertFalse((self.root/'state').exists())
+
+    def test_blockers_include_outer_launcher_when_called_with_inner_root(self):
+        from types import SimpleNamespace
+        from update_installer import blockers
+        process=SimpleNamespace(pid=321,info={'exe':str(self.root/'Think Aloud.exe'),'create_time':123})
+        with patch('psutil.process_iter',return_value=[process]),patch('update_installer.process_running',return_value=True):
+            self.assertEqual(blockers(self.root/'app'),[321])
+
+    def test_layout_migration_requires_separate_entry_before_changes(self):
+        flat=fixture(self.base/'flat')
+        with self.assertRaisesRegex(UpdateError,'独立迁移入口'):build_plan(flat,self.stage,self.work)
+        with self.assertRaisesRegex(UpdateError,'独立迁移入口'):build_plan(self.root,flat,self.work)
+        self.assertFalse((self.work/'job.json').exists())
+
+    def test_protected_inner_paths_and_mixed_layout_cannot_enter_manifest(self):
+        from update_installer import managed_path
+        protected=('app/config.json','app/state/webview/data','app/state/secrets/key.dpapi',
+                   'app/secrets/key','app/models/weights.bin','app/staging/raw.mkv',
+                   'app/tools/obs/config/global.ini','app/vocabularies/private.txt')
+        for name in protected:
+            with self.subTest(name=name):self.assertFalse(managed_path(name))
+        manifest=json.loads((self.stage/'app/package-manifest.json').read_text())
+        for name in (*protected,'app/package-manifest.json','app.py','portable.json','ExperienceRecorder.exe'):
+            with self.subTest(name=name),self.assertRaises(UpdateError):
+                inventory(dict(manifest,files=manifest['files']+[{'path':name,'bytes':1,'sha256':'0'*64}]))
+
+    def test_missing_marker_dual_manifest_and_wrong_manifest_location_rejected(self):
+        archive=self.archive()
+        with zipfile.ZipFile(archive,'a') as value:
+            value.writestr('package-manifest.json',(self.stage/'app/package-manifest.json').read_bytes())
+        with self.assertRaises(UpdateError):extract_package(archive,self.base/'dual')
+        metadata=json.loads((self.stage/'app/portable.json').read_text());metadata.pop('layout')
+        compact_fixture(self.stage,'1.1.0',{'app/portable.json':json.dumps(metadata).encode(),
+                                         'app/app.py':b'new code','app/new_module.py':b'new module'})
+        with self.assertRaisesRegex(UpdateError,'布局标记'):extract_package(self.archive(),self.base/'unmarked')
+
+    def test_compact_inventory_cannot_be_published_from_flat_manifest_location(self):
+        archive=self.base/'wrong-location.zip'
+        with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED) as value:
+            for item in self.stage.rglob('*'):
+                if item.is_file():
+                    name=item.relative_to(self.stage).as_posix()
+                    value.write(item,'package-manifest.json' if name=='app/package-manifest.json' else name)
+        with self.assertRaisesRegex(UpdateError,'清单位置'):extract_package(archive,self.base/'wrong')
 
 
 if __name__=='__main__':unittest.main()

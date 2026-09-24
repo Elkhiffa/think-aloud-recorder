@@ -7,6 +7,7 @@ owns per-session processing and never writes foreground recording activity.
 """
 from copy import deepcopy
 from pathlib import Path
+from app_paths import installation_root, vocabulary_dir
 import os
 import re
 import shutil
@@ -196,7 +197,7 @@ class DesktopService:
             self._normalize_input_choice(value)
             self._normalize_hotword_config(value)
             if value.get('vault') and not Path(value['vault']).is_absolute():
-                value['vault'] = str((self.root / value['vault']).resolve())
+                value['vault'] = str((installation_root(self.root) / value['vault']).resolve())
         ident = self._cfg.get('active_preset_id')
         selected = self._cfg['presets'].get(ident)
         if selected:
@@ -233,12 +234,6 @@ class DesktopService:
 
     def _persist(self, cfg):
         stored = stored_settings(self.root, deepcopy(cfg))
-        if (self.root / 'portable.json').is_file():
-            for preset in stored.get('presets', {}).values():
-                try:
-                    preset['vault'] = Path(preset['vault']).resolve().relative_to(self.root).as_posix()
-                except (KeyError, ValueError):
-                    pass
         recorder.write(self.root / 'config.json', stored)
 
     def _preset_list(self):
@@ -605,8 +600,10 @@ class DesktopService:
         if path == Path(path.anchor) or any(part.lower() == '.obsidian' for part in path.parts):
             raise ValueError('请选择专用资料库目录，不要选择磁盘根目录或 .obsidian 配置目录。')
         protected = [self.root / name for name in ('runtime', 'tools', 'models', 'state', 'ui', 'vault-template')]
+        if installation_root(self.root) != self.root:
+            protected.extend((self.root, vocabulary_dir(self.root)))
         protected.extend(Path(os.environ[name]) for name in ('WINDIR', 'PROGRAMFILES', 'PROGRAMFILES(X86)') if os.environ.get(name))
-        if path == self.root or any(path.is_relative_to(item.resolve()) for item in protected):
+        if path in (self.root, installation_root(self.root)) or any(path.is_relative_to(item.resolve()) for item in protected):
             raise ValueError('保存位置不能是应用文件或系统程序目录，请选择专用资料库。')
         if path.exists() and not path.is_dir():
             raise ValueError('保存位置必须是文件夹。')
@@ -869,7 +866,7 @@ class DesktopService:
 
     def choose_hotword_files(self):
         try:
-            directory = self.root / 'vocabularies'
+            directory = vocabulary_dir(self.root)
             options = {'directory': str(directory)} if directory.is_dir() else {}
             paths = self._dialog('file', allow_multiple=True,
                                  file_types=('Hotword dictionaries (*.txt;*.scel)',), **options)

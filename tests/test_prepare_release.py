@@ -151,6 +151,25 @@ class ReleasePreparationTests(unittest.TestCase):
         self.assertTrue(report['pending'])
         self.assertEqual(len(report['commit_binding']['files']), len(release.KEY_APPLICATION_FILES))
 
+    def test_compact_package_keeps_commit_and_runtime_seed_binding(self):
+        self.make()
+        binary = self.artifacts / self.names[0]
+        with zipfile.ZipFile(binary) as archive:
+            values = {name: archive.read(name) for name in archive.namelist() if name != 'package-manifest.json'}
+        metadata = json.loads(values['portable.json']); metadata['layout'] = 'compact-v1'
+        values['portable.json'] = release.json_bytes(metadata)
+        values['Think Aloud.exe'] = values.pop('ExperienceRecorder.exe')
+        values = {name if name.startswith('vocabularies/') or name == 'Think Aloud.exe' else 'app/' + name: raw
+                  for name, raw in values.items()}
+        values['app/package-manifest.json'] = release.json_bytes({'schema': 1, 'dependency_source_status': True,
+            'files': [{'path': name, 'bytes': len(raw), 'sha256': digest(raw)} for name, raw in values.items()]})
+        self.write_zip(binary, values)
+        self.sums()
+        report = self.run_preflight()
+        self.assertEqual(report['status'], 'ready_for_draft_review', report['blockers'])
+        self.assertEqual(len(report['commit_binding']['files']), len(release.KEY_APPLICATION_FILES))
+        self.assertGreater(report['runtime_seed_binding']['files'], 0)
+
     def test_preview_flag_is_derived_from_the_explicit_tag(self):
         self.make(version='1.2.3-preview.4')
         report = self.run_preflight()

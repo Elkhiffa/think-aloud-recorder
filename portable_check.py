@@ -8,6 +8,7 @@ import platform
 import sys
 import time
 import traceback
+from app_paths import installation_root
 
 
 def settings_for_check(root, *, synthetic_recording=False):
@@ -20,7 +21,7 @@ def settings_for_check(root, *, synthetic_recording=False):
     cfg = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
     from portable_config import default_vault_path
     vault = Path(cfg.get('vault') or default_vault_path(root))
-    cfg['vault'] = str(vault if vault.is_absolute() else (root / vault).resolve())
+    cfg['vault'] = str(vault if vault.is_absolute() else (installation_root(root) / vault).resolve())
     return cfg
 
 

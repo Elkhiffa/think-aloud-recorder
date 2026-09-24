@@ -1,5 +1,26 @@
 # Build and reconstruction
 
+## Installed directory layout
+
+Portable archives contain `Think Aloud.exe`, `app/`, and `vocabularies/` at the
+top level. Source checkouts remain flat. `app/portable.json` declares
+`layout: compact-v1`; the folder name alone is never enough to select this layout.
+The private runtime, OBS portable tree (including its configuration), source,
+UI, notices, model manager and writable application state all live under `app/`.
+`app/package-manifest.json` inventories paths relative to the outer installation
+directory. `scripts/runtime-seed.json` still inventories paths relative to the
+internal application directory, preserving the accepted dependency identities.
+
+The external library default remains the installation directory's sibling
+`think-aloud-database`. Relative library paths are interpreted from the outer
+installation directory. Default and user dictionaries stay in the visible
+`vocabularies/` directory. Models remain optional and absent from software ZIPs.
+The allowlist builder accepts either a flat prepared seed or a compact package
+as its seed; it never includes configuration, credentials, recordings or caches.
+
+First migration of an existing flat installation uses the offline helper
+documented in [updates.md](updates.md), not an overlay extraction.
+
 ## What is reproducible
 
 `scripts/build_portable.py` deterministically packages an already prepared Windows

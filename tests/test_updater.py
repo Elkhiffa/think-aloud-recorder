@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import httpx
 from updater import UpdateManager, SemVer, select_release
-from test_update_installer import fixture
+from test_update_installer import fixture, compact_fixture
 
 
 class UpdaterTests(unittest.TestCase):
@@ -30,10 +30,12 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(select_release(releases,True)['tag_name'],'v2.0.0-beta.1')
         self.assertIsNone(select_release([],False))
 
-    def manager(self,handler):
+    def manager(self,handler, *, compact=False):
         temp=TemporaryDirectory();self.addCleanup(temp.cleanup)
         root=Path(temp.name)/'app';root.mkdir()
-        (root/'portable.json').write_text(json.dumps({'version':'0.6.0-preview.1'}))
+        if compact:
+            compact_fixture(root,'0.6.0-preview.1');root=root/'app'
+        else:(root/'portable.json').write_text(json.dumps({'version':'0.6.0-preview.1'}))
         manager=UpdateManager(root,client_factory=lambda:httpx.Client(transport=httpx.MockTransport(handler)))
         self.addCleanup(manager.cancel)
         return manager
@@ -56,7 +58,7 @@ class UpdaterTests(unittest.TestCase):
         manager.check();manager.wait(2)
         self.assertEqual(manager.snapshot()['state'],'error')
 
-    def download_fixture(self, *, partial=False, wrong_digest=False, redirect=False):
+    def download_fixture(self, *, partial=False, wrong_digest=False, redirect=False, compact=False):
         data={}
         def handler(request):
             path=request.url.path
@@ -65,8 +67,8 @@ class UpdaterTests(unittest.TestCase):
             if redirect:return httpx.Response(302,headers={'location':'https://example.org/package.zip'})
             content=data['archive'][:-10] if partial else data['archive']
             return httpx.Response(200,content=content)
-        manager=self.manager(handler)
-        stage=fixture(manager.root.parent/'fixture','1.0.0')
+        manager=self.manager(handler,compact=compact)
+        stage=(compact_fixture if compact else fixture)(manager.install_root.parent/'fixture','1.0.0')
         buffer=io.BytesIO()
         with zipfile.ZipFile(buffer,'w',zipfile.ZIP_DEFLATED) as archive:
             for path in stage.rglob('*'):
@@ -130,6 +132,35 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(manager.snapshot()['last_install']['recovery_path'],str(work/RECOVERY_ENTRY))
         status(plan,'complete','fixture')
         self.assertIsNone(manager.snapshot()['last_install']['recovery_path'])
+
+    def test_compact_download_and_helper_prepare_stay_outside_installation(self):
+        from update_installer import RECOVERY_ENTRY, read_json, status
+        manager=self.download_fixture(compact=True)
+        self.assertEqual(manager.root,manager.install_root/'app')
+        self.assertEqual(manager.snapshot()['current_version'],'0.6.0-preview.1')
+        outer_manager=UpdateManager(manager.install_root)
+        self.assertEqual(outer_manager.root,manager.root)
+        manager.download();self.assertTrue(manager.wait(3))
+        self.assertEqual(manager.snapshot()['state'],'ready',manager.snapshot())
+        self.assertFalse(manager._work.is_relative_to(manager.install_root))
+        self.assertEqual((manager._stage/'app/app.py').read_bytes(),b'old code')
+        with patch('updater.self_check') as check:prepared=manager.prepare_install(os.getpid())
+        self.assertEqual(Path(prepared['executable']),manager._stage/'app/runtime/pythonw.exe')
+        work=Path(prepared['cwd']);plan=read_json(work/'job.json')
+        self.assertEqual(Path(plan['root']),manager.install_root)
+        self.assertEqual(plan['layout'],'compact-v1')
+        self.assertTrue((work/'app_paths.py').is_file())
+        self.assertEqual((work/'app_paths.py').read_bytes(),Path(__file__).parents[1].joinpath('app_paths.py').read_bytes())
+        self.assertIn('"%~dp0..\\package\\app\\runtime\\python.exe"',(work/RECOVERY_ENTRY).read_text(encoding='utf-8'))
+        status(plan,'startup_unconfirmed','synthetic')
+        self.assertEqual(manager.snapshot()['last_install']['recovery_path'],str(work/RECOVERY_ENTRY))
+        self.assertFalse((manager.install_root/'state').exists())
+        # Execute the copied helper with the real isolated runtime, not fixtures.
+        # --help never reads/mutates the install or starts any native processes.
+        import subprocess
+        completed=subprocess.run([sys.executable,str(work/'update_installer.py'),'--help'],
+            cwd=work,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=20)
+        self.assertEqual(completed.returncode,0,completed.stderr.decode(errors='replace'))
 
 
 if __name__=='__main__':unittest.main()

@@ -20,12 +20,13 @@ import zipfile
 # protocol, rather than a neighbouring seed's application modules.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from updater import SemVer
+from app_paths import application_root, installation_root
 from media_runtime import MEDIA_DIRECTORY, verify_media
 from scripts.verify_runtime_seed import verify_runtime_seed
 from scripts.brand_launcher import branded_stub
 
 ROOT_FILES = (
-    'app.py', 'desktop_service.py', 'hotword_files.py', 'hotword_ui.py',
+    'app.py', 'app_paths.py', 'desktop_service.py', 'hotword_files.py', 'hotword_ui.py',
     'model_manager.py', 'model-manifest.json', 'media_runtime.py', 'portable_check.py', 'portable_config.py',
     'portable_entry.py', 'processing_worker.py', 'processing.py', 'qwen_transcription.py',
     'recorder.py', 'window_manager.py', 'review_runtime.py', 'scel_to_text.py', 'secret_store.py',
@@ -35,7 +36,7 @@ ROOT_FILES = (
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md', 'docs/updates.md',
     'scripts/build_portable.py', 'scripts/brand_launcher.py', 'scripts/fetch_runtime.py', 'scripts/fetch_input_runtime.py',
     'scripts/fetch_media_runtime.py',
-    'scripts/verify_runtime_seed.py', 'scripts/runtime-seed.json', 'docs/release-readiness.md',
+    'scripts/verify_runtime_seed.py', 'scripts/migrate_layout.py', 'scripts/runtime-seed.json', 'docs/release-readiness.md',
     'vocabularies/uiux-terms.txt', 'docs/uiux-vocabulary.md', 'docs/input-capture-validation.md',
 )
 OPTIONAL_ROOT_FILES = ('README.md',)
@@ -67,15 +68,15 @@ def excluded(path):
 
 
 def collect_files(root):
-    root = Path(root).resolve()
+    root = application_root(root)
     entries = {}
     def add(relative, required=True):
-        file = root / relative
+        file = (installation_root(root) if relative.startswith('vocabularies/') else root) / relative
         if not file.is_file():
             if required:
                 raise ValueError('Missing package input: ' + relative)
             return
-        if file.is_symlink() or not file.resolve().is_relative_to(root):
+        if file.is_symlink() or not file.resolve().is_relative_to(installation_root(root)):
             raise ValueError('Symlink/path escape in package input: ' + relative)
         entries[Path(relative).as_posix()] = file
     for relative in ROOT_FILES:
@@ -149,6 +150,10 @@ def compact_dependency_notices(files):
         'files': records})}
 
 
+def package_path(name):
+    return name if name == 'Think Aloud.exe' or name.startswith('vocabularies/') else 'app/' + name
+
+
 def launcher_bytes(version='0.0.0', icon_path=None):
     # Preserve distlib's GUI code/manifest, with the application's native icon
     # and version resources. Relative shebang resolves beside the launcher.
@@ -163,7 +168,7 @@ def launcher_bytes(version='0.0.0', icon_path=None):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as archive:
         archive.writestr(zipfile.ZipInfo('__main__.py', STAMP), source)
-    return stub + b'#!<launcher_dir>\\runtime\\pythonw.exe\n' + buffer.getvalue()
+    return stub + b'#!<launcher_dir>\\app\\runtime\\pythonw.exe\n' + buffer.getvalue()
 
 
 def read_sources(source_dir, candidate):
@@ -211,9 +216,10 @@ def write_zip(path, entries):
     with zipfile.ZipFile(partial) as archive:
         if archive.testzip() is not None:
             raise ValueError('ZIP integrity verification failed')
-        if 'package-manifest.json' in archive.namelist():
-            inventory = json.loads(archive.read('package-manifest.json'))['files']
-            if set(archive.namelist()) != {item['path'] for item in inventory} | {'package-manifest.json'}:
+        manifest_name = next((name for name in ('app/package-manifest.json', 'package-manifest.json') if name in archive.namelist()), None)
+        if manifest_name:
+            inventory = json.loads(archive.read(manifest_name))['files']
+            if set(archive.namelist()) != {item['path'] for item in inventory} | {manifest_name}:
                 raise ValueError('ZIP entries differ from package manifest')
             for item in inventory:
                 digest = hashlib.sha256()
@@ -227,7 +233,7 @@ def write_zip(path, entries):
 
 
 def build(root, outdir, source_dir=None, *, candidate=False, version='0.3.0', launcher=None):
-    root, outdir = Path(root).resolve(), Path(outdir).resolve()
+    root, outdir = application_root(root), Path(outdir).resolve()
     source_dir = Path(source_dir or root / 'build/dependency-sources').resolve()
     SemVer(version)
     files = collect_files(root)
@@ -250,7 +256,7 @@ def build(root, outdir, source_dir=None, *, candidate=False, version='0.3.0', la
         **compact_notices,
         'Think Aloud.exe': launcher if launcher is not None else launcher_bytes(version, root / 'ui/brand.ico'),
         'portable.json': json_bytes({'name': 'Think Aloud', 'version': version,
-            'platform': 'windows-x64', 'models': 'optional',
+            'platform': 'windows-x64', 'models': 'optional', 'layout': 'compact-v1',
             'update_protocol': 1, 'update_repository': 'Elkhiffa/think-aloud-recorder',
             'release_status': 'candidate-not-for-public-redistribution' if candidate else 'public'}),
         'dependency-source-manifest.json': json_bytes(sources),
@@ -262,13 +268,16 @@ def build(root, outdir, source_dir=None, *, candidate=False, version='0.3.0', la
                 if license_file is None or not license_file.isfile() or license_file.size > 100000:
                     raise ValueError('FFmpeg GPLv3 license missing from pinned source')
                 generated['licenses/FFmpeg-GPL-3.0.txt'] = source.extractfile(license_file).read()
+    # Only the launcher and editable dictionaries stay beside the app folder.
+    files = {package_path(name): value for name, value in files.items()}
+    generated = {package_path(name): value for name, value in generated.items()}
     # Generated notices deliberately supersede an older seed's same-path copy.
     # Inventory the final ZIP mapping, never both versions of an overridden path.
     inventory = [{'path': name,
                   'bytes': len(value) if isinstance(value, bytes) else value.stat().st_size,
                   'sha256': hashlib.sha256(value).hexdigest() if isinstance(value, bytes) else sha256(value)}
                  for name, value in sorted({**files, **generated}.items())]
-    generated['package-manifest.json'] = json_bytes({'schema': 1, 'files': sorted(inventory, key=lambda x: x['path']),
+    generated['app/package-manifest.json'] = json_bytes({'schema': 1, 'files': sorted(inventory, key=lambda x: x['path']),
         'reproducibility': 'Same prepared seed, source files, Python/zip implementation and launcher stub produce identical ZIP bytes.',
         'dependency_source_status': sources.get('redistribution_ready', False)})
     suffix = '-candidate' if candidate else ''
