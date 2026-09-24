@@ -126,6 +126,7 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 
 .device-view{position:relative;flex-direction:column}.device-extra{display:flex;flex-wrap:wrap;gap:4px;align-items:center;justify-content:center}.device-extra .keycap{font-size:10px;min-width:22px;height:21px;padding:3px 5px}.device-extra .keycap svg{height:16px;width:14px}
 .timeline-gaps{z-index:0}.timeline-inputs,.timeline-speech{z-index:1}.timeline-ticks{z-index:0}.timeline-gap{align-items:flex-end}
+.timeline-gap.preparation{background:color-mix(in srgb,var(--muted) 8%,var(--surface));border-style:solid;border-color:var(--line);color:var(--muted)}
 
 
 /* Display boxes reserve readable space without changing their true timestamps. */

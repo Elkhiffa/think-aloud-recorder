@@ -61,6 +61,54 @@ class ObsLifecycleTests(unittest.TestCase):
         self.req.side_effect = None
         return recorder._owned_obs[self.root]
 
+    def test_cancelled_first_connection_never_launches_obs_after_failure(self):
+        allowed = {'value': True}
+        def connect(**kwargs):
+            allowed['value'] = False
+            raise ConnectionRefusedError('synthetic handshake lost foreground')
+        self.req.side_effect = connect
+        with self.assertRaises(recorder.ObsOperationCancelled):
+            recorder.client(continue_if=lambda: allowed['value'])
+        self.popen.assert_not_called()
+
+    def test_cancelled_launch_progress_never_spawns_obs(self):
+        allowed = {'value': True}
+        self.req.side_effect = ConnectionRefusedError('synthetic unavailable')
+        def progress(message):allowed['value'] = False
+        with self.assertRaises(recorder.ObsOperationCancelled):
+            recorder.client(progress=progress, continue_if=lambda: allowed['value'])
+        self.popen.assert_not_called()
+
+    def test_cancelled_retry_retains_owned_child_without_new_connections(self):
+        allowed = {'value': True}
+        self.req.side_effect = ConnectionRefusedError('synthetic unavailable')
+        with patch.object(recorder.time, 'sleep', side_effect=lambda _: allowed.update(value=False)):
+            with self.assertRaises(recorder.ObsOperationCancelled):
+                recorder.client(continue_if=lambda: allowed['value'])
+        self.req.assert_called_once()
+        self.popen.assert_called_once()
+        self.assertIs(recorder._owned_obs[self.root]['process'], self.process)
+        self.process.terminate.assert_not_called()
+
+    def test_cancelled_connected_status_closes_socket_without_next_request(self):
+        allowed = {'value': True}
+        def status():
+            allowed['value'] = False
+            return SimpleNamespace(output_active=False)
+        self.connection.get_record_status.side_effect = status
+        with self.assertRaises(recorder.ObsOperationCancelled):
+            recorder.client(False, continue_if=lambda: allowed['value'])
+        self.connection.get_stream_status.assert_not_called()
+        self.connection.disconnect.assert_called_once()
+        self.popen.assert_not_called()
+
+    def test_failed_continuation_callback_is_closed_to_automatic_connections(self):
+        def check():raise OSError('synthetic unavailable desktop')
+        with self.assertRaises(recorder.ObsOperationCancelled):
+            recorder.client(continue_if=check)
+        self.req.assert_not_called()
+        self.popen.assert_not_called()
+
     def test_launch_retains_original_handle_and_close_verifies_idle_then_waits(self):
         owned = self.launch()
         self.assertIs(owned['process'], self.process)

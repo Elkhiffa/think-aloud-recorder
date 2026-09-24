@@ -22,6 +22,17 @@ _obs_closed_roots=set()
 _OBS_RECEIPT='state/owned-obs.json'
 
 
+class ObsOperationCancelled(RuntimeError):
+    """An automatic foreground-only operation lost its admission."""
+
+
+def _check_obs_continuation(continue_if):
+    if continue_if is not None:
+        try:allowed=continue_if() is True
+        except Exception:allowed=False
+        if not allowed:raise ObsOperationCancelled('回到记录器窗口后自动检查录制条件。')
+
+
 class _RecoveredObsProcess:
     """The exact child from a previous app run, identified by its birth time."""
     def __init__(self, process):
@@ -140,14 +151,17 @@ def microphone_is_silent(path):
             if frame.to_ndarray().any():return False
     if not samples:raise RuntimeError('独立口述音轨没有有效采样，原始录像已保留。')
     return True
-def wait_obs_ready(r,timeout=45,progress=lambda s:None):
+def wait_obs_ready(r,timeout=45,progress=lambda s:None,*,continue_if=None):
     """A websocket handshake can finish before OBS loads its scene collection."""
     deadline=time.monotonic()+timeout
     notified=False
     while True:
+        _check_obs_continuation(continue_if)
         try:
             recording=r.get_record_status()
+            _check_obs_continuation(continue_if)
             streaming=r.get_stream_status()
+            _check_obs_continuation(continue_if)
             return recording,streaming
         except OBSSDKRequestError as error:
             if error.code!=207:raise
@@ -158,13 +172,13 @@ def wait_obs_ready(r,timeout=45,progress=lambda s:None):
                 raise RuntimeError('录制引擎尚未完成初始化。请稍后重试；如果持续出现，请检查专用 OBS 是否有等待处理的提示窗口。') from error
             time.sleep(min(.2,remaining))
 
-def client(launch=True,progress=lambda s:None):
+def client(launch=True,progress=lambda s:None,*,continue_if=None):
     # Keep the original process handle, and serialize launch/close so reconnects
     # cannot create duplicate children or race an accepted application close.
     with _obs_process_lock:
         if ROOT.resolve() in _obs_closed_roots:
             raise RuntimeError('记录器正在关闭，录制引擎不再接受新连接。')
-        return _connect_obs(launch,progress)
+        return _connect_obs(launch,progress,continue_if=continue_if)
 
 @contextmanager
 def obs_connection(*args,**kwargs):
@@ -179,18 +193,21 @@ def obs_connection(*args,**kwargs):
         try:connection.disconnect()
         except Exception:pass
 
-def _connect_obs(launch,progress):
+def _connect_obs(launch,progress,*,continue_if=None):
     c=config()
     root=ROOT.resolve()
     owned=_recover_owned_obs(root,c)
+    _check_obs_continuation(continue_if)
     try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=8)
     except Exception:
         if not launch:raise
+        _check_obs_continuation(continue_if)
         if owned is not None and owned['process'].poll() is None:
             progress('正在重新连接录制引擎，请稍候…')
         else:
             progress('正在启动录制引擎，请稍候…')
             exe=ROOT/'tools/obs/bin/64bit/obs64.exe'
+            _check_obs_continuation(continue_if)
             process=subprocess.Popen([str(exe),'--portable','--multi','--profile','Experience','--collection','Experience','--minimize-to-tray','--disable-shutdown-check'],cwd=exe.parent,creationflags=HIDDEN)
             try:
                 owned=dict(process=process,exe=exe.resolve(),port=c['port'],password=c['password'],
@@ -204,7 +221,9 @@ def _connect_obs(launch,progress):
                 raise RuntimeError('无法保存录制引擎的进程归属，已取消启动。') from error
             _owned_obs[root]=owned
         for _ in range(45):
+            _check_obs_continuation(continue_if)
             time.sleep(1)
+            _check_obs_continuation(continue_if)
             try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=2);break
             except Exception:pass
         else:
@@ -213,7 +232,7 @@ def _connect_obs(launch,progress):
             raise RuntimeError('专用 OBS 未能连接。请查看 tools/obs/config/obs-studio/logs。')
     # Readiness failures must never launch another OBS instance.
     try:
-        wait_obs_ready(r,progress=progress)
+        wait_obs_ready(r,progress=progress,continue_if=continue_if)
         # Retry handshakes stay short, but a ready connection must use the same
         # request deadline as a connection to an already-running OBS. Scene and
         # device initialization can legitimately exceed the 2s handshake bound.
@@ -463,6 +482,60 @@ def primary_monitor_ids():
         # Optional default suggestions must not prevent device enumeration.
         return ()
 
+def resolve_window_selection(requested, items):
+    """Resolve one enabled OBS window without guessing between live candidates.
+
+    An exact opaque ID remains supported for older callers. Only valid OBS
+    title/class/executable triples participate in restart-tolerant matching.
+    Duplicate rows deliberately count as separate candidates.
+    """
+    requested = requested if isinstance(requested, str) else ''
+    result = dict(requested=requested, resolved='', status='missing', matched_by='', itemName='')
+    if not requested.strip():
+        return result
+    candidates = [item for item in (items if isinstance(items, (list, tuple)) else [])
+                  if isinstance(item, dict) and item.get('itemEnabled') is True
+                  and isinstance(item.get('itemValue'), str) and item['itemValue'].strip()]
+
+    def selected(matches, method):
+        outcome = dict(result, matched_by=method)
+        if len(matches) != 1:
+            return dict(outcome, status='ambiguous')
+        item = matches[0]
+        label = item.get('itemName')
+        return dict(outcome, resolved=item['itemValue'], status='matched',
+                    itemName=label if isinstance(label, str) else item['itemValue'])
+
+    exact = [item for item in candidates if item['itemValue'] == requested]
+    if exact:
+        return selected(exact, 'exact')
+
+    def parsed(value):
+        parts = value.split(':')
+        if len(parts) != 3 or not all(parts):
+            return None
+        # Same OBS escaping as input_capture_windows.parse_obs_window.
+        return tuple(part.replace('#3A', ':').replace('#22', '#') for part in parts)
+
+    target = parsed(requested)
+    if target is None:
+        return result
+    same_exe = []
+    same_title = []
+    for item in candidates:
+        identity = parsed(item['itemValue'])
+        if identity is None or identity[2].casefold() != target[2].casefold():
+            continue
+        same_exe.append(item)
+        if identity[0] == target[0]:
+            same_title.append(item)
+    if same_title:
+        return selected(same_title, 'exe_title')
+    if same_exe:
+        return selected(same_exe, 'exe_unique')
+    return result
+
+
 def devices(progress=lambda s:None):
     with obs_connection(progress=progress) as r:
         ensure_idle(r)
@@ -495,7 +568,9 @@ def configure_scene(r,c,test_file=None):
     else:
         if c['source']=='游戏窗口':
             if not c.get('window'):raise RuntimeError('请先在设置中选择已打开的游戏窗口。')
-            add(r,'游戏画面','window_capture',{'window':c['window'],'method':2,'cursor':True,'client_area':True})
+            # Keep capture disabled until this fresh property list identifies
+            # one current target, rather than let OBS fall back from an old ID.
+            add(r,'游戏画面','window_capture',{'window':'','method':2,'cursor':True,'client_area':True},False)
         else:
             if not c.get('monitor'):raise RuntimeError('请先在设置中选择显示器。')
             add(r,'游戏画面','monitor_capture',{'monitor_id':c['monitor'],'capture_cursor':True})
@@ -504,9 +579,29 @@ def configure_scene(r,c,test_file=None):
         r.set_input_mute('口述',False)
         for name,prop,value in [('口述','device_id',c['mic']),('游戏画面','window' if c['source']=='游戏窗口' else 'monitor_id',c['window'] if c['source']=='游戏窗口' else c['monitor'])]:
             options=r.get_input_properties_list_property_items(name,prop).property_items
-            if not any(item.get('itemEnabled') and item['itemValue']==value for item in options):raise RuntimeError(f'{name} 已不可用，请打开游戏或重新连接设备，然后在首次设置中重新选择。')
+            if prop=='window':
+                selection=resolve_window_selection(value,options)
+                if selection['status']=='ambiguous':
+                    raise RuntimeError('检测到多个匹配的游戏窗口，请在录制预设中重新选择目标窗口。')
+                if selection['status']!='matched':
+                    raise RuntimeError('游戏画面 已不可用，请打开游戏或重新选择目标窗口。')
+                resolved=selection['resolved']
+                r.set_input_settings(name,{'window':resolved},True)
+                current=resolve_window_selection(resolved,r.get_input_properties_list_property_items(name,prop).property_items)
+                if current['status']!='matched' or current['matched_by']!='exact':
+                    raise RuntimeError('游戏窗口在准备期间发生变化或出现重名窗口，请重新开始录制。')
+                # Session.start owns this copy. Its history and strict native
+                # input binding must consume exactly the value sent to OBS.
+                c['window']=resolved
+            elif not any(item.get('itemEnabled') and item['itemValue']==value for item in options):raise RuntimeError(f'{name} 已不可用，请打开游戏或重新连接设备，然后在首次设置中重新选择。')
+    window_enabled=False
     for item in r.get_scene_item_list('Experience').scene_items:
         r.set_scene_item_transform('Experience',item['sceneItemId'],{'boundsType':'OBS_BOUNDS_SCALE_INNER','boundsWidth':w,'boundsHeight':h,'positionX':0,'positionY':0})
+        if not test_file and c['source']=='游戏窗口' and item.get('sourceName')=='游戏画面':
+            r.set_scene_item_enabled('Experience',item['sceneItemId'],True)
+            window_enabled=True
+    if not test_file and c['source']=='游戏窗口' and not window_enabled:
+        raise RuntimeError('游戏画面未能加入录制场景，已取消开始。')
     r.set_current_program_scene('Experience')
     time.sleep(0.5)
     expected={'测试素材'} if test_file else {'游戏画面','游戏声音','口述'}
@@ -759,7 +854,14 @@ class Session:
             # precision. Review retains explicit manual per-session alignment.
             return
     @classmethod
-    def start(cls,c,test_file=None):
+    def start(cls,c,test_file=None,*,progress=None):
+        def report(stage):
+            # Presentation must not change recording ownership or its clocks.
+            if progress is not None:
+                try:progress(stage)
+                except Exception:pass
+        c=dict(c)
+        report('正在启动录像')
         with obs_connection() as r:
             ensure_idle(r)
             vault=Path(c['vault']);vault.mkdir(parents=True,exist_ok=True)
@@ -787,6 +889,7 @@ class Session:
                     time.sleep(0.1)
                 else:raise RuntimeError('OBS 尚未确认录制状态，请在场次列表恢复后检查。')
                 if s._input_capture is not None:
+                    report('正在准备操作记录')
                     try:
                         state,before,after=s.await_input_clock(r,state,before,after)
                         s._video_seconds=s.output_seconds(state)

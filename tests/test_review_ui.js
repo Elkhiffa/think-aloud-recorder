@@ -160,6 +160,26 @@ const copyOffset=JSON.stringify(rawOffset),adjusted=input.normalizeInputs(rawOff
 close(adjusted.intervals[0].start,2.8);assert.equal(adjusted.intervals.length,1);assert.equal(adjusted.gaps[0].start,0);close(adjusted.gaps[0].end,2.1);assert.equal(adjusted.duration,12);assert.equal(JSON.stringify(rawOffset),copyOffset);
 const early=input.normalizeInputs(rawOffset,-1.8);assert.equal(early.intervals.length,1);close(early.intervals[0].start,9.2);
 console.log('Non-destructive per-clip alignment, leading gap and video bounds passed.');
+const preparation={state:'complete',duration:10,video_duration:12,alignment:{source:'measured',offset_seconds:1.5},intervals:[{start:.6,end:.8,code:'E'}],
+ gaps:[{start:0,end:.5,type:'capture',reason:'录像启动确认前尚未采集操作'},{start:.3,end:6,type:'focus',reason:'目标窗口不在前台'},{start:7,end:8,type:'capture',reason:'实际中断'}]};
+const originalPreparation=JSON.stringify(preparation);
+const normalizedPreparation=input.normalizeInputs(preparation);
+assert.equal(input.initialReviewTime(preparation,12),2);
+assert.equal(normalizedPreparation.gaps[0].preparation,true);
+assert.equal(normalizedPreparation.gaps.filter(gap=>gap.preparation).length,1);
+close(normalizedPreparation.intervals[0].start,2.1);
+close(normalizedPreparation.gaps.find(gap=>gap.type==='focus').end,7.5);
+assert.equal(input.initialReviewTime({...preparation,alignment:{source:'manual',offset_seconds:-.2}},12),.3);
+for(const source of [
+ {...preparation,state:'failed'}, {...preparation,error:'采集失败'}, {...preparation,alignment:{source:'uncalibrated',offset_seconds:0}},
+ {...preparation,alignment:{source:'manual',offset_seconds:-1}}, {...preparation,alignment:{source:'manual',offset_seconds:31}},
+ {...preparation,duration:.5}, {...preparation,gaps:[{start:0,end:.5,type:'capture',reason:'实际中断'}]},
+ {...preparation,gaps:[preparation.gaps[0],preparation.gaps[0]]},
+])assert.equal(input.initialReviewTime(source,12),null);
+assert.equal(input.initialReviewTime(preparation,2),null);
+assert.equal(input.initialReviewTime(null,12),null);
+assert.equal(JSON.stringify(preparation),originalPreparation);
+console.log('Startup preparation stays separate from failures, focus gaps and the existing calibration.');
 // Real input duration determines holds, never visual padding or a merged burst.
 for(const [seconds,expected] of [[.499,false],[.5,false],[.501,true]]){
   assert.equal(input.isLongPress({kind:'button',start:2,end:2+seconds,displayEnd:20}),expected);

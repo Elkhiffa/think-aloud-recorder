@@ -2,6 +2,65 @@
 import threading
 
 
+class _Win32ForegroundQuery:
+    """Read-only Win32 checks; no WinForms objects are touched by workers."""
+    def __init__(self):
+        import ctypes
+        from ctypes import wintypes
+        self._ctypes = ctypes
+        self._user32 = ctypes.WinDLL('user32', use_last_error=True)
+        self._kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        self._user32.GetForegroundWindow.argtypes = []
+        self._user32.GetForegroundWindow.restype = wintypes.HWND
+        self._user32.IsWindow.argtypes = [wintypes.HWND]
+        self._user32.IsWindow.restype = wintypes.BOOL
+        self._user32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        self._user32.OpenInputDesktop.restype = wintypes.HANDLE
+        self._user32.CloseDesktop.argtypes = [wintypes.HANDLE]
+        self._user32.CloseDesktop.restype = wintypes.BOOL
+        self._user32.GetThreadDesktop.argtypes = [wintypes.DWORD]
+        self._user32.GetThreadDesktop.restype = wintypes.HANDLE
+        self._user32.GetUserObjectInformationW.argtypes = [wintypes.HANDLE, ctypes.c_int,
+            ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+        self._user32.GetUserObjectInformationW.restype = wintypes.BOOL
+        self._kernel32.GetCurrentThreadId.argtypes = []
+        self._kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
+    def _desktop_name(self, desktop):
+        from ctypes import wintypes
+        if not desktop:
+            return None
+        buffer = self._ctypes.create_unicode_buffer(256)
+        needed = wintypes.DWORD()
+        if not self._user32.GetUserObjectInformationW(desktop, 2, buffer,
+                self._ctypes.sizeof(buffer), self._ctypes.byref(needed)):
+            return None
+        return buffer.value or None
+
+    def is_foreground(self, hwnd):
+        if not hwnd or not self._user32.IsWindow(hwnd):
+            return False
+        # SessionSwitch can be unavailable or arrive after the desktop changed.
+        # Opening the input desktop for READOBJECTS does not switch desktops.
+        desktop = self._user32.OpenInputDesktop(0, False, 0x0001)
+        if not desktop:
+            return False
+        try:
+            current = self._user32.GetThreadDesktop(self._kernel32.GetCurrentThreadId())
+            name = self._desktop_name(desktop)
+            if name is None or name != self._desktop_name(current):
+                return False
+            return self._user32.GetForegroundWindow() == hwnd
+        finally:
+            self._user32.CloseDesktop(desktop)
+
+
+def _session_switch_source():
+    # pywebview has loaded WinForms before its synchronous before_show event.
+    from Microsoft.Win32 import SystemEvents
+    return SystemEvents
+
+
 class WindowManager:
     def __init__(self, service, webview):
         self.service = service
@@ -14,14 +73,140 @@ class WindowManager:
         self._main_gone = threading.Event()
         self._updating = False
         self._update_main_closing = False
+        self._main_focus = (0, False, False)  # HWND, native active, session locked
+        self._foreground_query = None
+        self._main_native = None
+        self._main_native_events = []
+        self._session_events = None
 
     def bind_main(self, window):
         self.main = window
+        self.service.set_main_foreground_probe(self._main_is_foreground)
+        try:
+            window.events.before_show += self._main_before_show
+        except (AttributeError, TypeError):
+            # Unsupported native backends stay closed to automatic detection.
+            pass
         window.events.closing += self.close_main
         window.events.closed += self._main_closed
 
+    def _main_before_show(self):
+        """pywebview runs before_show synchronously on the native UI thread."""
+        with self._lock:
+            if self._main_gone.is_set() or self._main_native is not None:
+                return
+            try:
+                native = self.main.native
+                hwnd = int(native.Handle.ToInt64())
+                if not hwnd:
+                    return
+                query = _Win32ForegroundQuery()
+                native.Activated += self._main_activated
+                self._main_native_events.append((native, 'Activated', self._main_activated))
+                native.Deactivate += self._main_deactivated
+                self._main_native_events.append((native, 'Deactivate', self._main_deactivated))
+            except Exception:
+                self._remove_main_native_events()
+                return
+            self._main_native = native
+            self._foreground_query = query
+            self._main_focus = (hwnd, False, False)
+            try:
+                source = _session_switch_source()
+                source.SessionSwitch += self._main_session_switch
+                self._session_events = source
+            except Exception:
+                # The input-desktop check remains mandatory on every query.
+                self._session_events = None
+
+    def _main_is_foreground(self):
+        # This snapshot is replaced atomically. Do not acquire the manager lock:
+        # callers may hold the service lock while native events notify it.
+        focus = self._main_focus
+        hwnd, active, locked = focus
+        if self._main_gone.is_set() or not hwnd or not active or locked:
+            return False
+        try:
+            foreground = self._foreground_query.is_foreground(hwnd) is True
+        except Exception:
+            return False
+        return foreground and self._main_focus is focus and not self._main_gone.is_set()
+
+    def _main_activation(self, active):
+        with self._lock:
+            if self._main_gone.is_set():
+                return
+            hwnd, previous, locked = self._main_focus
+            if not hwnd or active == previous:
+                return
+            self._main_focus = (hwnd, active, locked)
+        self._notify_main_activation()
+
+    def _main_activated(self, sender=None, event=None):
+        self._main_activation(True)
+
+    def _main_deactivated(self, sender=None, event=None):
+        self._main_activation(False)
+
+    def _main_session_switch(self, sender, event):
+        with self._lock:
+            if self._main_gone.is_set():
+                return
+            reason = str(event.Reason)
+            hwnd, active, locked = self._main_focus
+            if reason == 'SessionLock':
+                self._main_focus = (hwnd, False, True)
+            elif reason == 'SessionUnlock':
+                # Unlock is only a reason to re-query the HWND. Another app or
+                # a review window may be foreground when the desktop returns.
+                self._main_focus = (hwnd, True, False)
+                active = self._main_is_foreground()
+                self._main_focus = (hwnd, active, False)
+            else:
+                return
+        self._notify_main_activation()
+
+    def _notify_main_activation(self):
+        # Never enter the service while holding _lock: service snapshots can
+        # call review_count while holding their own lock. Closed probes reject
+        # a callback that was already in flight when the main window closed.
+        if self._main_gone.is_set():
+            return
+        try:
+            self.service.main_activation_changed()
+        except Exception:
+            # A failing service callback must not escape into the native loop.
+            pass
+
+    def _remove_main_native_events(self):
+        for native, name, handler in self._main_native_events:
+            try:
+                event = getattr(native, name)
+                event -= handler
+            except Exception:
+                pass
+        self._main_native_events.clear()
+
+    def _detach_main_focus(self):
+        with self._lock:
+            self._main_gone.set()
+            self._main_focus = (0, False, True)
+            if self._session_events is not None:
+                try:
+                    self._session_events.SessionSwitch -= self._main_session_switch
+                except Exception:
+                    pass
+                self._session_events = None
+            self._remove_main_native_events()
+            self._main_native = None
+            self._foreground_query = None
+            try:
+                self.main.events.before_show -= self._main_before_show
+            except (AttributeError, TypeError, ValueError):
+                pass
+
     def _main_closed(self):
-        self._main_gone.set()
+        self._detach_main_focus()
         # Review windows do not need OBS. Finish engine cleanup even while they
         # remain open; a non-daemon worker also survives the last window closing.
         with self._lock:

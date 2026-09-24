@@ -6,6 +6,21 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const {State,vocabularyWords,updateView,lastInstallView} = require('../ui/state.js');
+const {matchedWindowValue} = require('../ui/state.js');
+
+test('saved window may display its unique live match without changing a draft',()=>{
+  const old='Game:OldRandom:game.exe',live='Game:NewRandom:game.exe';
+  const items=[{itemValue:live,itemEnabled:true}];
+  const selection={requested:old,resolved:live,status:'matched'};
+  assert.equal(matchedWindowValue(old,items,selection),live);
+  assert.equal(matchedWindowValue('Manually selected:Class:other.exe',items,selection),'Manually selected:Class:other.exe');
+  assert.equal(matchedWindowValue(old,[],selection),old);
+  assert.equal(matchedWindowValue(old,[...items,...items],selection),old);
+  assert.equal(matchedWindowValue(old,[{itemValue:live,itemEnabled:false}],selection),old);
+  assert.equal(matchedWindowValue(old,items,{...selection,status:'ambiguous'}),old);
+  const state=new State();state.accept({active_preset_id:'a',config:{window:old},readiness:{window_selection:selection}});
+  state.openDraft('edit');assert.equal(state.draft.window,old);
+});
 
 function snapshot(overrides={}) {
   return {
