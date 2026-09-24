@@ -29,10 +29,10 @@ async function main(){
    const scale=before.w.height/(8.2-1);assert.ok(Math.abs(before.q.height-(4.95-4.5)*scale)<1);
    await seek(5.4);const after=await measure();assert.equal(after.w.x,before.w.x);await seek(4.8);
  });
- await check('content wheel scrubs while paused; ruler wheel scales about pointer time',async()=>{const box=await page.locator('#inputTimeline').boundingBox();await page.mouse.move(box.x+box.width-20,box.y+180);await page.mouse.wheel(0,64);await page.waitForTimeout(100);const after=await playback();assert.equal(after.paused,true);assert.ok(after.time>5.7&&after.time<5.9);const text=await page.locator('#timelineScale').textContent();await page.mouse.move(box.x+15,box.y+180);await page.mouse.wheel(0,-120);await page.waitForTimeout(100);assert.notEqual(await page.locator('#timelineScale').textContent(),text);assert.equal((await playback()).time,after.time);});
+ await check('content wheel browses without seeking; ruler wheel scales about pointer time',async()=>{const before=await playback(),offset=await page.locator('#timelineInputs').evaluate(el=>el.style.transform);const box=await page.locator('#inputTimeline').boundingBox();await page.mouse.move(box.x+box.width-20,box.y+180);await page.mouse.wheel(0,64);await page.waitForTimeout(100);const after=await playback();assert.equal(after.paused,true);assert.equal(after.time,before.time);assert.equal(after.rate,before.rate);assert.notEqual(await page.locator('#timelineInputs').evaluate(el=>el.style.transform),offset);const text=await page.locator('#timelineScale').textContent();await page.mouse.move(box.x+15,box.y+180);await page.mouse.wheel(0,-120);await page.waitForTimeout(100);assert.notEqual(await page.locator('#timelineScale').textContent(),text);assert.equal((await playback()).time,after.time);});
  await check('completed transcript retains playing position, speed and selected tab',async()=>{await seek(4.8);await page.locator('video').evaluate(async v=>{v.playbackRate=1.5;await v.play();});await page.evaluate(segments=>{window.__snapshot.segments=segments;window.__snapshot.transcription={state:'ready'};},fixture.segments);await page.waitForFunction(()=>!document.querySelector('#transcriptTab').disabled);const after=await playback();assert.equal(after.paused,false);assert.equal(after.rate,1.5);assert.ok(after.time>4.8);assert.equal(await page.locator('#inputTab').getAttribute('aria-selected'),'true');await page.locator('video').evaluate(v=>v.pause());});
  await seek(4.8);await page.locator('#follow').click();
- await check('speech hover and pin never seek; tooltip has only time text close; outside and Escape dismiss',async()=>{const quote=page.locator('[data-quote="0"]');await quote.hover();assert.equal(await page.locator('#quotePopover').isVisible(),true);const before=await playback();await quote.click();assert.equal((await playback()).time,before.time);assert.equal(await page.locator('#quotePopover button').count(),1);assert.ok(!(await page.locator('#quotePopover').textContent()).includes('已固定'));await page.locator('#title').click();assert.equal(await page.locator('#quotePopover').isHidden(),true);await quote.click();await page.keyboard.press('Escape');assert.equal(await page.locator('#quotePopover').isHidden(),true);});
+ await check('speech hover and pin never seek; tooltip has only time text close; outside and Escape retain until explicit close',async()=>{const quote=page.locator('[data-quote="0"]');await quote.hover();assert.equal(await page.locator('#quotePopover').isVisible(),true);const before=await playback();await quote.click();assert.equal((await playback()).time,before.time);assert.equal(await page.locator('#quotePopover button').count(),1);assert.ok(!(await page.locator('#quotePopover').textContent()).includes('已固定'));await page.locator('#title').click();assert.equal(await page.locator('#quotePopover').isVisible(),true);await page.keyboard.press('Escape');assert.equal(await page.locator('#quotePopover').isVisible(),true);await page.locator('#quoteClose').click();assert.equal(await page.locator('#quotePopover').isHidden(),true);});
  await check('Xbox and DualSense auto device switching and foreground gap',async()=>{await page.locator('[data-input-mode=device]').click();await seek(17);assert.equal(await page.locator('#inputSource').textContent(),'Xbox');assert.equal(await page.locator('#deviceView .xbox').count(),1);await seek(25.3);assert.equal(await page.locator('#inputSource').textContent(),'DualSense');assert.equal(await page.locator('#deviceView .dualsense').count(),1);await seek(10.5);assert.equal(await page.locator('#inputState').getAttribute('class'),'input-state is-gap');});
  await check('hot-switch overlap retains both devices and a controller gap does not erase keyboard evidence',async()=>{
    await page.locator('[data-input-mode=keys]').click();await seek(17);
@@ -87,7 +87,7 @@ async function main(){
  const visualRows=()=>page.evaluate(()=>[...document.querySelectorAll('#timelineInputs .key-bar')].map(el=>({id:el.dataset.inputId,start:+el.dataset.start,end:+el.dataset.end,lane:+el.dataset.lane,channel:el.dataset.channel,rect:el.getBoundingClientRect().toJSON(),font:getComputedStyle(el.firstElementChild).fontSize,text:el.firstElementChild.textContent,duration:el.querySelector('.bar-duration').getBoundingClientRect().height})));
  const assertCollisions=rows=>{for(let i=0;i<rows.length;i++)for(let j=i+1;j<rows.length;j++){const a=rows[i].rect,b=rows[j].rect;if(rows[i].channel===rows[j].channel)assert.ok(Math.min(a.right,b.right)-Math.max(a.left,b.left)<.1||Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)<.1,`${rows[i].id} overlaps ${rows[j].id}`);}};
  await check('continuous analog samples form activity bands while current input stays raw',async()=>{
-   await page.setViewportSize({width:1280,height:800});await page.locator('#themeButton').click();
+   if(await page.locator('#quotePopover').isVisible())await page.locator('#quoteClose').click();await page.setViewportSize({width:1280,height:800});await page.locator('#themeButton').click();
    await page.evaluate(inputs=>{window.__snapshot.inputs=inputs;window.__snapshot.revision='dense-v1';},denseInputs);
    await page.waitForFunction(()=>document.querySelector('[data-input-id="dense-axis-0"]'));await seek(2.73);
    assert.equal(await page.locator('[data-input-id^="dense-axis-"]').count(),1);assert.equal(await page.locator('[data-input-id^="dense-mouse-"]').count(),1);
@@ -127,10 +127,10 @@ async function main(){
    await page.mouse.move(box.x+box.width-20,timeline.y+100);await page.mouse.wheel(-80,0);await page.waitForTimeout(80);assert.equal((await playback()).time,before.time);
    const scale=await page.locator('#timelineScale').textContent();await page.mouse.move(box.x+15,timeline.y+100);await page.mouse.wheel(0,240);await page.waitForTimeout(80);assert.notEqual(await page.locator('#timelineScale').textContent(),scale);assert.equal((await playback()).time,before.time);
  });
- const timelineMap=()=>page.evaluate(()=>{const t=document.querySelector('#inputTimeline').getBoundingClientRect(),h=document.querySelector('.timeline-horizontal-scroll').getBoundingClientRect(),w=document.querySelector('[data-input-id="dense-w"]').getBoundingClientRect();const scale=w.height/6.5;return {top:t.top,bottom:t.bottom,height:t.height,left:h.left,right:h.right,scale,viewStart:.5-(w.top-t.top)/scale};});
+ const timelineMap=()=>page.evaluate(()=>{const t=document.querySelector('#inputTimeline').getBoundingClientRect(),h=document.querySelector('.timeline-horizontal-scroll').getBoundingClientRect(),ticks=[...document.querySelectorAll('.timeline-ruler .time-tick')].slice(0,2),seconds=el=>el.textContent.split(':').reduce((sum,n)=>sum*60+Number(n),0),scale=(ticks[1].getBoundingClientRect().top-ticks[0].getBoundingClientRect().top)/(seconds(ticks[1])-seconds(ticks[0]));return {top:t.top,bottom:t.bottom,height:t.height,left:h.left,right:h.right,scale,viewStart:seconds(ticks[0])-(ticks[0].getBoundingClientRect().top-t.top)/scale};});
  const at=(map,time)=>map.top+(time-map.viewStart)*map.scale;
  const pointed=(map,y)=>Math.max(0,Math.min(32,map.viewStart+(y-map.top)/map.scale));
- const resetTimeline=async()=>{await page.setViewportSize({width:1280,height:800});await page.locator('video').evaluate(v=>v.pause());await page.locator('.timeline-horizontal-scroll').evaluate(el=>{el.scrollLeft=0;});for(let i=0;i<4;i++){const m=await timelineMap(),delta=Math.log(m.scale/64)/.0025;if(Math.abs(delta)<.1)break;await page.mouse.move(m.left+15,m.top+100);await page.mouse.wheel(0,delta);await page.waitForTimeout(60);}if(await page.locator('#follow').getAttribute('aria-pressed')==='false')await page.locator('#follow').click();await seek(2.73);};
+ const resetTimeline=async()=>{if(await page.locator('#quotePopover').isVisible())await page.locator('#quoteClose').click();await page.setViewportSize({width:1280,height:800});await page.locator('video').evaluate(v=>v.pause());await page.locator('.timeline-horizontal-scroll').evaluate(el=>{el.scrollLeft=0;});for(let i=0;i<4;i++){const m=await timelineMap(),delta=Math.log(m.scale/64)/.0025;if(Math.abs(delta)<.1)break;await page.mouse.move(m.left+15,m.top+100);await page.mouse.wheel(0,delta);await page.waitForTimeout(60);}if(await page.locator('#follow').getAttribute('aria-pressed')==='false')await page.locator('#follow').click();await seek(2.73);};
  await check('ruler and blank clicks seek by visible time while retaining paused state and rate',async()=>{
    await resetTimeline();let m=await timelineMap();const before=await playback();await page.mouse.click(m.left+15,m.top+120);let after=await playback();assert.ok(Math.abs(after.time-pointed(m,m.top+120))<.03);assert.equal(after.paused,true);assert.equal(after.rate,before.rate);assert.equal(await page.locator('#follow').getAttribute('aria-pressed'),'false');
    m=await timelineMap();const x=m.right-12,y=m.bottom-35;assert.equal(await page.evaluate(({x,y})=>!!document.elementFromPoint(x,y)?.closest('.key-bar,.quote-bar'),{x,y}),false);await page.mouse.click(x,y);after=await playback();assert.ok(Math.abs(after.time-pointed(m,y))<.03);assert.equal(after.rate,before.rate);
@@ -144,13 +144,13 @@ async function main(){
    await page.mouse.up();current=await playback();assert.ok(Math.abs(current.time-3.35)<.03);assert.equal(await page.locator('#inputTimeline').evaluate(el=>el.classList.contains('is-scrubbing')),false);assert.equal(await page.locator('#quotePopover').isHidden(),true);
    const head=await page.locator('#timelinePlayhead').boundingBox();assert.ok(Math.abs(head.y-target)<1);await settleVideo();await page.screenshot({path:path.join(out,'timeline-drag-header-copy-1280.png')});
  });
- await check('quote dragging seeks without pinning while quote clicks pin and outside key body header clicks dismiss',async()=>{
+ await check('quote dragging seeks without pinning while quote clicks pin and outside key body header clicks retain the pinned quote',async()=>{
    await resetTimeline();let m=await timelineMap(),quote=await page.locator('[data-quote="0"]').boundingBox(),x=quote.x+quote.width/2,y=at(m,4.5),target=at(m,5.2);
    await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(x,target,{steps:8});await page.mouse.up();assert.ok(Math.abs((await playback()).time-5.2)<.03);assert.equal(await page.locator('#quotePopover').isHidden(),true);
    const pin=async()=>{const bounds=await page.locator('[data-quote="0"]').boundingBox(),map=await timelineMap(),before=await playback();await page.mouse.click(bounds.x+bounds.width/2,at(map,4.5));assert.equal((await playback()).time,before.time);assert.equal(await page.locator('#quotePopover').isVisible(),true);};
-   await pin();let key=await page.locator('[data-input-id="dense-w"]').boundingBox();const keyPoint={x:key.x+key.width/2,y:at(await timelineMap(),2)};assert.equal(await page.evaluate(({x,y})=>document.elementFromPoint(x,y)?.closest('.key-bar')?.dataset.inputId,keyPoint),'dense-w');await page.mouse.click(keyPoint.x,keyPoint.y);assert.equal(await page.locator('#quotePopover').isHidden(),true);assert.equal((await playback()).time,.5);
-   await pin();m=await timelineMap();await page.mouse.click(m.right-12,m.bottom-25);assert.equal(await page.locator('#quotePopover').isHidden(),true);
-   await pin();await page.locator('#title').click();assert.equal(await page.locator('#quotePopover').isHidden(),true);
+   await pin();let key=await page.locator('[data-input-id="dense-w"]').boundingBox();const keyPoint={x:key.x+key.width/2,y:at(await timelineMap(),2)};assert.equal(await page.evaluate(({x,y})=>document.elementFromPoint(x,y)?.closest('.key-bar')?.dataset.inputId,keyPoint),'dense-w');await page.mouse.click(keyPoint.x,keyPoint.y);assert.equal(await page.locator('#quotePopover').isVisible(),true);assert.equal((await playback()).time,.5);
+   await pin();m=await timelineMap();await page.mouse.click(m.right-12,m.bottom-25);assert.equal(await page.locator('#quotePopover').isVisible(),true);
+   await pin();await page.locator('#title').click();assert.equal(await page.locator('#quotePopover').isVisible(),true);
  });
  await check('dragging while playing preserves playback and speed and leaves browsing position fixed',async()=>{
    await resetTimeline();await page.locator('.plyr__controls [data-plyr=play]').click();await page.waitForFunction(()=>!document.querySelector('video').paused);const m=await timelineMap(),before=await playback(),x=m.left+15,y=at(m,2.5),target=at(m,3.8);
@@ -220,6 +220,47 @@ async function main(){
    assert.equal(await page.locator('#alignmentPanel').isHidden(),true);await page.waitForTimeout(2100);assert.equal(await page.locator('[data-input-id="recent-a"]').getAttribute('data-start'),'2.8');
    await page.locator('#fileActionsToggle').click();await page.locator('#alignInputs').click();await page.locator('#resetAlignment').click();await page.locator('#alignmentForm [type=submit]').click();
    assert.equal(await page.locator('[data-input-id="recent-a"]').getAttribute('data-start'),'1');assert.equal((await playback()).time,before.time);
+ });
+ await check('wheel browsing shows directional return controls without seeking, paused or playing',async()=>{
+   await resetTimeline();await seek(2);
+   const wheel=async delta=>{const m=await timelineMap();await page.mouse.move(m.right-18,m.top+80);await page.mouse.wheel(0,delta);await page.waitForTimeout(120);};
+   const before=await playback();await wheel(900);
+   assert.equal((await playback()).time,before.time);assert.equal((await playback()).paused,true);assert.equal((await playback()).rate,before.rate);
+   assert.equal(await page.locator('#follow').getAttribute('aria-pressed'),'false');
+   assert.equal(await page.locator('#returnToPlayhead').getAttribute('data-direction'),'above');assert.equal(await page.locator('#returnToPlayhead').isVisible(),true);
+   assert.equal(await page.locator('#timelinePlayhead').isHidden(),true);
+   await page.screenshot({path:path.join(out,'return-to-playhead-above.png')});
+   await page.locator('.timeline-horizontal-scroll').evaluate(el=>el.scrollLeft=el.scrollWidth);
+   const arrow=await page.locator('#returnToPlayhead').boundingBox();assert.ok(arrow.x>=0&&arrow.x+arrow.width<=1280);
+   await page.locator('#returnToPlayhead').click();assert.equal((await playback()).time,before.time);assert.equal((await playback()).paused,true);assert.equal((await playback()).rate,before.rate);
+   assert.equal(await page.locator('#follow').getAttribute('aria-pressed'),'true');assert.equal(await page.locator('#returnToPlayhead').isHidden(),true);assert.equal(await page.locator('#timelinePlayhead').isVisible(),true);
+   await seek(25);await wheel(-100000);
+   assert.ok(Math.abs((await timelineMap()).viewStart)<.01);assert.equal((await playback()).time,25);
+   assert.equal(await page.locator('#returnToPlayhead').getAttribute('data-direction'),'below');
+   await page.screenshot({path:path.join(out,'return-to-playhead-below.png')});
+   await page.locator('#returnToPlayhead').click();assert.equal((await playback()).time,25);
+   await wheel(100000);const map=await timelineMap();assert.ok(Math.abs(map.viewStart-Math.max(0,32-(map.bottom-map.top)/map.scale))<.06);
+   await resetTimeline();await page.locator('video').evaluate(async v=>{window.__wheelSeekCount=0;v.addEventListener('seeking',()=>window.__wheelSeekCount++);await v.play();});await wheel(900);
+   assert.equal((await playback()).paused,false);assert.equal(await page.evaluate(()=>window.__wheelSeekCount),0);
+   await page.locator('#returnToPlayhead').click();assert.equal((await playback()).paused,false);assert.equal(await page.evaluate(()=>window.__wheelSeekCount),0);
+   await page.locator('video').evaluate(v=>v.pause());
+ });
+ await check('holds use solid warm styling at the strict threshold; repeated D-pad taps remain dashed',async()=>{
+   const item=(id,start,end,code='E')=>({id,device:code.startsWith('DPad')?'xbox':'keyboard',kind:'button',code,label:code,start,end});
+   const inputs={version:1,state:'complete',duration:32,gaps:[],intervals:[item('threshold',1,1.5),item('held',2,4),item('tap',2.1,2.2),item('dpad-tap',1,1.1,'DPadUp'),item('dpad-hold',1.3,2.5,'DPadRight'),item('dpad-next',2.7,2.8,'DPadDown')]};
+   await page.evaluate(inputs=>{window.__snapshot.inputs=inputs;window.__snapshot.revision='hold-styles';},inputs);
+   await resetTimeline();await seek(2.2);await page.waitForFunction(()=>document.querySelector('[data-input-id="held"]'));
+   assert.equal(await page.locator('[data-input-id="held"]').evaluate(el=>el.classList.contains('long-press')),true);
+   assert.equal(await page.locator('[data-input-id="threshold"]').evaluate(el=>el.classList.contains('long-press')),false);
+   assert.equal(await page.locator('[data-input-id="dpad-tap"]').evaluate(el=>el.classList.contains('long-press')),false);
+   assert.equal(await page.locator('[data-input-id="dpad-tap"] .held-section').count(),1);
+   assert.equal(await page.locator('[data-held-id="dpad-hold"]').count(),1);
+   for(const theme of ['light','dark']){
+     if(await page.locator('html').getAttribute('data-theme')!==theme)await page.locator('#themeButton').click();
+     await page.waitForTimeout(160);const colors=await page.evaluate(()=>{const css=id=>getComputedStyle(document.querySelector(`[data-input-id="${id}"]`));return {held:css('held').backgroundColor,tap:css('tap').backgroundColor,rail:css('held').boxShadow,burst:css('dpad-tap').borderStyle};});
+     assert.notEqual(colors.held,colors.tap);assert.notEqual(colors.rail,'none');assert.equal(colors.burst,'dashed');
+     await page.screenshot({path:path.join(out,`holds-${theme}.png`)});
+   }
  });
  await check('no browser exceptions',async()=>assert.deepEqual(errors,[]));
  await browser.close();server.close();const report={scope:'Synthetic production browser acceptance; no actual OBS/device/native capture validation.',checks,errors,passed:checks.every(c=>c.pass)};fs.writeFileSync(path.join(out,'acceptance.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));if(!report.passed)process.exitCode=1;

@@ -90,6 +90,9 @@
       widths[channel][lane]=Math.max(widths[channel][lane]||0,width);
       return {...item,channel,lane,displayEnd};
     });
+    // One shared grid for ordinary keys: a longer name must not widen only its lane.
+    const keyWidth=widths.other.reduce((largest,width)=>Math.max(largest,width),36);
+    widths.other=widths.other.map(()=>keyWidth);
     return {items,counts,widths};
   }
   function intervalIndex(items,endKey='end'){
@@ -125,7 +128,14 @@
   function anchoredZoom({scale,delta,viewStart,pointerY,duration,height}){const next=Math.max(12,Math.min(240,scale*Math.exp(-Math.max(-240,Math.min(240,delta))*.0025)));const anchor=viewStart+pointerY/scale;return {scale:next,viewStart:Math.max(0,Math.min(Math.max(0,duration-height/next),anchor-pointerY/next))};}
   function timelinePointerTime({viewStart,scale,top,duration},clientY){return Math.max(0,Math.min(duration,viewStart+(clientY-top)/scale));}
   function timelineGesture(dx,dy,threshold=4){return Math.max(Math.abs(dx),Math.abs(dy))<=threshold?'pending':Math.abs(dy)>Math.abs(dx)?'vertical':'horizontal';}
-  if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds,sourceFit,inputChannel,axisDirection,normalizeInputs,inputLabel,inputVisualBands,inputSampleAt,packInputIntervals,intervalIndex,intervalsInRange,meaningfulDevice,recentInputs,anchoredZoom,timelinePointerTime,timelineGesture};return;}
+  function isLongPress(item){
+    // Display padding and grouped navigation are not evidence of a held key.
+    return ['button','trigger'].includes(item.kind)&&!item.activity&&item.end-item.start>.5+1e-9;
+  }
+  function playheadDirection(time,viewStart,span){return time<viewStart-1e-6?-1:time>viewStart+span+1e-6?1:0;}
+  function visibleLabelTop(start,end,viewStart,scale,height=28){return Math.max(0,Math.min((viewStart-start)*scale,Math.max(0,(end-start)*scale-height)));}
+  function inputHighlight(item,time){if(!item||time<item.start)return 0;return time<item.end?1:Math.max(0,1-(time-item.end)/2)*.7;}
+  if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds,sourceFit,inputChannel,axisDirection,normalizeInputs,inputLabel,inputVisualBands,inputSampleAt,packInputIntervals,intervalIndex,intervalsInRange,meaningfulDevice,recentInputs,anchoredZoom,timelinePointerTime,timelineGesture,isLongPress,playheadDirection,visibleLabelTop,inputHighlight};return;}
   const data=JSON.parse(document.getElementById('review-data').textContent);
   const $=id=>document.getElementById(id),video=$('video'),lines=$('lines');
   let segments=Array.isArray(data.segments)?data.segments:[],nodes=[],inputUI=null;
@@ -425,6 +435,10 @@
     const dpadHeading=document.createElement('span');dpadHeading.textContent='十字键';headings.lastElementChild.before(dpadHeading);
     horizontal.className='timeline-horizontal-scroll';horizontal.setAttribute('aria-label','横向浏览操作轨道');grid.className='timeline-grid';
     headings.before(horizontal);horizontal.append(grid);grid.append(headings,timeline);
+    const returnToPlayhead=document.createElement('button');returnToPlayhead.type='button';returnToPlayhead.id='returnToPlayhead';returnToPlayhead.className='timeline-return';returnToPlayhead.hidden=true;
+    returnToPlayhead.innerHTML='<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg><span>播放位置</span>';
+    returnToPlayhead.title='回到当前播放位置并恢复跟随';$('inputTimelinePanel').append(returnToPlayhead);
+    returnToPlayhead.onclick=()=>{hideInputDetail();setFollow(true);};
     const inputDetail=document.createElement('div');inputDetail.id='inputDetail';inputDetail.className='input-detail';inputDetail.setAttribute('role','tooltip');inputDetail.hidden=true;document.body.append(inputDetail);
     const initialTab=(!data.inputs||['disabled','missing','unavailable'].includes(data.inputs.state))&&(data.transcription?.state||'ready')==='ready'?'transcript':'inputs';
     const state={mode:'keys',device:'auto',tab:initialTab,scale:64,viewStart:0,follow:true,signature:'',quote:null,pinned:false,lastInput:'',renderKey:'',lastClock:-1,stopped:false};
@@ -458,16 +472,23 @@
     return `<svg class="controller ${ps?'dualsense':'xbox'}" viewBox="0 0 460 211" role="img" aria-label="${deviceName(device)} 设备图"><path class="controller-shell" d="M120 44C101 44 84 53 79 76L60 163c-5 24 14 36 30 23l44-41h192l44 41c16 13 35 1 30-23l-19-87c-5-23-22-32-41-32Z"/>${control(ps?'L2':'LT','rect',ps?'L2':'LT',137,13)}${control(ps?'R2':'RT','rect',ps?'R2':'RT',323,13)}<rect class="trigger-meter" data-meter="${ps?'L2':'LT'}" x="113" y="20" width="0" height="3" rx="1"/><rect class="trigger-meter" data-meter="${ps?'R2':'RT'}" x="299" y="20" width="0" height="3" rx="1"/>${control(ps?'L1':'LB','rect',ps?'L1':'LB',137,39)}${control(ps?'R1':'RB','rect',ps?'R1':'RB',323,39)}${ps?'<rect class="controller-detail" x="178" y="59" width="104" height="41" rx="7"/>':'<circle class="controller-detail" cx="230" cy="73" r="12"/><text class="minor-label" x="230" y="73">X</text>'}${stick('LeftStick',ps?181:128,ps?130:88)}${stick('RightStick',279,130)}${dpad(ps?126:183,ps?94:132)}${symbols.map(([code,label,x,y])=>control(code,'circle',label,x,y)).join('')}<text class="controller-name" x="230" y="192">${ps?'DualSense':'Xbox'}</text></svg>`;
   }
   let renderedDevice = '';
-  function renderDevice(device,active) {
+  function renderDevice(device,active,time) {
     if (renderedDevice !== device) { $('deviceView').innerHTML = device === 'keyboard' ? keyboardMarkup() : controllerMarkup(device); renderedDevice = device; }
     const visible = active.filter(item => group(item.device) === device);
     const aliases={ShiftLeft:'Shift',ControlLeft:'Control',AltLeft:'Alt',WinLeft:'Meta',BracketLeft:'[',BracketRight:']',Semicolon:';',Comma:',',Period:'.',DPadUp:'DpadUp',DPadDown:'DpadDown',DPadLeft:'DpadLeft',DPadRight:'DpadRight',LS:'LeftStick',L3:'LeftStick',RS:'RightStick',R3:'RightStick'};
     const diagramCode=item=>aliases[item.code]||(item.device==='keyboard'?item.code.replace(/^Key/, ''):item.code);
     const byCode = new Map(visible.map(item => [diagramCode(item),item]));
-    $('deviceView').querySelectorAll('[data-control]').forEach(el => { const item=byCode.get(el.dataset.control); el.classList.toggle('active',!!item?.active);el.classList.toggle('recent',!!item&&!item.active); if(item?.kind==='motion') el.textContent=item.direction||'↗'; });
-    $('deviceView').querySelectorAll('[data-meter]').forEach(el => el.setAttribute('width',String(48*(byCode.get(el.dataset.meter)?.value||0))));
-    $('deviceView').querySelectorAll('[data-arrow]').forEach(el => { const item=byCode.get(el.dataset.arrow); el.classList.toggle('active',item?.kind==='axis'&&item.active);el.classList.toggle('recent',item?.kind==='axis'&&!item.active); const angle = {'↑':0,'↗':45,'→':90,'↘':135,'↓':180,'↙':225,'←':270,'↖':315}[item?.direction]||0; const circle=$('deviceView').querySelector(`[data-control="${el.dataset.arrow}"]`); el.setAttribute('transform',`rotate(${angle} ${circle.getAttribute('cx')} ${circle.getAttribute('cy')})`); });
-    const controls=new Set([...$('deviceView').querySelectorAll('[data-control]')].map(el=>el.dataset.control));let extras=$('deviceView').querySelector('.device-extra');if(!extras){extras=document.createElement('div');extras.className='device-extra';$('deviceView').append(extras);}extras.innerHTML=visible.filter(item=>!controls.has(diagramCode(item))).map(item=>`<span class="keycap ${item.active?'active':'recent'}" title="${escape(item.label||item.code)}">${glyph(item)}</span>`).join('');extras.hidden=!extras.childElementCount;
+    const highlight=(el,item)=>{
+      const strength=inputHighlight(item,time);el.classList.toggle('active',!!item?.active);el.classList.toggle('recent',!!item&&!item.active);
+      el.style.setProperty('--input-strength',strength.toFixed(3));el.style.setProperty('--input-intensity',(strength*100).toFixed(1)+'%');
+    };
+    $('deviceView').querySelectorAll('[data-control]').forEach(el => { const item=byCode.get(el.dataset.control);highlight(el,item);if(item?.kind==='motion')el.textContent=item.direction||'↗'; });
+    $('deviceView').querySelectorAll('[data-meter]').forEach(el => {const item=byCode.get(el.dataset.meter);highlight(el,item);el.setAttribute('width',String(48*(item?.value||0)));});
+    $('deviceView').querySelectorAll('[data-arrow]').forEach(el => { const item=byCode.get(el.dataset.arrow);highlight(el,item?.kind==='axis'?item:null);const angle = {'↑':0,'↗':45,'→':90,'↘':135,'↓':180,'↙':225,'←':270,'↖':315}[item?.direction]||0; const circle=$('deviceView').querySelector(`[data-control="${el.dataset.arrow}"]`); el.setAttribute('transform',`rotate(${angle} ${circle.getAttribute('cx')} ${circle.getAttribute('cy')})`); });
+    const controls=new Set([...$('deviceView').querySelectorAll('[data-control]')].map(el=>el.dataset.control));let extras=$('deviceView').querySelector('.device-extra');if(!extras){extras=document.createElement('div');extras.className='device-extra';$('deviceView').append(extras);}
+    const extraKeys=[...byCode].filter(([code])=>!controls.has(code)),signature=extraKeys.map(([code,item])=>code+'/'+item.id).join('|');
+    if(extras.dataset.signature!==signature){extras.dataset.signature=signature;extras.innerHTML=extraKeys.map(([code,item])=>`<span class="keycap" data-extra-code="${escape(code)}" title="${escape(item.label||item.code)}">${glyph(item)}</span>`).join('');}
+    extras.querySelectorAll('[data-extra-code]').forEach(el=>highlight(el,byCode.get(el.dataset.extraCode)));extras.hidden=!extras.childElementCount;
   }
 
     function renderInput(time){
@@ -477,13 +498,16 @@
       const active=recentInputs(index,time);
       const device=state.device==='auto'?meaningfulDevice(source.intervals,time):state.device;
       const message=active.length?'':gap?gapName(gap):inputMessage();
-      const key=[state.mode,device,message,...active.map(item=>item.id+':'+item.active)].join('|');if(key===state.lastInput)return;state.lastInput=key;
+      // Diagram color is media-time evidence, not a wall-clock CSS animation.
+      // Refresh it even when the set of recent keys has not changed.
+      const key=[state.mode,device,message,...active.map(item=>item.id+':'+item.active)].join('|');
+      if(state.mode==='device'&&(key!==state.lastInput||active.some(item=>!item.active)))renderDevice(device,active,time);
+      if(key===state.lastInput)return;state.lastInput=key;
       $('inputSource').textContent=source.intervals.length?deviceName(device):'操作记录';
-      $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):active.length?'按住时高亮 · 松开后保留 2 秒':'最近 2 秒无操作';
+      $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):active.length?(state.mode==='device'?'按住时高亮 · 松开后 2 秒内渐淡':'按住时高亮 · 松开后保留 2 秒'):'最近 2 秒无操作';
       $('inputState').classList.toggle('is-gap',!!gap);$('inputState').title=message;
       $('currentKeys').hidden=state.mode!=='keys'||!!message;$('deviceView').hidden=state.mode!=='device'||!!message;
       $('currentKeys').innerHTML=active.map(item=>`<div class="current-item" data-recent-id="${escape(item.id)}"><span class="keycap ${item.active?'active':'recent'}">${glyph(item)}</span><span>${escape(/^D[Pp]ad/.test(item.code)?'十字键':item.label||item.code)}${item.value!=null&&item.kind!=='button'?` · ${Math.round(item.value*100)}%`:''}</span></div>`).join('');
-      if(state.mode==='device')renderDevice(device,active);
     }
     document.querySelectorAll('[data-input-mode]').forEach(button=>button.onclick=()=>{state.mode=button.dataset.inputMode;document.querySelectorAll('[data-input-mode]').forEach(node=>node.setAttribute('aria-pressed',String(node===button)));$('inputBody').hidden=state.mode==='collapsed';$('deviceSelectLabel').hidden=state.mode!=='device';$('inputPanel').classList.toggle('is-collapsed',state.mode==='collapsed');state.lastInput='';renderInput(video.currentTime);});
     $('deviceSelect').onchange=event=>{state.device=event.target.value;state.lastInput='';renderInput(video.currentTime);};
@@ -504,7 +528,8 @@
       const time=pointerTime(event,item),sample=inputSampleAt(item,time),label=sample?.label||item.label||item.code;
       const value=sample?.value!=null?` · ${Math.round(sample.value*100)}%`:'';
       const detail=sample?`${sample.direction||inputLabel(sample)}${item.activity&&time>=sample.end?' · 上次输入（已松开）':''}${value}${sample.x!=null?` · X ${sample.x} / Y ${sample.y}`:''}`:item.end===item.start?'瞬时操作':'此刻已松开';
-      inputDetail.innerHTML=`<time>${preciseClock(item.start)} — ${preciseClock(item.end)}</time><strong>${escape(deviceName(group(sample?.device||item.device))+' · '+label)}</strong><span>${preciseClock(Math.max(item.start,time))} · ${escape(detail.trim()||'持续中')}</span>`;
+      const press=sample||item,hold=isLongPress(press)?` · 长按 ${(press.end-press.start).toFixed(2)} 秒`:'';
+      inputDetail.innerHTML=`<time>${preciseClock(item.start)} — ${preciseClock(item.end)}</time><strong>${escape(deviceName(group(sample?.device||item.device))+' · '+label+hold)}</strong><span>${preciseClock(Math.max(item.start,time))} · ${escape(detail.trim()||'持续中')}</span>`;
       inputDetail.hidden=false;const rect=event?.currentTarget?.getBoundingClientRect()||timeline.getBoundingClientRect();
       inputDetail.style.left=Math.max(12,Math.min(root.innerWidth-inputDetail.offsetWidth-12,(event?.clientX??rect.right)+14))+'px';
       inputDetail.style.top=Math.max(12,Math.min(root.innerHeight-inputDetail.offsetHeight-12,(event?.clientY??rect.top)+14))+'px';
@@ -520,6 +545,16 @@
         return `<span class="input-mark" style="top:${top}px" aria-hidden="true"></span>`;
       }).join('');
     }
+    function heldSections(item){
+      if(!item.activity||!item.samples)return '';
+      return intervalsInRange(item.sampleIndex,renderStart,state.viewStart+timeline.clientHeight/state.scale*1.5)
+        .filter(isLongPress).map(sample=>`<span class="held-section" data-held-id="${escape(sample.id)}" style="top:${(sample.start-item.start)*state.scale}px;height:${(sample.end-sample.start)*state.scale}px" aria-hidden="true"></span>`).join('');
+    }
+    function holdLabels(item){
+      // Non-fixed single holds already use the bar's ordinary sticky key label.
+      const holds=item.activity?intervalsInRange(item.sampleIndex,renderStart,state.viewStart+timeline.clientHeight/state.scale*1.5).filter(isLongPress):item.fixed&&isLongPress(item)?[item]:[];
+      return holds.map(sample=>`<span class="hold-label" data-held-start="${sample.start}" data-held-end="${sample.end}" data-held-code="${escape(inputLabel(sample))}" style="top:${(sample.start-item.start)*state.scale}px" aria-hidden="true">${glyph(sample)}</span>`).join('');
+    }
     function rebuild(){
       if(packedScale!==state.scale)repack();
       const g=geometry(),height=timeline.clientHeight,span=height/state.scale;hideInputDetail();
@@ -528,8 +563,8 @@
       const tickStep=state.scale<24?5:state.scale<46?2:1,ticks=[];
       for(let t=Math.ceil(renderStart/tickStep)*tickStep;t<=end;t+=tickStep)ticks.push(`<div class="time-tick" style="top:${(t-renderStart)*state.scale}px"><time>${formatTime(t)}</time></div>`);
       $('timelineTicks').innerHTML=ticks.join('').replace(/<time>.*?<\/time>/g,'');ruler.innerHTML=ticks.join('');
-      $('timelineInputs').innerHTML=visible.map(item=>{const c=column(item,g);return `<button class="key-bar${item.activity?' activity-band':''}${item.fixed?' fixed-band':''}${item.end===item.start?' instant':''}" data-input-id="${escape(item.id)}" data-start="${item.start}" data-end="${item.end}" data-lane="${item.lane}" data-channel="${item.channel}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.displayEnd-item.start)*state.scale}px;left:${c.left}px;width:${c.width}px" aria-label="${escape(`${deviceName(group(item.device))} ${item.label||item.code}，${clock(item.start)} 至 ${clock(item.end)}，点击定位`)}" aria-describedby="inputDetail"><span class="bar-glyph">${glyph(item)}</span><span class="bar-duration" style="height:${Math.max(1,(item.end-item.start)*state.scale)}px" aria-hidden="true"></span>${inputMarks(item)}</button>`;}).join('');
-      $('timelineSpeech').innerHTML=quotes.map(item=>`<button class="quote-bar" data-quote="${item.index}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.end-item.start)*state.scale}px;left:${g.time+7}px;width:${g.speech-14}px" aria-label="原话 ${item.index+1}，${clock(item.start)}，点击固定全文">${quoteIcon}<span>${String(item.index+1).padStart(2,'0')}</span></button>`).join('');
+      $('timelineInputs').innerHTML=visible.map(item=>{const c=column(item,g);return `<button class="key-bar${isLongPress(item)?' long-press':''}${item.activity?' activity-band':''}${item.fixed?' fixed-band':''}${item.end===item.start?' instant':''}" data-input-id="${escape(item.id)}" data-start="${item.start}" data-end="${item.end}" data-lane="${item.lane}" data-channel="${item.channel}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.displayEnd-item.start)*state.scale}px;left:${c.left}px;width:${c.width}px" aria-label="${escape(`${deviceName(group(item.device))} ${item.label||item.code}，${isLongPress(item)?'长按，':''}${clock(item.start)} 至 ${clock(item.end)}，点击定位`)}" aria-describedby="inputDetail"><span class="bar-glyph">${glyph(item)}</span><span class="bar-duration" style="height:${Math.max(1,(item.end-item.start)*state.scale)}px" aria-hidden="true"></span>${heldSections(item)}${inputMarks(item)}${holdLabels(item)}</button>`;}).join('');
+      $('timelineSpeech').innerHTML=quotes.map(item=>`<button class="quote-bar${state.pinned&&state.quote===item.index?' pinned':''}" data-quote="${item.index}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.end-item.start)*state.scale}px;left:${g.time+7}px;width:${g.speech-14}px" aria-label="原话 ${item.index+1}，${clock(item.start)}，点击固定全文">${quoteIcon}<span>${String(item.index+1).padStart(2,'0')}</span></button>`).join('');
       $('timelineGaps').innerHTML=gaps.map(gap=>`<div class="timeline-gap" style="top:${(gap.start-renderStart)*state.scale}px;height:${(gap.end-gap.start)*state.scale}px;left:${g.time+g.speech}px" title="${escape(gap.reason||gapName(gap))}"><span>${escape(gapName(gap))}</span></div>`).join('');
       $('timelineInputs').querySelectorAll('button').forEach(button=>{const item=displayed.get(button.dataset.inputId);
         button.onclick=event=>{if(event.detail&&event.clientX<horizontal.getBoundingClientRect().left+g.time)return;hideInputDetail();seekKeep(item.samples&&event.detail?Math.max(item.start,Math.min(item.end,pointerTime(event,item))):item.start);};
@@ -543,35 +578,100 @@
         button.onclick=event=>{event.stopPropagation();showQuote(Number(button.dataset.quote),button,true);};
       });
     }
-    function showQuote(i,anchor,pinned){const segment=segments[i];if(!segment)return;state.quote=i;state.pinned=pinned;$('quoteTime').textContent=clock(segment.start)+' — '+clock(segment.end);$('quoteText').textContent=segment.text;const popover=$('quotePopover');popover.hidden=false;const rect=anchor.getBoundingClientRect();popover.style.left=Math.max(12,Math.min(root.innerWidth-popover.offsetWidth-12,rect.right+12))+'px';popover.style.top=Math.max(12,Math.min(root.innerHeight-popover.offsetHeight-12,rect.top))+'px';$('timelineSpeech').querySelectorAll('button').forEach(button=>button.classList.toggle('pinned',pinned&&Number(button.dataset.quote)===i));}
-    function closeQuote(){state.quote=null;state.pinned=false;$('quotePopover').hidden=true;$('timelineSpeech').querySelectorAll('.pinned').forEach(button=>button.classList.remove('pinned'));}
-    $('quoteClose').onclick=closeQuote;$('quotePopover').onmouseleave=event=>{if(!state.pinned&&!event.relatedTarget?.closest?.('.quote-bar'))closeQuote();};
-    document.addEventListener('click',event=>{if(!$('quotePopover').contains(event.target)&&!event.target.closest('.quote-bar'))closeQuote();});document.addEventListener('keydown',event=>{if(event.key==='Escape')closeQuote();});
+    const popover=$('quotePopover'),quoteHeading=popover.querySelector('.quote-popover-heading');
+    let quoteDrag=null,quoteMoved=false,pinnedQuote=null;
+    function placeQuote(left,top){
+      popover.style.left=Math.max(12,Math.min(root.innerWidth-popover.offsetWidth-12,left))+'px';
+      popover.style.top=Math.max(12,Math.min(root.innerHeight-popover.offsetHeight-12,top))+'px';
+    }
+    function clampQuote(){if(!popover.hidden){const rect=popover.getBoundingClientRect();placeQuote(rect.left,rect.top);}}
+    function showQuote(i,anchor,pinned){
+      const segment=segments[i];if(!segment)return;
+      const keepPosition=state.pinned&&quoteMoved;
+      state.quote=i;state.pinned=pinned;pinnedQuote=pinned?{...segment}:null;
+      $('quoteTime').textContent=clock(segment.start)+' — '+clock(segment.end);$('quoteText').textContent=segment.text;
+      popover.hidden=false;popover.classList.toggle('is-pinned',pinned);
+      quoteHeading.title=pinned?'拖动移动原话；方向键微调位置':'';
+      $('quoteTime').tabIndex=pinned?0:-1;
+      if(keepPosition)clampQuote();else{const rect=anchor.getBoundingClientRect();placeQuote(rect.left-popover.offsetWidth-12,rect.top);}
+      $('timelineSpeech').querySelectorAll('button').forEach(button=>button.classList.toggle('pinned',pinned&&Number(button.dataset.quote)===i));
+    }
+    function endQuoteDrag(event){
+      if(!quoteDrag||(event?.pointerId!=null&&event.pointerId!==quoteDrag.id))return;
+      const id=quoteDrag.id;quoteDrag=null;popover.classList.remove('is-dragging');
+      if(quoteHeading.hasPointerCapture(id))quoteHeading.releasePointerCapture(id);
+    }
+    function closeQuote(force=false){
+      if(state.pinned&&force!==true)return;
+      endQuoteDrag();state.quote=null;state.pinned=false;pinnedQuote=null;quoteMoved=false;popover.hidden=true;
+      $('timelineSpeech').querySelectorAll('.pinned').forEach(button=>button.classList.remove('pinned'));
+    }
+    quoteHeading.addEventListener('pointerdown',event=>{
+      if(!state.pinned||event.button!==0||event.isPrimary===false||event.target.closest('button'))return;
+      const rect=popover.getBoundingClientRect();quoteDrag={id:event.pointerId,x:event.clientX,y:event.clientY,left:rect.left,top:rect.top};
+      quoteHeading.setPointerCapture(event.pointerId);popover.classList.add('is-dragging');event.preventDefault();
+    });
+    quoteHeading.addEventListener('pointermove',event=>{
+      if(!quoteDrag||event.pointerId!==quoteDrag.id)return;
+      if(!(event.buttons&1)){endQuoteDrag(event);return;}
+      quoteMoved=true;placeQuote(quoteDrag.left+event.clientX-quoteDrag.x,quoteDrag.top+event.clientY-quoteDrag.y);event.preventDefault();
+    });
+    quoteHeading.addEventListener('pointerup',endQuoteDrag);quoteHeading.addEventListener('pointercancel',endQuoteDrag);quoteHeading.addEventListener('lostpointercapture',endQuoteDrag);
+    $('quoteTime').addEventListener('keydown',event=>{
+      if(!state.pinned||!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key))return;
+      const rect=popover.getBoundingClientRect(),step=event.shiftKey?20:4;quoteMoved=true;
+      placeQuote(rect.left+(event.key==='ArrowLeft'?-step:event.key==='ArrowRight'?step:0),rect.top+(event.key==='ArrowUp'?-step:event.key==='ArrowDown'?step:0));event.preventDefault();event.stopPropagation();
+    });
+    const outsideQuote=event=>{if(!popover.contains(event.target)&&!event.target.closest('.quote-bar'))closeQuote();};
+    const escapeQuote=event=>{if(event.key==='Escape')closeQuote();};
+    $('quoteClose').onclick=()=>closeQuote(true);popover.onmouseleave=event=>{if(!state.pinned&&!event.relatedTarget?.closest?.('.quote-bar'))closeQuote();};
+    document.addEventListener('click',outsideQuote);document.addEventListener('keydown',escapeQuote);root.addEventListener('resize',clampQuote);root.addEventListener('blur',endQuoteDrag);
     function render(force=false){
       const time=video.currentTime||0;if(!force&&time===state.lastClock)return;state.lastClock=time;renderInput(time);sync();if(state.tab!=='inputs'||timeline.clientHeight<=0)return;
       const height=timeline.clientHeight,span=height/state.scale;
       if(state.follow)state.viewStart=Math.max(0,Math.min(Math.max(0,duration()-span),time-span*.38));
+      else state.viewStart=Math.max(0,Math.min(Math.max(0,duration()-span),state.viewStart));
       const key=[Math.floor(state.viewStart/(Math.max(span*.45,.1))),state.scale,timeline.clientWidth,height,state.signature].join('/');
       if(force||key!==state.renderKey){state.renderKey=key;rebuild();}
       const offset=(renderStart-state.viewStart)*state.scale;layers.forEach(layer=>layer.style.transform=`translateY(${offset}px)`);
-      $('timelinePlayhead').style.top=((time-state.viewStart)*state.scale)+'px';$('timelinePlayhead').querySelector('time').textContent=clock(time);
+      const direction=playheadDirection(time,state.viewStart,span);
+      returnToPlayhead.hidden=direction===0;returnToPlayhead.dataset.direction=direction<0?'above':'below';returnToPlayhead.setAttribute('aria-label',`返回当前播放位置（${direction<0?'上方':'下方'}），恢复跟随`);
+      $('timelinePlayhead').hidden=direction!==0;$('timelinePlayhead').style.top=Math.max(0,Math.min(height-1,(time-state.viewStart)*state.scale))+'px';$('timelinePlayhead').querySelector('time').textContent=clock(time);
       $('timelineInputs').querySelectorAll('button').forEach(button=>{
         const item=displayed.get(button.dataset.inputId),start=item.start,end=item.end;
         const sample=inputSampleAt(item,time),inBand=start<=time&&time<end;
         button.classList.toggle('active',inBand&&!!sample);
+        button.classList.toggle('active-hold',inBand&&!!sample&&time<sample.end&&isLongPress(sample));
         const label=button.firstElementChild;
         if(item.fixed){
           label.hidden=!sample;
           label.style.transform=`translateY(${Math.max(0,(time-start)*state.scale-14)}px)`;
           if(sample){const signature=sample.code+'/'+sample.direction;if(label.dataset.direction!==signature){label.innerHTML=glyph(sample);label.dataset.direction=signature;}}
         }else{
-          const labelTop=Math.max(0,Math.min((state.viewStart-start)*state.scale,(item.displayEnd-start)*state.scale-28));label.style.transform=`translateY(${labelTop}px)`;
+          const labelTop=visibleLabelTop(start,item.displayEnd,state.viewStart,state.scale);label.style.transform=`translateY(${labelTop}px)`;
         }
+        // Labels stay above fills and within their own physical hold. At a
+        // clipped tail they slide out with the bar instead of floating in space.
+        let previous=null;const labels=[];
+        button.querySelectorAll('.hold-label').forEach(header=>{
+          const heldStart=Number(header.dataset.heldStart),heldEnd=Number(header.dataset.heldEnd);
+          const top=(heldStart-start)*state.scale+visibleLabelTop(heldStart,heldEnd,state.viewStart,state.scale);
+          header.style.top=top+'px';header.style.height=Math.min(28,(heldEnd-heldStart)*state.scale)+'px';header.hidden=heldEnd<=state.viewStart||heldStart>=state.viewStart+span;
+          if(header.hidden)return;
+          // Overlapping WASD holds share a header rather than drawing letters
+          // on top of each other. Current direction remains at the playhead.
+          if(item.fixed&&item.device==='keyboard'){
+            if(previous&&Math.abs(top-previous.top)<28){previous.codes.add(header.dataset.heldCode);previous.header.textContent=[...previous.codes].join('');header.hidden=true;return;}
+            previous={top,header,codes:new Set([header.dataset.heldCode])};header.textContent=header.dataset.heldCode;
+          }
+          labels.push(top);
+        });
+        if(!item.fixed){const top=visibleLabelTop(start,item.displayEnd,state.viewStart,state.scale);label.hidden=labels.some(heldTop=>Math.abs(heldTop-top)<28);}
       });
       $('timelineSpeech').querySelectorAll('button').forEach(button=>{const s=segments[Number(button.dataset.quote)];button.classList.toggle('active',s.start<=time&&time<s.end);});
       $('timelineScale').textContent=(state.scale/64).toFixed(1)+'×';
     }
-    timeline.addEventListener('wheel',event=>{event.preventDefault();if(gesture)return;const rect=timeline.getBoundingClientRect(),unit=event.deltaMode===1?16:event.deltaMode===2?rect.height:1,delta=event.deltaY*unit;hideInputDetail();if(Math.abs(event.deltaX)>Math.abs(event.deltaY)){horizontal.scrollLeft+=event.deltaX*unit;return;}if(event.clientX-horizontal.getBoundingClientRect().left<geometry().time){const z=anchoredZoom({scale:state.scale,delta,viewStart:state.viewStart,pointerY:event.clientY-rect.top,duration:duration(),height:rect.height});state.scale=z.scale;state.viewStart=z.viewStart;setFollow(false);render(true);}else{seekKeep(video.currentTime+delta/state.scale);}if(!state.pinned)closeQuote();},{passive:false});
+    timeline.addEventListener('wheel',event=>{event.preventDefault();if(gesture)return;const rect=timeline.getBoundingClientRect(),unit=event.deltaMode===1?16:event.deltaMode===2?rect.height:1,delta=event.deltaY*unit;hideInputDetail();if(Math.abs(event.deltaX)>Math.abs(event.deltaY)){horizontal.scrollLeft+=event.deltaX*unit;return;}if(event.clientX-horizontal.getBoundingClientRect().left<geometry().time){const z=anchoredZoom({scale:state.scale,delta,viewStart:state.viewStart,pointerY:event.clientY-rect.top,duration:duration(),height:rect.height});state.scale=z.scale;state.viewStart=z.viewStart;}else{state.viewStart=Math.max(0,Math.min(Math.max(0,duration()-rect.height/state.scale),state.viewStart+delta/state.scale));}setFollow(false);render(true);if(!state.pinned)closeQuote();},{passive:false});
     timeline.addEventListener('keydown',event=>{if(['PageDown','PageUp','ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const sign=['PageUp','ArrowUp'].includes(event.key)?-1:1;seekKeep(event.key==='Home'?0:event.key==='End'?duration():video.currentTime+sign*(event.key.startsWith('Page')?timeline.clientHeight/state.scale*.8:1));}});
     horizontal.addEventListener('scroll',()=>{grid.style.setProperty('--timeline-scroll-x',horizontal.scrollLeft+'px');hideInputDetail();if(!state.pinned)closeQuote();});
     horizontal.addEventListener('keydown',event=>{if(event.target===horizontal&&['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();event.stopPropagation();horizontal.scrollLeft+=event.key==='ArrowLeft'?-80:80;}});horizontal.tabIndex=0;
@@ -627,10 +727,11 @@
       state.signature=next;source=normalizeInputs(data.inputs,previewInputOffset);bands=inputVisualBands(source.intervals,source.gaps);repack();index=intervalIndex(source.intervals);gapIndex=intervalIndex(source.gaps);
       const transcript=data.transcription?.state||'ready',isReady=transcript==='ready';quoteIndex=intervalIndex(isReady?segments.map((item,i)=>({...item,index:i})):[]);$('transcriptTab').disabled=!isReady;$('transcriptTab').textContent=isReady?'原话':transcript==='failed'?'转写失败':'转写中';$('transcriptTab').title=data.transcription?.error||'';
       if(!isReady&&state.tab==='transcript')setTab('inputs');
-      const message=inputMessage();$('timelineState').textContent=message||`${bands.length} 段记录${source.gaps.length?' · '+source.gaps.length+' 处缺口':''}`;$('timelineState').title=source.error||message||`${source.intervals.length} 个原始采样区间；方向、指向及十字键固定窄轨道；虚线浅色为合并活动，短横线为实际输入。其它键帽最小 28px，左侧细线表示真实持续时间。`;
+      const message=inputMessage();$('timelineState').textContent=message||`${bands.length} 段记录${source.gaps.length?' · '+source.gaps.length+' 处缺口':''}`;$('timelineState').title=source.error||message||`${source.intervals.length} 个原始采样区间；暖色实线为超过 0.5 秒的长按，深色为短按；虚线浅色为合并活动，短横线为实际输入。内容区滚轮浏览，时间刻度区滚轮缩放。`;
+      if(state.pinned&&pinnedQuote)state.quote=segments.findIndex(s=>s.start===pinnedQuote.start&&s.end===pinnedQuote.end&&s.text===pinnedQuote.text);
       state.lastInput='';closeQuote();setTab(state.tab);render(true);
     }
     function frame(){if(state.stopped)return;render();raf=root.requestAnimationFrame(frame);}
-    update();frame();return {update,setFollow(value){state.follow=value;if(value)render(true);},destroy(){finishGesture();state.stopped=true;root.cancelAnimationFrame(raf);observer.disconnect();inputDetail.remove();root.removeEventListener('pointermove',moveGesture);root.removeEventListener('pointerup',endGesture);root.removeEventListener('pointercancel',cancelGesture);root.removeEventListener('blur',blurGesture);document.removeEventListener('pointerdown',clearClickSuppression,true);document.removeEventListener('click',blockTailClick,true);}};
+    update();frame();return {update,setFollow(value){state.follow=value;if(value)render(true);},destroy(){finishGesture();endQuoteDrag();state.stopped=true;root.cancelAnimationFrame(raf);observer.disconnect();inputDetail.remove();root.removeEventListener('pointermove',moveGesture);root.removeEventListener('pointerup',endGesture);root.removeEventListener('pointercancel',cancelGesture);root.removeEventListener('blur',blurGesture);document.removeEventListener('pointerdown',clearClickSuppression,true);document.removeEventListener('click',blockTailClick,true);document.removeEventListener('click',outsideQuote);document.removeEventListener('keydown',escapeQuote);root.removeEventListener('resize',clampQuote);root.removeEventListener('blur',endQuoteDrag);}};
   }
 })(globalThis);

@@ -14,10 +14,16 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import unicodedata
 import uuid
 import zipfile
+# Embedded Python uses an isolated ._pth; explicitly load the helper's private
+# path module instead of depending on the installation or staged app imports.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from app_paths import (COMPACT_LAYOUT, application_root, installation_root,
+                       manifest_path, metadata_path)
 
 MAX_ARCHIVE = 2 * 1024**3
 MAX_EXPANDED = 8 * 1024**3
@@ -30,6 +36,7 @@ REQUIRED = {'portable.json', 'portable_entry.py', 'app.py',
             'runtime/python.exe', 'runtime/pythonw.exe', 'ui/index.html'}
 HIDDEN = 0x08000000 if os.name == 'nt' else 0
 RECOVERY_ENTRY = '恢复更新前版本.cmd'
+FLAT_LAYOUT = 'flat-v1'
 
 
 class UpdateError(RuntimeError):
@@ -74,14 +81,37 @@ def safe_name(name):
 def managed_path(name):
     safe_name(name)
     lower = name.casefold()
-    if lower.startswith(('state/', 'models/', 'staging/', 'tools/obs/config/')): return False
+    if lower.startswith('app/'):
+        lower = lower[4:]
+        # Public vocabulary and the launcher belong beside app/, never inside it.
+        if lower.startswith('vocabularies/') or lower.endswith('.exe') and '/' not in lower: return False
+    if lower.startswith(('state/', 'secrets/', 'models/', 'staging/', 'tools/obs/config/')): return False
     if lower.startswith('vocabularies/'): return lower == 'vocabularies/uiux-terms.txt'
-    if '/' not in name:
+    if '/' not in lower:
         return lower.endswith('.py') or lower in {'think aloud.exe', 'experiencerecorder.exe', 'portable.json',
             'package-manifest.json', 'dependency-source-manifest.json', 'model-manifest.json',
             'requirements-lock.txt', 'license', 'third_party_notices.md', 'readme.md', 'player.html'}
     return lower.startswith(('runtime/', 'ui/', 'licenses/', 'docs/', 'scripts/', 'tools/input/',
                              'tools/obs/bin/', 'tools/obs/data/', 'tools/obs/obs-plugins/')) or lower == 'tools/obs/portable_mode.txt'
+
+
+def inventory_layout(records):
+    return COMPACT_LAYOUT if 'app/portable.json' in records else FLAT_LAYOUT
+
+
+def layout_path(name, layout):
+    return 'app/' + name if layout == COMPACT_LAYOUT else name
+
+
+def path_in_layout(name, layout):
+    if layout == COMPACT_LAYOUT:
+        return name.startswith('app/') or name in ('Think Aloud.exe', 'vocabularies/uiux-terms.txt')
+    return not name.casefold().startswith('app/')
+
+
+def plan_app_root(plan):
+    # Use the durable transaction layout even if portable.json was interrupted.
+    return Path(plan['root']) / 'app' if plan.get('layout') == COMPACT_LAYOUT else Path(plan['root'])
 
 
 def reject_reparse(path):
@@ -109,13 +139,18 @@ def inventory(value):
         if not isinstance(record, dict): raise UpdateError('软件包清单条目无效。')
         name = safe_name(record.get('path'))
         size, digest = record.get('bytes'), record.get('sha256')
-        if (name.casefold() in aliases or not managed_path(name) or name == 'package-manifest.json'
+        if (name.casefold() in aliases or not managed_path(name)
+                or name.casefold() in ('package-manifest.json', 'app/package-manifest.json')
                 or type(size) is not int or not 0 <= size <= MAX_FILE
                 or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)):
             raise UpdateError('软件包清单含重复、受保护或无效文件。')
         aliases.add(name.casefold()); result[name] = {'path': name, 'bytes': size, 'sha256': digest}
-    if (sum(r['bytes'] for r in result.values()) > MAX_EXPANDED or not REQUIRED <= result.keys()
-            or not any(name in result for name in LAUNCHERS)):
+    layout = inventory_layout(result)
+    required = {layout_path(name, layout) for name in REQUIRED}
+    launchers = ('Think Aloud.exe',) if layout == COMPACT_LAYOUT else LAUNCHERS
+    if (sum(r['bytes'] for r in result.values()) > MAX_EXPANDED or not required <= result.keys()
+            or not any(name in result for name in launchers)
+            or not all(path_in_layout(name, layout) for name in result)):
         raise UpdateError('软件包不完整或展开后过大。')
     return result
 
@@ -127,6 +162,9 @@ def validate_metadata(metadata, manifest, expected_version=None, allow_candidate
         raise UpdateError('发布版本与软件包版本不一致。')
     if metadata.get('update_protocol',1) != 1:
         raise UpdateError('该软件包需要更新版本的安装协议，请手动保留配置后安装。')
+    layout = inventory_layout(inventory(manifest))
+    if metadata.get('layout') != (COMPACT_LAYOUT if layout == COMPACT_LAYOUT else None):
+        raise UpdateError('软件包布局标记与清单不一致。')
     if not allow_candidate and (metadata.get('release_status') != 'public' or manifest.get('dependency_source_status') is not True):
         raise UpdateError('该软件包尚未通过公开分发检查，不能作为在线更新安装。')
 
@@ -149,16 +187,22 @@ def extract_package(archive_path, destination, *, expected_version=None, allow_c
                         or item.file_size > MAX_FILE or not managed_path(name)):
                     raise UpdateError('更新包含重复、链接、加密或受保护条目。')
                 aliases.add(name.casefold()); names[name] = item
-            if 'package-manifest.json' not in names or names['package-manifest.json'].file_size > MAX_MANIFEST:
+            manifests = [name for name in ('package-manifest.json', 'app/package-manifest.json') if name in names]
+            if len(manifests) != 1 or names[manifests[0]].file_size > MAX_MANIFEST:
                 raise UpdateError('更新包缺少有效清单。')
-            manifest = json.loads(archive.read('package-manifest.json'))
+            manifest_name = manifests[0]
+            manifest = json.loads(archive.read(manifest_name))
             records = inventory(manifest)
-            if names.keys() != records.keys() | {'package-manifest.json'}: raise UpdateError('更新包内容与清单不一致。')
+            layout = inventory_layout(records)
+            if manifest_name != layout_path('package-manifest.json', layout):
+                raise UpdateError('更新包清单位置与布局不一致。')
+            if names.keys() != records.keys() | {manifest_name}: raise UpdateError('更新包内容与清单不一致。')
             if sum(i.file_size for i in infos) > MAX_EXPANDED: raise UpdateError('更新包展开后过大。')
-            info, record = names['portable.json'], records['portable.json']
+            metadata_name = layout_path('portable.json', layout)
+            info, record = names[metadata_name], records[metadata_name]
             if info.file_size > MAX_PORTABLE_METADATA or info.file_size != record['bytes']:
                 raise UpdateError('更新包版本元数据过大或长度不符。')
-            raw_metadata = archive.read('portable.json')
+            raw_metadata = archive.read(metadata_name)
             if hashlib.sha256(raw_metadata).hexdigest() != record['sha256']:
                 raise UpdateError('更新包版本元数据校验失败。')
             metadata = json.loads(raw_metadata)
@@ -185,7 +229,12 @@ def extract_package(archive_path, destination, *, expected_version=None, allow_c
 
 
 def verified_inventory(root):
-    root = Path(root); records = inventory(read_json(child(root, 'package-manifest.json')))
+    reject_reparse(root)
+    root = installation_root(root)
+    manifest = manifest_path(root); reject_reparse(manifest)
+    records = inventory(read_json(manifest))
+    if manifest != root / layout_path('package-manifest.json', inventory_layout(records)):
+        raise UpdateError('软件包清单位置与布局不一致。')
     for name, record in records.items():
         path = child(root, name)
         if not path.is_file() or path.stat().st_size != record['bytes'] or sha256(path) != record['sha256']:
@@ -197,14 +246,22 @@ def build_plan(root, stage, work):
     root, stage, work = (Path(p).absolute() for p in (root, stage, work))
     for path in (root, stage, work): reject_reparse(path)
     root, stage, work = (p.resolve() for p in (root, stage, work))
+    root, stage = installation_root(root), installation_root(stage)
     if stage.is_relative_to(root) or work.is_relative_to(root) or root.is_relative_to(work):
         raise UpdateError('安装助手必须位于目标安装目录之外。')
-    old_manifest = child(root, 'package-manifest.json')
+    old_manifest = manifest_path(root); reject_reparse(old_manifest)
     old = inventory(read_json(old_manifest)); new = verified_inventory(stage)
+    layout = inventory_layout(old)
+    if layout != inventory_layout(new):
+        raise UpdateError('新旧软件包的目录结构不同，请先使用独立迁移入口；当前文件未改变。')
+    manifest_name = layout_path('package-manifest.json', layout)
+    if old_manifest != root / manifest_name:
+        raise UpdateError('安装目录布局与清单不一致。')
     files, preserved = [], []
     records = dict(new)
-    records['package-manifest.json'] = {'path':'package-manifest.json', 'bytes':(stage/'package-manifest.json').stat().st_size,
-                                      'sha256':sha256(stage/'package-manifest.json')}
+    new_manifest = child(stage, manifest_name)
+    records[manifest_name] = {'path':manifest_name, 'bytes':new_manifest.stat().st_size,
+                             'sha256':sha256(new_manifest)}
     for name, record in sorted(records.items()):
         target = child(root, name)
         exists = target.exists()
@@ -212,7 +269,7 @@ def build_plan(root, stage, work):
         previous = sha256(target) if exists else None
         if name == 'vocabularies/uiux-terms.txt' and exists and (name not in old or previous != old[name]['sha256']):
             preserved.append(name); continue
-        if exists and name not in old and name != 'package-manifest.json':
+        if exists and name not in old and name != manifest_name:
             raise UpdateError('新软件文件与安装目录中的个人文件重名，已停止更新。')
         if exists and name in old and previous != old[name]['sha256']:
             raise UpdateError('现有软件文件已被修改，请先保留修改后再更新。')
@@ -221,9 +278,9 @@ def build_plan(root, stage, work):
     need = sum(r['bytes'] + r['old_bytes'] for r in files) + 32 * 1024**2
     if shutil.disk_usage(root).free < need: raise UpdateError('磁盘空间不足以保留更新备份。')
     plan = {'schema':1, 'id':uuid.uuid4().hex, 'root':str(root), 'stage':str(stage), 'work':str(work),
-            'state':'prepared', 'files':files, 'preserved':preserved,
+            'state':'prepared', 'files':files, 'preserved':preserved, 'layout':layout,
             'old_manifest_sha256':sha256(old_manifest),
-            'version':read_json(stage/'portable.json')['version'], 'created':time.time()}
+            'version':read_json(metadata_path(stage))['version'], 'created':time.time()}
     work.mkdir(parents=True, exist_ok=True); atomic_json(work/'job.json', plan)
     return plan
 
@@ -238,9 +295,10 @@ def write_recovery_entry(plan):
     if stage.resolve() != (work.parent/'package').resolve():
         raise UpdateError('恢复入口需要标准的独立更新目录。')
     path = child(work, RECOVERY_ENTRY)
+    runtime = ('app\\runtime' if plan.get('layout') == COMPACT_LAYOUT else 'runtime')
     script = ('@echo off\r\nsetlocal DisableDelayedExpansion\r\nchcp 65001 >nul\r\n'
               'echo 请先关闭体验记录器和该目录启动的 OBS。恢复过程不会强制结束进程。\r\n'
-              '"%~dp0..\\package\\runtime\\python.exe" -B "%~dp0update_installer.py" '
+              f'"%~dp0..\\package\\{runtime}\\python.exe" -B "%~dp0update_installer.py" '
               '--job "%~dp0job.json" --recover --no-launch\r\n'
               'set "RECOVERY_EXIT=%ERRORLEVEL%"\r\n'
               'if "%RECOVERY_EXIT%"=="0" (\r\n'
@@ -256,7 +314,7 @@ def write_recovery_entry(plan):
 
 def status(plan, state, message):
     plan['state'] = state; plan['message'] = message; save_plan(plan)
-    root = Path(plan['root'])
+    root = plan_app_root(plan)
     recovery = child(Path(plan['work']), RECOVERY_ENTRY)
     atomic_json(child(root, 'state/update-result.json'), {'schema':1, 'id':plan['id'], 'state':state,
         'version':plan['version'], 'message':message, 'transaction':str(Path(plan['work'])/'job.json'),
@@ -297,7 +355,8 @@ def copy_atomic(source, target, expected=_UNCHECKED):
 def install_files(plan, after_replace=lambda count: None):
     root, stage, work = (Path(plan[k]) for k in ('root','stage','work'))
     check_cancelled(plan)
-    if sha256(child(root,'package-manifest.json')) != plan['old_manifest_sha256']:
+    manifest_name = layout_path('package-manifest.json', plan.get('layout', FLAT_LAYOUT))
+    if sha256(child(root,manifest_name)) != plan['old_manifest_sha256']:
         raise UpdateError('安装目录在准备后发生变化，请重新准备更新。')
     # Complete durable backup before the first replacement. Existing backups
     # cannot be overwritten by a retry after an interrupted transaction.
@@ -402,7 +461,7 @@ def process_running(pid, created=None):
 
 def blockers(root):
     import psutil
-    root=Path(root).resolve(); result=[]
+    root=installation_root(root); result=[]
     for process in psutil.process_iter(['pid','exe','create_time']):
         try:
             executable=process.info.get('exe')
@@ -413,7 +472,7 @@ def blockers(root):
 
 
 def ensure_launch_allowed(root):
-    root=Path(root)
+    root=application_root(root)
     with file_lock(root/'update.lock'):
         path=child(root,'state/update-result.json')
         if path.is_file():
@@ -428,7 +487,8 @@ def ensure_launch_allowed(root):
 
 
 def acknowledge_start(root):
-    path=Path(root)/'state/update-result.json'
+    root=application_root(root)
+    path=root/'state/update-result.json'
     if not path.is_file():return
     info=read_json(path)
     if info.get('state') in ('awaiting_start','startup_unconfirmed'):
@@ -443,8 +503,10 @@ def acknowledge_start(root):
 def launcher_path(root):
     # Select only a launcher owned by the current manifest. In particular, do
     # not execute a same-name personal file beside an older installation.
-    root = Path(root)
-    records = inventory(read_json(child(root, 'package-manifest.json')))
+    reject_reparse(root)
+    root = installation_root(root)
+    manifest = manifest_path(root); reject_reparse(manifest)
+    records = inventory(read_json(manifest))
     for name in LAUNCHERS:
         if name in records:
             path = child(root, name)
@@ -455,6 +517,7 @@ def launcher_path(root):
 
 
 def self_check(root, work):
+    root=installation_root(root)
     report=Path(work)/'installed-self-check.json'
     process=subprocess.Popen([str(launcher_path(root)),'--self-check','--report',str(report)],
                           cwd=root,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
@@ -472,10 +535,12 @@ def validate_job(path):
     root,stage,work=(Path(plan[k]).resolve() for k in ('root','stage','work'))
     if stage.is_relative_to(root) or work.is_relative_to(root) or root.is_relative_to(work):raise UpdateError('安装助手路径无效。')
     for p in (root,stage,work):reject_reparse(p)
+    layout = plan.get('layout', FLAT_LAYOUT)
+    if layout not in (FLAT_LAYOUT, COMPACT_LAYOUT):raise UpdateError('安装任务布局无效。')
     aliases=set()
     for record in plan['files']:
         name=safe_name(record['path'])
-        if not managed_path(name) or name.casefold() in aliases:raise UpdateError('安装任务文件边界无效。')
+        if not managed_path(name) or not path_in_layout(name,layout) or name.casefold() in aliases:raise UpdateError('安装任务文件边界无效。')
         aliases.add(name.casefold())
         for key in ('sha256','old_sha256'):
             if record[key] is not None and not re.fullmatch('[0-9a-f]{64}',record[key]):raise UpdateError('安装任务校验值无效。')
@@ -484,12 +549,13 @@ def validate_job(path):
 
 def run_job(path, *, recover=False, launch=True, parent_timeout=180, checker=self_check):
     plan=validate_job(path);root=Path(plan['root']);work=Path(plan['work'])
+    app_root=plan_app_root(plan)
     original_state=plan['state']
     recovering=recover or original_state in ('applying','files_installed','rolling_back','recovery_required')
     if Path(__file__).resolve().is_relative_to(root) or Path(os.sys.executable).resolve().is_relative_to(root):
         raise UpdateError('安装助手不能从正在更新的软件目录运行。')
     try:
-        with file_lock(root/'update.lock'):
+        with file_lock(app_root/'update.lock'):
             if not recovering:check_cancelled(plan)
             import psutil
             atomic_json(work/'helper-ready.json',{'schema':1,'id':plan['id'],'pid':os.getpid(),
@@ -500,7 +566,7 @@ def run_job(path, *, recover=False, launch=True, parent_timeout=180, checker=sel
                 if time.monotonic()>deadline:raise UpdateError('记录器尚未完全退出，未替换软件文件。')
                 time.sleep(.2)
             if not recovering:check_cancelled(plan)
-            with file_lock(root/'app.lock'):
+            with file_lock(app_root/'app.lock'):
                 if not recovering:check_cancelled(plan)
                 if blockers(root):raise UpdateError('安装目录的录制引擎或其他进程仍未退出，未替换软件文件。')
                 if recovering:
@@ -519,7 +585,7 @@ def run_job(path, *, recover=False, launch=True, parent_timeout=180, checker=sel
                 stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=HIDDEN)
             deadline=time.monotonic()+45
             while time.monotonic()<deadline:
-                ack=root/'state/update-started.json'
+                ack=app_root/'state/update-started.json'
                 if ack.is_file() and read_json(ack).get('id')==plan['id']:
                     status(plan,'complete','更新完成，新界面已确认启动。');return plan
                 if process.poll() is not None:break

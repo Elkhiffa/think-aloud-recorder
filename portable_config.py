@@ -9,6 +9,7 @@ import socket
 import time
 import uuid
 from copy import deepcopy
+from app_paths import installation_root
 
 
 def _read(path):
@@ -89,7 +90,7 @@ def stored_settings(root, cfg):
                 vault = Path(settings['vault'])
                 if vault.is_absolute():
                     try:
-                        settings['vault'] = vault.resolve().relative_to(root).as_posix()
+                        settings['vault'] = vault.resolve().relative_to(installation_root(root)).as_posix()
                     except ValueError:
                         pass
     return result
@@ -104,7 +105,7 @@ def _recording_settings(cfg):
 
 def default_vault_path(root):
     """Sibling database survives replacing/versioning the application folder."""
-    return Path(root).resolve().parent / 'think-aloud-database'
+    return installation_root(root).parent / 'think-aloud-database'
 
 
 def initialize(root, identity=None):
@@ -141,7 +142,8 @@ def _initialize_locked(root, identity):
     }
     previous_root = cfg.get('_portable_root')
     changed_machine = cfg.get('_portable_machine') != identity
-    moved = previous_root != str(root)
+    install = installation_root(root)
+    moved = previous_root != str(install)
     if not changed_machine and not moved:
         return
     if previous_root:
@@ -159,7 +161,7 @@ def _initialize_locked(root, identity):
             preset.update(window='', monitor='', mic='default')
     # Each new location owns its OBS connection; it cannot control an old copy.
     cfg.update(port=_free_port(), password=secrets.token_urlsafe(24),
-               _portable_root=str(root), _portable_machine=identity)
+               _portable_root=str(install), _portable_machine=identity)
     _setup_obs(root, cfg)
     _write(path, stored_settings(root, cfg))
 
@@ -171,5 +173,5 @@ def load_settings(root):
     if (root / 'portable.json').is_file():
         for settings in _recording_settings(cfg):
             if settings.get('vault') and not Path(settings['vault']).is_absolute():
-                settings['vault'] = str((root / settings['vault']).resolve())
+                settings['vault'] = str((installation_root(root) / settings['vault']).resolve())
     return cfg

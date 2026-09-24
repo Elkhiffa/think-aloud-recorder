@@ -100,7 +100,8 @@ def verify_runtime_seed(root, files=None):
     Only that selected package inventory is checked, not unrelated local files.
     Neither input inventory can override the checked-in lock's expected hashes.
     """
-    root = Path(root).absolute()
+    from app_paths import application_root, installation_root
+    root = application_root(root)
     try:
         reject_reparse(root)
     except UpdateError as error:
@@ -118,6 +119,8 @@ def verify_runtime_seed(root, files=None):
 
     if files is None:
         inventory = _records(_read_json(_file(root, 'package-manifest.json')))
+        if installation_root(root) != root:
+            inventory = {name[4:]: record for name, record in inventory.items() if name.startswith('app/')}
         actual = {name: root / name for name in inventory if seed_managed_path(name)}
     else:
         if not isinstance(files, Mapping) or not 1 <= len(files) <= MAX_ENTRIES:

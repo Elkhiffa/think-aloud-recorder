@@ -21,13 +21,14 @@ class NativeLauncherTests(unittest.TestCase):
             self.skipTest('Run using the prepared Windows runtime')
         with TemporaryDirectory(prefix='Recorder launcher ') as tmp:
             root = Path(tmp) / '中文 application with spaces'
-            runtime = root / 'runtime'
+            app = root / 'app'
+            runtime = app / 'runtime'
             runtime.mkdir(parents=True)
             for source in [seed / 'pythonw.exe', *seed.glob('*.dll')]:
                 shutil.copy2(source, runtime / source.name)
             (runtime / 'python312._pth').write_text(
                 str(seed / 'Lib') + '\n' + str(seed / 'DLLs') + '\n..\n', encoding='utf-8')
-            (root / 'portable_entry.py').write_text(
+            (app / 'portable_entry.py').write_text(
                 'from pathlib import Path\n'
                 'def main():\n'
                 '    Path(__file__).with_name("confirmed.txt").write_text("private runtime reached")\n'
@@ -37,7 +38,7 @@ class NativeLauncherTests(unittest.TestCase):
             result = subprocess.run([str(executable)], cwd=tmp, timeout=20,
                                     capture_output=True, creationflags=0x08000000)
             self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
-            self.assertEqual((root / 'confirmed.txt').read_text(), 'private runtime reached')
+            self.assertEqual((app / 'confirmed.txt').read_text(), 'private runtime reached')
 
     def test_windows_reads_brand_icon_and_version_from_executable(self):
         kernel=ctypes.WinDLL('kernel32',use_last_error=True)

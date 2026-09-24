@@ -2020,7 +2020,7 @@ class DesktopServiceTests(unittest.TestCase):
             self.service.set_update_lifecycle(lambda:1,close_failed)
             real_popen=subprocess.Popen
             def borrowed_runtime(command,**kwargs):
-                self.assertEqual(Path(command[0]),stage/'runtime/pythonw.exe')
+                self.assertEqual(Path(command[0]).resolve(),(stage/'runtime/pythonw.exe').resolve())
                 return real_popen([sys.executable,*command[1:]],**kwargs)
             def fail_cancel_write(path,value):
                 if Path(path).name=='cancel.json':raise OSError('synthetic disk failure writing cancel fence')

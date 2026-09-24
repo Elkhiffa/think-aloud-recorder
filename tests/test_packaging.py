@@ -90,19 +90,20 @@ class PackagingTests(unittest.TestCase):
         result = self.make()
         with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
             names = set(archive.namelist())
+            self.assertEqual({name.split('/')[0] for name in names}, {'Think Aloud.exe', 'app', 'vocabularies'})
             self.assertIn('Think Aloud.exe', names)
             self.assertNotIn('ExperienceRecorder.exe', names)
-            self.assertEqual(json.loads(archive.read('portable.json'))['name'], 'Think Aloud')
+            self.assertEqual(json.loads(archive.read('app/portable.json'))['name'], 'Think Aloud')
             for path in contaminants:
                 if path == 'portable.json':
-                    self.assertNotIn(b'PRIVATE_SENTINEL', archive.read(path))
+                    self.assertNotIn(b'PRIVATE_SENTINEL', archive.read("app/" + path))
                 else:
                     self.assertNotIn(path, names)
             for name in names:
                 self.assertNotIn(b'PRIVATE_SENTINEL', archive.read(name), name)
-            self.assertIn('runtime/Lib/site-packages/fixture-1.dist-info/licenses/LICENSE', names)
-            self.assertIn('runtime/Lib/site-packages/fixture/config.json', names)
-            self.assertEqual(json.loads(archive.read('portable.json'))['models'], 'optional')
+            self.assertIn('app/runtime/Lib/site-packages/fixture-1.dist-info/licenses/LICENSE', names)
+            self.assertIn('app/runtime/Lib/site-packages/fixture/config.json', names)
+            self.assertEqual(json.loads(archive.read('app/portable.json'))['models'], 'optional')
 
     def test_only_fixed_bundled_vocabulary_is_packaged_with_exact_bytes(self):
         bundled = '用户体验\nUX\n交互设计\n'.encode('utf-8')
@@ -135,7 +136,7 @@ class PackagingTests(unittest.TestCase):
         results = self.make()
         with zipfile.ZipFile(self.base / 'out' / results[1]['filename']) as archive:
             self.assertNotIn(legacy, archive.namelist())
-            self.assertIn('runtime/Lib/think_aloud_media/ffmpeg.exe', archive.namelist())
+            self.assertIn('app/runtime/Lib/think_aloud_media/ffmpeg.exe', archive.namelist())
 
     def test_media_runtime_must_match_bound_inventory(self):
         self.write('runtime/Lib/think_aloud_media/ffmpeg.exe', b'changed')
@@ -163,7 +164,7 @@ class PackagingTests(unittest.TestCase):
         results = build(self.root, self.base / 'valid-version', candidate=True,
                         version='1.0.0-RC.1+build.2', launcher=b'MZ synthetic launcher fixture')
         with zipfile.ZipFile(self.base / 'valid-version' / results[1]['filename']) as archive:
-            self.assertEqual(json.loads(archive.read('portable.json'))['version'], '1.0.0-RC.1+build.2')
+            self.assertEqual(json.loads(archive.read('app/portable.json'))['version'], '1.0.0-RC.1+build.2')
 
     def test_existing_checksum_prevents_partial_release_set(self):
         output = self.base / 'existing-sums'
@@ -178,19 +179,19 @@ class PackagingTests(unittest.TestCase):
     def test_inventory_matches_every_shipped_byte(self):
         result = self.make()
         with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
-            manifest = json.loads(archive.read('package-manifest.json'))
-            self.assertEqual(set(archive.namelist()) - {'package-manifest.json'},
+            manifest = json.loads(archive.read('app/package-manifest.json'))
+            self.assertEqual(set(archive.namelist()) - {'app/package-manifest.json'},
                              {item['path'] for item in manifest['files']})
             for item in manifest['files']:
                 data = archive.read(item['path'])
                 self.assertEqual(len(data), item['bytes'])
                 self.assertEqual(hashlib.sha256(data).hexdigest(), item['sha256'])
             self.assertFalse(manifest['dependency_source_status'])
-            metadata=json.loads(archive.read('portable.json'))
+            metadata=json.loads(archive.read('app/portable.json'))
             self.assertEqual(metadata['update_protocol'],1)
             self.assertEqual(metadata['update_repository'],'Elkhiffa/think-aloud-recorder')
             for name in ('updater.py','update_installer.py','docs/updates.md'):
-                self.assertIn(name,archive.namelist())
+                self.assertIn('app/' + name,archive.namelist())
 
     def test_generated_ffmpeg_license_supersedes_seed_once(self):
         self.write('licenses/FFmpeg-GPL-3.0.txt', b'previous seed notice')
@@ -205,10 +206,10 @@ class PackagingTests(unittest.TestCase):
         self.save_manifest()
         result = self.make()
         with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
-            records = json.loads(archive.read('package-manifest.json'))['files']
+            records = json.loads(archive.read('app/package-manifest.json'))['files']
             names = [r['path'].casefold() for r in records]
             self.assertEqual(len(names), len(set(names)))
-            self.assertEqual(archive.read('licenses/FFmpeg-GPL-3.0.txt'), content)
+            self.assertEqual(archive.read('app/licenses/FFmpeg-GPL-3.0.txt'), content)
 
     def test_public_build_rejects_known_source_gap_before_output(self):
         with self.assertRaisesRegex(ValueError, 'source review is incomplete'):
@@ -225,16 +226,16 @@ class PackagingTests(unittest.TestCase):
         self.write(second, content)
         result = self.make()
         with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
-            index = json.loads(archive.read(prefix + 'index.json'))
+            index = json.loads(archive.read('app/' + prefix + 'index.json'))
             records = index['files']
             self.assertEqual(len(records), 2)
             self.assertEqual(records[0]['file'], records[1]['file'])
             self.assertEqual({r['origin'] for r in records}, {first[len(prefix):], second[len(prefix):]})
             target = prefix + records[0]['file']
             self.assertLess(len(target), 110)
-            self.assertEqual(archive.read(target), content)
+            self.assertEqual(archive.read('app/' + target), content)
             self.assertNotIn(first, archive.namelist())
-            compact = {name: self.write('reseed/' + name, archive.read(name))
+            compact = {name: self.write('reseed/' + name, archive.read('app/' + name))
                        for name in (prefix + 'index.json', target)}
             self.assertEqual(compact_dependency_notices(compact), (compact, {}))
             mixed = {**compact, first: self.root / first}
@@ -305,7 +306,7 @@ class PackagingTests(unittest.TestCase):
         one = launcher_bytes()
         self.assertEqual(one, launcher_bytes())
         self.assertTrue(one.startswith(b'MZ'))
-        self.assertIn(b'#!<launcher_dir>\\runtime\\pythonw.exe\n', one)
+        self.assertIn(b'#!<launcher_dir>\\app\\runtime\\pythonw.exe\n', one)
         with zipfile.ZipFile(io.BytesIO(one)) as archive:
             self.assertIn(b'from portable_entry import main', archive.read('__main__.py'))
             self.assertEqual(archive.getinfo('__main__.py').date_time, (1980, 1, 1, 0, 0, 0))

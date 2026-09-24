@@ -15,6 +15,7 @@ from urllib.parse import quote, urljoin, urlsplit
 import uuid
 
 import httpx
+from app_paths import application_root, installation_root, metadata_path
 from update_installer import (UpdateError, MAX_ARCHIVE, acknowledge_start, atomic_json, build_plan,
                               child, extract_package, read_json, reject_reparse, self_check, sha256,
                               write_recovery_entry)
@@ -107,12 +108,14 @@ class Cancelled(Exception):pass
 
 class UpdateManager:
     def __init__(self, root, *, client_factory=None):
-        self.root=Path(root).resolve()
+        reject_reparse(root)
+        self.root=application_root(root)
+        self.install_root=installation_root(root)
         self.client_factory=client_factory or (lambda:httpx.Client(timeout=httpx.Timeout(30,connect=10),follow_redirects=False,
             headers={'Accept':'application/vnd.github+json','User-Agent':'ThinkAloud-Updater',
                      'X-GitHub-Api-Version':'2026-03-10','Accept-Encoding':'identity'}))
         try:
-            version=read_json(self.root/'portable.json')['version'];SemVer(version)
+            version=read_json(metadata_path(self.root))['version'];SemVer(version)
         except (OSError,ValueError,KeyError,TypeError):version='unknown'
         self._state=dict(current_version=version,state='idle',latest_version=None,release_url=None,notes='',
                          downloaded_bytes=0,total_bytes=0,error=None,include_prerelease=False)
@@ -222,7 +225,7 @@ class UpdateManager:
         if not self._release or not self._assets:raise UpdateError('请先检查并选择可用更新。')
         release,assets=deepcopy(self._release),deepcopy(self._assets)
         def operation():
-            base=self.root.parent/'.think-aloud-updates'/hashlib.sha256(str(self.root).casefold().encode()).hexdigest()[:16]
+            base=self.install_root.parent/'.think-aloud-updates'/hashlib.sha256(str(self.install_root).casefold().encode()).hexdigest()[:16]
             reject_reparse(base);work=base/uuid.uuid4().hex;work.mkdir(parents=True)
             if shutil.disk_usage(work).free < assets[0]['size']+32*1024**2:
                 raise UpdateError('磁盘空间不足以下载更新包。')
@@ -278,8 +281,10 @@ class UpdateManager:
             atomic_json(attempt/'job.json',plan)
             helper=attempt/'update_installer.py'
             shutil.copy2(Path(__file__).with_name('update_installer.py'),helper)
+            # The private helper cannot import code from the install it replaces.
+            shutil.copy2(Path(__file__).with_name('app_paths.py'),attempt/'app_paths.py')
             write_recovery_entry(plan)
-            executable=self._stage/'runtime/pythonw.exe'
+            executable=application_root(self._stage)/'runtime/pythonw.exe'
             prepared={'executable':str(executable),'args':[str(helper),'--job',str(attempt/'job.json')],
                     'cwd':str(attempt),'job_path':str(attempt/'job.json'),
                     'version':plan['version'],'transaction_id':plan['id']}
