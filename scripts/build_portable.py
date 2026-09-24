@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from updater import SemVer
 from media_runtime import MEDIA_DIRECTORY, verify_media
 from scripts.verify_runtime_seed import verify_runtime_seed
+from scripts.brand_launcher import branded_stub
 
 ROOT_FILES = (
     'app.py', 'desktop_service.py', 'hotword_files.py', 'hotword_ui.py',
@@ -32,7 +33,7 @@ ROOT_FILES = (
     'input_capture.py', 'input_capture_windows.py', 'input_capture_devices.py', 'session_metadata.py',
     'updater.py', 'update_installer.py',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md', 'docs/updates.md',
-    'scripts/build_portable.py', 'scripts/fetch_runtime.py', 'scripts/fetch_input_runtime.py',
+    'scripts/build_portable.py', 'scripts/brand_launcher.py', 'scripts/fetch_runtime.py', 'scripts/fetch_input_runtime.py',
     'scripts/fetch_media_runtime.py',
     'scripts/verify_runtime_seed.py', 'scripts/runtime-seed.json', 'docs/release-readiness.md',
     'vocabularies/uiux-terms.txt', 'docs/uiux-vocabulary.md', 'docs/input-capture-validation.md',
@@ -148,14 +149,16 @@ def compact_dependency_notices(files):
         'files': records})}
 
 
-def launcher_bytes():
-    # Exact distlib GUI stub; the appended zip timestamp is fixed, unlike a
-    # default ScriptMaker invocation. Relative shebang resolves beside launcher.
+def launcher_bytes(version='0.0.0', icon_path=None):
+    # Preserve distlib's GUI code/manifest, with the application's native icon
+    # and version resources. Relative shebang resolves beside the launcher.
     from pip._vendor.distlib.scripts import ScriptMaker
     maker = ScriptMaker(None, '.')
     stub = maker._get_launcher('w')
     if not stub.startswith(b'MZ'):
         raise ValueError('Invalid Windows launcher resource')
+    icon_path = Path(icon_path or Path(__file__).resolve().parents[1] / 'ui/brand.ico')
+    stub = branded_stub(stub, icon_path.read_bytes(), version)
     source = b'from portable_entry import main\nif __name__ == "__main__":\n    raise SystemExit(main())\n'
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as archive:
@@ -245,8 +248,8 @@ def build(root, outdir, source_dir=None, *, candidate=False, version='0.3.0', la
     files, compact_notices = compact_dependency_notices(files)
     generated = {
         **compact_notices,
-        'ExperienceRecorder.exe': launcher if launcher is not None else launcher_bytes(),
-        'portable.json': json_bytes({'name': 'Experience Recorder', 'version': version,
+        'Think Aloud.exe': launcher if launcher is not None else launcher_bytes(version, root / 'ui/brand.ico'),
+        'portable.json': json_bytes({'name': 'Think Aloud', 'version': version,
             'platform': 'windows-x64', 'models': 'optional',
             'update_protocol': 1, 'update_repository': 'Elkhiffa/think-aloud-recorder',
             'release_status': 'candidate-not-for-public-redistribution' if candidate else 'public'}),

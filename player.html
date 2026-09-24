@@ -23,6 +23,7 @@
               <button data-copy="folder">复制场次文件夹路径</button>
               <button data-copy="transcript">复制逐字稿路径（JSON）</button>
               <button data-copy="video">复制视频路径</button>
+              <button id="alignInputs">校准操作时间…</button>
               <div class="menu-separator" role="separator"></div>
               <button data-document="notes">打开复盘文档</button>
               <button data-document="transcript">打开逐字稿文档</button>
@@ -35,8 +36,8 @@
       <div class="video-slot"><video id="video" controls playsinline preload="metadata"></video>
 
       </div>
-      <section id="inputPanel" class="input-panel" aria-label="当前操作">
-        <div class="input-heading"><h2>当前操作</h2><div class="input-modes" aria-label="操作显示方式"><button data-input-mode="keys" aria-pressed="true">当前按键</button><button data-input-mode="device" aria-pressed="false">设备图</button><button data-input-mode="collapsed" aria-pressed="false">收起</button></div></div>
+      <section id="inputPanel" class="input-panel" aria-label="最近操作">
+        <div class="input-heading"><h2>最近操作</h2><div class="input-modes" aria-label="操作显示方式"><button data-input-mode="keys" aria-pressed="true">最近按键</button><button data-input-mode="device" aria-pressed="false">设备图</button><button data-input-mode="collapsed" aria-pressed="false">收起</button></div></div>
         <div id="inputBody" class="input-body"><div class="input-meta"><span id="inputSource"></span><label id="deviceSelectLabel" hidden><span class="sr-only">显示设备</span><select id="deviceSelect"><option value="auto">自动切换</option><option value="keyboard">键盘 + 鼠标</option><option value="xbox">Xbox</option><option value="dualsense">DualSense</option></select></label></div><div id="currentKeys" class="current-keys"></div><div id="deviceView" class="device-view" hidden></div><p id="inputState" class="input-state"></p></div>
       </section>
       <div class="file-card">
@@ -57,6 +58,17 @@
     </aside>
   </main>
   <div id="quotePopover" class="quote-popover" role="dialog" aria-label="原话全文" hidden><div class="quote-popover-heading"><time id="quoteTime"></time><button id="quoteClose" aria-label="关闭原话">×</button></div><p id="quoteText"></p></div>
+  <section id="alignmentPanel" class="alignment-panel" role="dialog" aria-labelledby="alignmentTitle" hidden>
+    <form id="alignmentForm">
+      <div class="alignment-heading"><strong id="alignmentTitle">校准操作时间</strong><button id="cancelAlignment" type="button" aria-label="取消校准">×</button></div>
+      <p id="alignmentHint">仅调整本片段的操作显示，录像和原始记录保持不变。</p>
+      <label for="inputOffset">操作时间偏移（秒）</label>
+      <div class="alignment-value"><button type="button" data-offset-step="-0.1" aria-label="操作提前 0.1 秒">−</button><input id="inputOffset" type="number" min="-30" max="30" step="0.001" value="0"><button type="button" data-offset-step="0.1" aria-label="操作后移 0.1 秒">＋</button></div>
+      <p>负值提前，正值后移；调整后可直接播放对照。</p>
+      <p id="alignmentError" role="alert" hidden></p>
+      <div class="alignment-actions"><button id="resetAlignment" type="button">恢复自动</button><button type="submit">保存</button></div>
+    </form>
+  </section>
   <script id="review-data" type="application/json">%%DATA%%</script>
   <script>%%PLYR_JS%%</script>
   <script>%%JS%%</script>

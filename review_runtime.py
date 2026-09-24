@@ -26,11 +26,30 @@ def _number(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
+def input_alignment(meta):
+    """Offsets are presentation metadata, never rewritten capture timestamps."""
+    manual = meta.get('input_offset_seconds')
+    if not _number(manual) or abs(manual) > 30:
+        manual = None
+    measured = meta.get('input_alignment')
+    measured = measured if isinstance(measured, dict) else {}
+    offset, uncertainty = measured.get('offset_seconds'), measured.get('uncertainty_seconds')
+    if (measured.get('method') != 'final_video_stop_boundary_v1'
+            or not _number(offset) or abs(offset) > 30
+            or not _number(uncertainty) or not 0 <= uncertainty <= .25):
+        offset = uncertainty = None
+    return dict(offset_seconds=manual if manual is not None else offset if offset is not None else 0.,
+                source='manual' if manual is not None else 'measured' if offset is not None else 'uncalibrated',
+                manual_offset_seconds=manual, measured_offset_seconds=offset,
+                uncertainty_seconds=uncertainty)
+
+
 def input_payload(folder, meta):
     """Only the review schema crosses into HTML; never include raw device data."""
     duration = (meta.get('media') or {}).get('duration', 0)
     duration = duration if _number(duration) and duration >= 0 else 0
-    base = dict(version=1, state='disabled', duration=duration, timebase='video_seconds', intervals=[], gaps=[])
+    base = dict(version=1, state='disabled', duration=duration, timebase='video_seconds', intervals=[], gaps=[],
+                alignment=input_alignment(meta), video_duration=duration)
     path = Path(folder) / 'input-events.json'
     if not path.exists():
         if (meta.get('settings') or {}).get('record_inputs'):
@@ -290,6 +309,17 @@ class ReviewAPI:
         try:
             contained_file(self._folder, 'session.json')
             return {'ok': True, 'data': rename_session_metadata(self._folder, name)}
+        except Exception as error:
+            return {'ok': False, 'error': _safe_error(error)}
+
+    def set_input_offset(self, seconds):
+        try:
+            if seconds is not None and (not _number(seconds) or abs(seconds) > 30):
+                raise ValueError('操作同步偏移需在 -30 到 30 秒之间。')
+            contained_file(self._folder, 'session.json')
+            from session_metadata import update_metadata
+            meta = update_metadata(self._folder, {'input_offset_seconds': None if seconds is None else round(seconds, 6)})
+            return {'ok': True, 'data': input_alignment(meta)}
         except Exception as error:
             return {'ok': False, 'error': _safe_error(error)}
 

@@ -36,3 +36,11 @@
 机器可读几何证据与截图保存在忽略的 `work/review-aspect/acceptance.json` 及同目录 PNG。重新运行会刷新这些合成证据；可以通过 `TAR_ASPECT_OUTPUT` 指定其他输出目录，通过 `PLAYWRIGHT_MODULE` 指向现有 Playwright。
 
 以上证明浏览器内实际布局与交互，不等同于原生 WebView2 窗口、打包应用、OBS 或用户安装验收。测试视频和逐字稿均为合成数据。
+
+## 2026-09-23 replacement resize contract
+
+The earlier ratio-preserving column behavior above is historical. Current review opens with a video-width target of at least 900 px when the monitor allows it, then holds the CURRENT left width while window resizing changes the right pane. Only a right-pane minimum (measured header plus at least the ruler and two lanes, floor 280 px) can force the left side narrower. A later enlargement retains that narrowed width rather than restoring 900; manually moving the divider becomes the new current width. Double-click/Enter explicitly reinitializes the fit.
+
+The player and recent-operation card have identical widths. Source pixels retain their ratio with `object-fit: contain`; the player container may use black bars when height-constrained or displaying unusual aspect ratios. Native review starts at 1440 × 900 within the selected monitor's available area.
+
+Current `tests/test_review_aspect_browser.cjs` verifies this behavior with wide, ultrawide and portrait synthetic media, current-width preservation after manual dragging and repeated resizing, compact breakpoints, and unchanged playback geometry during transcript scrolling. All 10 checks passed; current evidence is `work/review-aspect/acceptance.json`. This browser report does not independently validate native monitor DPI conversion.

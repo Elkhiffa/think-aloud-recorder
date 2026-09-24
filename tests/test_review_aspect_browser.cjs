@@ -101,7 +101,7 @@ async function geometry(page) {
 }
 const close = (a, b, label, tolerance = 1) => assert.ok(Math.abs(a - b) <= tolerance, `${label}: ${a} vs ${b}`);
 function ratioCheck(g) {
-  close(g.slot.width, g.slot.height * g.source[0] / g.source[1], 'slot preserves source ratio');
+  close(g.slot.width,g.input.width,'video and recent operations share one width');close(g.slot.width,g.pane.width,'player occupies left pane');assert.ok(g.slot.height<=g.pane.height-g.reservedHeight+1,'player respects available height');
   close(g.video.width, g.slot.width, 'video width matches its slot'); close(g.video.height, g.slot.height, 'video height matches its slot');
   close(g.slot.y, g.pane.y, 'slot is top-aligned'); assert.equal(g.objectFit, 'contain');
   assert.ok(g.file.bottom <= g.pane.bottom + 1, 'file controls remain in their pane');
@@ -113,8 +113,7 @@ function ratioCheck(g) {
 }
 function fittedCheck(g) {
   ratioCheck(g);
-  const desired = Math.max(240, Math.min(g.available - 320, (g.pane.height - g.reservedHeight) * g.source[0] / g.source[1]));
-  close(g.pane.width, desired, 'columns fit the actual source after reserving operation panel and visible status'); assert.ok(g.text.width >= 319, 'text retains a readable initial width');
+  assert.ok(g.text.width>=279,'right pane retains header and at least ruler plus two lanes');
 }
 async function screen(page, name) { await page.screenshot({ path: path.join(output, name + '.png'), animations: 'disabled' }); evidence.screenshots.push(name + '.png'); }
 async function openPage(context, source, options = {}) {
@@ -134,11 +133,11 @@ async function openPage(context, source, options = {}) {
 }
 async function run(context) {
   for (const source of Object.keys(sources)) {
-    await check(`${source}: actual source dimensions determine initial columns; stale saved columns ignored`, async () => {
+    await check(`${source}: first-open width at least 900 and contain preserves source pixels; stale ratio ignored`, async () => {
       const page = await openPage(context, source);
       try {
         const g = await geometry(page); assert.deepEqual(g.source, sources[source]); fittedCheck(g);
-        close(g.viewport.width, 1240, 'fixed outer width'); close(g.viewport.height, 900, 'fixed outer height');
+        assert.ok(g.pane.width>=899,'first-open video width is at least 900 when space allows');close(g.viewport.width, 1440, 'fixed outer width'); close(g.viewport.height, 900, 'fixed outer height');
         assert.ok(Math.abs(g.pane.width / g.available - .24) > .02, 'source fit overrides the saved split');
         await screen(page, `${source}-1240x900`);
         const before = g.slot;
@@ -172,10 +171,10 @@ async function run(context) {
       await page.waitForFunction(() => document.querySelector('video').videoWidth === 540); await settle(page);
       const changedSource = await geometry(page); ratioCheck(changedSource);
       close(changedSource.pane.width, dragged.pane.width, 'real replacement metadata preserves manual split');
-      const sizes = [];
+      const sizes = [];let previousWidth=dragged.pane.width;
       for (const size of [{ width: 1440, height: 840 }, { width: 1050, height: 700 }, { width: 1240, height: 900 }]) {
         await page.setViewportSize(size); await settle(page); const g = await geometry(page); ratioCheck(g);
-        close(g.pane.width / g.available, share, 'resize preserves manual share', .002); sizes.push(g);
+        close(g.pane.width,Math.min(previousWidth,g.available-280),'right pane absorbs resize before left shrinks');previousWidth=g.pane.width;sizes.push(g);
       }
       await page.locator('#reviewSplitter').dblclick(); await settle(page); fittedCheck(await geometry(page));
       await page.locator('#reviewSplitter').press('ArrowLeft'); await settle(page);
@@ -243,7 +242,7 @@ async function run(context) {
   await check('missing metadata retains bounded saved-column fallback', async () => {
     const page = await openPage(context, 'missing', { skipReady: true, saved: { columns: .4, rows: .54 } });
     try {
-      const g = await geometry(page); assert.deepEqual(g.source, [0, 0]); close(g.pane.width / g.available, .4, 'saved fallback', .002);
+      const g = await geometry(page); assert.deepEqual(g.source, [0, 0]); close(g.pane.width,Math.min(900,g.available-280),'bounded first-open target',1);
       assert.equal(await page.locator('.video-slot').evaluate(node => node.classList.contains('source-aspect')), false); return g;
     } finally { await page.close(); }
   });
@@ -254,7 +253,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true, channel: process.env.TAR_UI_CHANNEL || 'msedge' });
   try {
     await makeMedia(browser);
-    const context = await browser.newContext({ viewport: { width: 1240, height: 900 }, deviceScaleFactor: 1 });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
     context.setDefaultTimeout(6000);
     context.on('page', page => page.on('pageerror', error => evidence.errors.push(error.message)));
     await context.route('**/*', route => {

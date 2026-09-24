@@ -25,7 +25,8 @@ MAX_FILE = 1024**3
 MAX_ENTRIES = 30000
 MAX_MANIFEST = 16 * 1024**2
 MAX_PORTABLE_METADATA = 256 * 1024
-REQUIRED = {'portable.json', 'ExperienceRecorder.exe', 'portable_entry.py', 'app.py',
+LAUNCHERS = ('Think Aloud.exe', 'ExperienceRecorder.exe')
+REQUIRED = {'portable.json', 'portable_entry.py', 'app.py',
             'runtime/python.exe', 'runtime/pythonw.exe', 'ui/index.html'}
 HIDDEN = 0x08000000 if os.name == 'nt' else 0
 RECOVERY_ENTRY = '恢复更新前版本.cmd'
@@ -76,7 +77,7 @@ def managed_path(name):
     if lower.startswith(('state/', 'models/', 'staging/', 'tools/obs/config/')): return False
     if lower.startswith('vocabularies/'): return lower == 'vocabularies/uiux-terms.txt'
     if '/' not in name:
-        return lower.endswith('.py') or lower in {'experiencerecorder.exe', 'portable.json',
+        return lower.endswith('.py') or lower in {'think aloud.exe', 'experiencerecorder.exe', 'portable.json',
             'package-manifest.json', 'dependency-source-manifest.json', 'model-manifest.json',
             'requirements-lock.txt', 'license', 'third_party_notices.md', 'readme.md', 'player.html'}
     return lower.startswith(('runtime/', 'ui/', 'licenses/', 'docs/', 'scripts/', 'tools/input/',
@@ -113,7 +114,8 @@ def inventory(value):
                 or not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest)):
             raise UpdateError('软件包清单含重复、受保护或无效文件。')
         aliases.add(name.casefold()); result[name] = {'path': name, 'bytes': size, 'sha256': digest}
-    if sum(r['bytes'] for r in result.values()) > MAX_EXPANDED or not REQUIRED <= result.keys():
+    if (sum(r['bytes'] for r in result.values()) > MAX_EXPANDED or not REQUIRED <= result.keys()
+            or not any(name in result for name in LAUNCHERS)):
         raise UpdateError('软件包不完整或展开后过大。')
     return result
 
@@ -438,9 +440,23 @@ def acknowledge_start(root):
             atomic_json(path,info)
 
 
+def launcher_path(root):
+    # Select only a launcher owned by the current manifest. In particular, do
+    # not execute a same-name personal file beside an older installation.
+    root = Path(root)
+    records = inventory(read_json(child(root, 'package-manifest.json')))
+    for name in LAUNCHERS:
+        if name in records:
+            path = child(root, name)
+            if not path.is_file() or sha256(path) != records[name]['sha256']:
+                raise UpdateError('启动程序校验失败。')
+            return path
+    raise UpdateError('软件包缺少启动程序。')
+
+
 def self_check(root, work):
     report=Path(work)/'installed-self-check.json'
-    process=subprocess.Popen([str(Path(root)/'ExperienceRecorder.exe'),'--self-check','--report',str(report)],
+    process=subprocess.Popen([str(launcher_path(root)),'--self-check','--report',str(report)],
                           cwd=root,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
                           creationflags=HIDDEN)
     try:code=process.wait(timeout=120)
@@ -499,7 +515,7 @@ def run_job(path, *, recover=False, launch=True, parent_timeout=180, checker=sel
                     return plan
                 status(plan,'awaiting_start' if launch else 'installed','新版本文件及环境检查通过；旧版本备份保留。')
         if launch:
-            process=subprocess.Popen([str(root/'ExperienceRecorder.exe')],cwd=root,stdin=subprocess.DEVNULL,
+            process=subprocess.Popen([str(launcher_path(root))],cwd=root,stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,creationflags=HIDDEN)
             deadline=time.monotonic()+45
             while time.monotonic()<deadline:
