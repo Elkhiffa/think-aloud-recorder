@@ -173,3 +173,28 @@ assert.equal(input.playheadDirection(3,3,5),0);
 assert.equal(input.playheadDirection(8,3,5),0);
 assert.equal(input.playheadDirection(8.1,3,5),1);
 console.log('Strict hold threshold and offscreen playhead boundaries passed.');
+assert.equal(input.visibleLabelTop(2,8,0,64),0);
+assert.equal(input.visibleLabelTop(2,8,3,64),64);
+assert.equal(input.visibleLabelTop(2,8,7.9,64),356);
+assert.equal(input.visibleLabelTop(2,8,3,128),128);
+assert.equal(input.visibleLabelTop(2,2.6,2.5,12),0);
+const uniformGrid=input.packInputIntervals([
+ {id:'e',device:'keyboard',code:'E',kind:'button',start:0,end:8},
+ {id:'shift',device:'keyboard',code:'ShiftLeft',kind:'button',start:1,end:1.1},
+ {id:'options',device:'dualsense',code:'Options',kind:'button',start:1,end:1.1},
+ {id:'tap',device:'xbox',code:'X',kind:'button',start:1.05,end:1.1},
+]);
+assert.equal(uniformGrid.widths.other.length,4);
+assert.equal(new Set(uniformGrid.widths.other).size,1);
+assert.ok(uniformGrid.widths.other[0]>=68);
+console.log('Sticky hold labels clamp at their own ends and ordinary key lanes share one width.');
+const fadePress={start:1,end:2};
+assert.equal(input.inputHighlight(fadePress,.9),0);
+assert.equal(input.inputHighlight(fadePress,1.5),1);
+close(input.inputHighlight(fadePress,2),.7);
+close(input.inputHighlight(fadePress,3),.35);
+assert.equal(input.inputHighlight(fadePress,4),0);
+assert.equal(input.inputHighlight(fadePress,5),0);
+assert.equal(input.inputHighlight(null,1),0);
+assert.equal(input.inputHighlight({...fadePress,start:3,end:3.5},3.1),1);
+console.log('Device afterimages fade independently over two media seconds and reset on re-press.');

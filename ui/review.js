@@ -90,6 +90,9 @@
       widths[channel][lane]=Math.max(widths[channel][lane]||0,width);
       return {...item,channel,lane,displayEnd};
     });
+    // One shared grid for ordinary keys: a longer name must not widen only its lane.
+    const keyWidth=widths.other.reduce((largest,width)=>Math.max(largest,width),36);
+    widths.other=widths.other.map(()=>keyWidth);
     return {items,counts,widths};
   }
   function intervalIndex(items,endKey='end'){
@@ -130,7 +133,9 @@
     return ['button','trigger'].includes(item.kind)&&!item.activity&&item.end-item.start>.5+1e-9;
   }
   function playheadDirection(time,viewStart,span){return time<viewStart-1e-6?-1:time>viewStart+span+1e-6?1:0;}
-  if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds,sourceFit,inputChannel,axisDirection,normalizeInputs,inputLabel,inputVisualBands,inputSampleAt,packInputIntervals,intervalIndex,intervalsInRange,meaningfulDevice,recentInputs,anchoredZoom,timelinePointerTime,timelineGesture,isLongPress,playheadDirection};return;}
+  function visibleLabelTop(start,end,viewStart,scale,height=28){return Math.max(0,Math.min((viewStart-start)*scale,Math.max(0,(end-start)*scale-height)));}
+  function inputHighlight(item,time){if(!item||time<item.start)return 0;return time<item.end?1:Math.max(0,1-(time-item.end)/2)*.7;}
+  if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds,sourceFit,inputChannel,axisDirection,normalizeInputs,inputLabel,inputVisualBands,inputSampleAt,packInputIntervals,intervalIndex,intervalsInRange,meaningfulDevice,recentInputs,anchoredZoom,timelinePointerTime,timelineGesture,isLongPress,playheadDirection,visibleLabelTop,inputHighlight};return;}
   const data=JSON.parse(document.getElementById('review-data').textContent);
   const $=id=>document.getElementById(id),video=$('video'),lines=$('lines');
   let segments=Array.isArray(data.segments)?data.segments:[],nodes=[],inputUI=null;
@@ -467,16 +472,23 @@
     return `<svg class="controller ${ps?'dualsense':'xbox'}" viewBox="0 0 460 211" role="img" aria-label="${deviceName(device)} 设备图"><path class="controller-shell" d="M120 44C101 44 84 53 79 76L60 163c-5 24 14 36 30 23l44-41h192l44 41c16 13 35 1 30-23l-19-87c-5-23-22-32-41-32Z"/>${control(ps?'L2':'LT','rect',ps?'L2':'LT',137,13)}${control(ps?'R2':'RT','rect',ps?'R2':'RT',323,13)}<rect class="trigger-meter" data-meter="${ps?'L2':'LT'}" x="113" y="20" width="0" height="3" rx="1"/><rect class="trigger-meter" data-meter="${ps?'R2':'RT'}" x="299" y="20" width="0" height="3" rx="1"/>${control(ps?'L1':'LB','rect',ps?'L1':'LB',137,39)}${control(ps?'R1':'RB','rect',ps?'R1':'RB',323,39)}${ps?'<rect class="controller-detail" x="178" y="59" width="104" height="41" rx="7"/>':'<circle class="controller-detail" cx="230" cy="73" r="12"/><text class="minor-label" x="230" y="73">X</text>'}${stick('LeftStick',ps?181:128,ps?130:88)}${stick('RightStick',279,130)}${dpad(ps?126:183,ps?94:132)}${symbols.map(([code,label,x,y])=>control(code,'circle',label,x,y)).join('')}<text class="controller-name" x="230" y="192">${ps?'DualSense':'Xbox'}</text></svg>`;
   }
   let renderedDevice = '';
-  function renderDevice(device,active) {
+  function renderDevice(device,active,time) {
     if (renderedDevice !== device) { $('deviceView').innerHTML = device === 'keyboard' ? keyboardMarkup() : controllerMarkup(device); renderedDevice = device; }
     const visible = active.filter(item => group(item.device) === device);
     const aliases={ShiftLeft:'Shift',ControlLeft:'Control',AltLeft:'Alt',WinLeft:'Meta',BracketLeft:'[',BracketRight:']',Semicolon:';',Comma:',',Period:'.',DPadUp:'DpadUp',DPadDown:'DpadDown',DPadLeft:'DpadLeft',DPadRight:'DpadRight',LS:'LeftStick',L3:'LeftStick',RS:'RightStick',R3:'RightStick'};
     const diagramCode=item=>aliases[item.code]||(item.device==='keyboard'?item.code.replace(/^Key/, ''):item.code);
     const byCode = new Map(visible.map(item => [diagramCode(item),item]));
-    $('deviceView').querySelectorAll('[data-control]').forEach(el => { const item=byCode.get(el.dataset.control); el.classList.toggle('active',!!item?.active);el.classList.toggle('recent',!!item&&!item.active); if(item?.kind==='motion') el.textContent=item.direction||'↗'; });
-    $('deviceView').querySelectorAll('[data-meter]').forEach(el => el.setAttribute('width',String(48*(byCode.get(el.dataset.meter)?.value||0))));
-    $('deviceView').querySelectorAll('[data-arrow]').forEach(el => { const item=byCode.get(el.dataset.arrow); el.classList.toggle('active',item?.kind==='axis'&&item.active);el.classList.toggle('recent',item?.kind==='axis'&&!item.active); const angle = {'↑':0,'↗':45,'→':90,'↘':135,'↓':180,'↙':225,'←':270,'↖':315}[item?.direction]||0; const circle=$('deviceView').querySelector(`[data-control="${el.dataset.arrow}"]`); el.setAttribute('transform',`rotate(${angle} ${circle.getAttribute('cx')} ${circle.getAttribute('cy')})`); });
-    const controls=new Set([...$('deviceView').querySelectorAll('[data-control]')].map(el=>el.dataset.control));let extras=$('deviceView').querySelector('.device-extra');if(!extras){extras=document.createElement('div');extras.className='device-extra';$('deviceView').append(extras);}extras.innerHTML=visible.filter(item=>!controls.has(diagramCode(item))).map(item=>`<span class="keycap ${item.active?'active':'recent'}" title="${escape(item.label||item.code)}">${glyph(item)}</span>`).join('');extras.hidden=!extras.childElementCount;
+    const highlight=(el,item)=>{
+      const strength=inputHighlight(item,time);el.classList.toggle('active',!!item?.active);el.classList.toggle('recent',!!item&&!item.active);
+      el.style.setProperty('--input-strength',strength.toFixed(3));el.style.setProperty('--input-intensity',(strength*100).toFixed(1)+'%');
+    };
+    $('deviceView').querySelectorAll('[data-control]').forEach(el => { const item=byCode.get(el.dataset.control);highlight(el,item);if(item?.kind==='motion')el.textContent=item.direction||'↗'; });
+    $('deviceView').querySelectorAll('[data-meter]').forEach(el => {const item=byCode.get(el.dataset.meter);highlight(el,item);el.setAttribute('width',String(48*(item?.value||0)));});
+    $('deviceView').querySelectorAll('[data-arrow]').forEach(el => { const item=byCode.get(el.dataset.arrow);highlight(el,item?.kind==='axis'?item:null);const angle = {'↑':0,'↗':45,'→':90,'↘':135,'↓':180,'↙':225,'←':270,'↖':315}[item?.direction]||0; const circle=$('deviceView').querySelector(`[data-control="${el.dataset.arrow}"]`); el.setAttribute('transform',`rotate(${angle} ${circle.getAttribute('cx')} ${circle.getAttribute('cy')})`); });
+    const controls=new Set([...$('deviceView').querySelectorAll('[data-control]')].map(el=>el.dataset.control));let extras=$('deviceView').querySelector('.device-extra');if(!extras){extras=document.createElement('div');extras.className='device-extra';$('deviceView').append(extras);}
+    const extraKeys=[...byCode].filter(([code])=>!controls.has(code)),signature=extraKeys.map(([code,item])=>code+'/'+item.id).join('|');
+    if(extras.dataset.signature!==signature){extras.dataset.signature=signature;extras.innerHTML=extraKeys.map(([code,item])=>`<span class="keycap" data-extra-code="${escape(code)}" title="${escape(item.label||item.code)}">${glyph(item)}</span>`).join('');}
+    extras.querySelectorAll('[data-extra-code]').forEach(el=>highlight(el,byCode.get(el.dataset.extraCode)));extras.hidden=!extras.childElementCount;
   }
 
     function renderInput(time){
@@ -486,13 +498,16 @@
       const active=recentInputs(index,time);
       const device=state.device==='auto'?meaningfulDevice(source.intervals,time):state.device;
       const message=active.length?'':gap?gapName(gap):inputMessage();
-      const key=[state.mode,device,message,...active.map(item=>item.id+':'+item.active)].join('|');if(key===state.lastInput)return;state.lastInput=key;
+      // Diagram color is media-time evidence, not a wall-clock CSS animation.
+      // Refresh it even when the set of recent keys has not changed.
+      const key=[state.mode,device,message,...active.map(item=>item.id+':'+item.active)].join('|');
+      if(state.mode==='device'&&(key!==state.lastInput||active.some(item=>!item.active)))renderDevice(device,active,time);
+      if(key===state.lastInput)return;state.lastInput=key;
       $('inputSource').textContent=source.intervals.length?deviceName(device):'操作记录';
-      $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):active.length?'按住时高亮 · 松开后保留 2 秒':'最近 2 秒无操作';
+      $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):active.length?(state.mode==='device'?'按住时高亮 · 松开后 2 秒内渐淡':'按住时高亮 · 松开后保留 2 秒'):'最近 2 秒无操作';
       $('inputState').classList.toggle('is-gap',!!gap);$('inputState').title=message;
       $('currentKeys').hidden=state.mode!=='keys'||!!message;$('deviceView').hidden=state.mode!=='device'||!!message;
       $('currentKeys').innerHTML=active.map(item=>`<div class="current-item" data-recent-id="${escape(item.id)}"><span class="keycap ${item.active?'active':'recent'}">${glyph(item)}</span><span>${escape(/^D[Pp]ad/.test(item.code)?'十字键':item.label||item.code)}${item.value!=null&&item.kind!=='button'?` · ${Math.round(item.value*100)}%`:''}</span></div>`).join('');
-      if(state.mode==='device')renderDevice(device,active);
     }
     document.querySelectorAll('[data-input-mode]').forEach(button=>button.onclick=()=>{state.mode=button.dataset.inputMode;document.querySelectorAll('[data-input-mode]').forEach(node=>node.setAttribute('aria-pressed',String(node===button)));$('inputBody').hidden=state.mode==='collapsed';$('deviceSelectLabel').hidden=state.mode!=='device';$('inputPanel').classList.toggle('is-collapsed',state.mode==='collapsed');state.lastInput='';renderInput(video.currentTime);});
     $('deviceSelect').onchange=event=>{state.device=event.target.value;state.lastInput='';renderInput(video.currentTime);};
@@ -532,8 +547,13 @@
     }
     function heldSections(item){
       if(!item.activity||!item.samples)return '';
-      return intervalsInRange(item.sampleIndex,state.viewStart-1,state.viewStart+timeline.clientHeight/state.scale+1)
+      return intervalsInRange(item.sampleIndex,renderStart,state.viewStart+timeline.clientHeight/state.scale*1.5)
         .filter(isLongPress).map(sample=>`<span class="held-section" data-held-id="${escape(sample.id)}" style="top:${(sample.start-item.start)*state.scale}px;height:${(sample.end-sample.start)*state.scale}px" aria-hidden="true"></span>`).join('');
+    }
+    function holdLabels(item){
+      // Non-fixed single holds already use the bar's ordinary sticky key label.
+      const holds=item.activity?intervalsInRange(item.sampleIndex,renderStart,state.viewStart+timeline.clientHeight/state.scale*1.5).filter(isLongPress):item.fixed&&isLongPress(item)?[item]:[];
+      return holds.map(sample=>`<span class="hold-label" data-held-start="${sample.start}" data-held-end="${sample.end}" data-held-code="${escape(inputLabel(sample))}" style="top:${(sample.start-item.start)*state.scale}px" aria-hidden="true">${glyph(sample)}</span>`).join('');
     }
     function rebuild(){
       if(packedScale!==state.scale)repack();
@@ -543,7 +563,7 @@
       const tickStep=state.scale<24?5:state.scale<46?2:1,ticks=[];
       for(let t=Math.ceil(renderStart/tickStep)*tickStep;t<=end;t+=tickStep)ticks.push(`<div class="time-tick" style="top:${(t-renderStart)*state.scale}px"><time>${formatTime(t)}</time></div>`);
       $('timelineTicks').innerHTML=ticks.join('').replace(/<time>.*?<\/time>/g,'');ruler.innerHTML=ticks.join('');
-      $('timelineInputs').innerHTML=visible.map(item=>{const c=column(item,g);return `<button class="key-bar${isLongPress(item)?' long-press':''}${item.activity?' activity-band':''}${item.fixed?' fixed-band':''}${item.end===item.start?' instant':''}" data-input-id="${escape(item.id)}" data-start="${item.start}" data-end="${item.end}" data-lane="${item.lane}" data-channel="${item.channel}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.displayEnd-item.start)*state.scale}px;left:${c.left}px;width:${c.width}px" aria-label="${escape(`${deviceName(group(item.device))} ${item.label||item.code}，${isLongPress(item)?'长按，':''}${clock(item.start)} 至 ${clock(item.end)}，点击定位`)}" aria-describedby="inputDetail"><span class="bar-glyph">${glyph(item)}</span><span class="bar-duration" style="height:${Math.max(1,(item.end-item.start)*state.scale)}px" aria-hidden="true"></span>${heldSections(item)}${inputMarks(item)}</button>`;}).join('');
+      $('timelineInputs').innerHTML=visible.map(item=>{const c=column(item,g);return `<button class="key-bar${isLongPress(item)?' long-press':''}${item.activity?' activity-band':''}${item.fixed?' fixed-band':''}${item.end===item.start?' instant':''}" data-input-id="${escape(item.id)}" data-start="${item.start}" data-end="${item.end}" data-lane="${item.lane}" data-channel="${item.channel}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.displayEnd-item.start)*state.scale}px;left:${c.left}px;width:${c.width}px" aria-label="${escape(`${deviceName(group(item.device))} ${item.label||item.code}，${isLongPress(item)?'长按，':''}${clock(item.start)} 至 ${clock(item.end)}，点击定位`)}" aria-describedby="inputDetail"><span class="bar-glyph">${glyph(item)}</span><span class="bar-duration" style="height:${Math.max(1,(item.end-item.start)*state.scale)}px" aria-hidden="true"></span>${heldSections(item)}${inputMarks(item)}${holdLabels(item)}</button>`;}).join('');
       $('timelineSpeech').innerHTML=quotes.map(item=>`<button class="quote-bar${state.pinned&&state.quote===item.index?' pinned':''}" data-quote="${item.index}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.end-item.start)*state.scale}px;left:${g.time+7}px;width:${g.speech-14}px" aria-label="原话 ${item.index+1}，${clock(item.start)}，点击固定全文">${quoteIcon}<span>${String(item.index+1).padStart(2,'0')}</span></button>`).join('');
       $('timelineGaps').innerHTML=gaps.map(gap=>`<div class="timeline-gap" style="top:${(gap.start-renderStart)*state.scale}px;height:${(gap.end-gap.start)*state.scale}px;left:${g.time+g.speech}px" title="${escape(gap.reason||gapName(gap))}"><span>${escape(gapName(gap))}</span></div>`).join('');
       $('timelineInputs').querySelectorAll('button').forEach(button=>{const item=displayed.get(button.dataset.inputId);
@@ -573,7 +593,7 @@
       popover.hidden=false;popover.classList.toggle('is-pinned',pinned);
       quoteHeading.title=pinned?'拖动移动原话；方向键微调位置':'';
       $('quoteTime').tabIndex=pinned?0:-1;
-      if(keepPosition)clampQuote();else{const rect=anchor.getBoundingClientRect();placeQuote(rect.right+12,rect.top);}
+      if(keepPosition)clampQuote();else{const rect=anchor.getBoundingClientRect();placeQuote(rect.left-popover.offsetWidth-12,rect.top);}
       $('timelineSpeech').querySelectorAll('button').forEach(button=>button.classList.toggle('pinned',pinned&&Number(button.dataset.quote)===i));
     }
     function endQuoteDrag(event){
@@ -628,8 +648,25 @@
           label.style.transform=`translateY(${Math.max(0,(time-start)*state.scale-14)}px)`;
           if(sample){const signature=sample.code+'/'+sample.direction;if(label.dataset.direction!==signature){label.innerHTML=glyph(sample);label.dataset.direction=signature;}}
         }else{
-          const labelTop=Math.max(0,Math.min((state.viewStart-start)*state.scale,(item.displayEnd-start)*state.scale-28));label.style.transform=`translateY(${labelTop}px)`;
+          const labelTop=visibleLabelTop(start,item.displayEnd,state.viewStart,state.scale);label.style.transform=`translateY(${labelTop}px)`;
         }
+        // Labels stay above fills and within their own physical hold. At a
+        // clipped tail they slide out with the bar instead of floating in space.
+        let previous=null;const labels=[];
+        button.querySelectorAll('.hold-label').forEach(header=>{
+          const heldStart=Number(header.dataset.heldStart),heldEnd=Number(header.dataset.heldEnd);
+          const top=(heldStart-start)*state.scale+visibleLabelTop(heldStart,heldEnd,state.viewStart,state.scale);
+          header.style.top=top+'px';header.style.height=Math.min(28,(heldEnd-heldStart)*state.scale)+'px';header.hidden=heldEnd<=state.viewStart||heldStart>=state.viewStart+span;
+          if(header.hidden)return;
+          // Overlapping WASD holds share a header rather than drawing letters
+          // on top of each other. Current direction remains at the playhead.
+          if(item.fixed&&item.device==='keyboard'){
+            if(previous&&Math.abs(top-previous.top)<28){previous.codes.add(header.dataset.heldCode);previous.header.textContent=[...previous.codes].join('');header.hidden=true;return;}
+            previous={top,header,codes:new Set([header.dataset.heldCode])};header.textContent=header.dataset.heldCode;
+          }
+          labels.push(top);
+        });
+        if(!item.fixed){const top=visibleLabelTop(start,item.displayEnd,state.viewStart,state.scale);label.hidden=labels.some(heldTop=>Math.abs(heldTop-top)<28);}
       });
       $('timelineSpeech').querySelectorAll('button').forEach(button=>{const s=segments[Number(button.dataset.quote)];button.classList.toggle('active',s.start<=time&&time<s.end);});
       $('timelineScale').textContent=(state.scale/64).toFixed(1)+'×';
