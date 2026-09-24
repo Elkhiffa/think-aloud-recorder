@@ -2,11 +2,12 @@
 
 ## OBS smoke tests and Windows Firewall prompts
 
-Use one fixed, isolated OBS executable location per development machine. Keep
-per-run reports and synthetic output in separately named evidence directories,
-instead of copying OBS to a new executable path for every attempt. Serialize
-these tests and retain the exact process ownership and cleanup checks. Do not
-use the user's recorder installation or personal OBS as a test runtime.
+Use isolated OBS copies for development tests. A fresh executable path can prompt
+for Windows Firewall access; the user accepts these prompts during testing.
+Reusing a fixed test location is optional. Keep per-run reports and synthetic
+output in separately named evidence directories. Serialize these tests and
+retain the exact process ownership and cleanup checks. Do not use the user's
+recorder installation or personal OBS as a test runtime.
 
 The bundled OBS WebSocket server enables local app control. OBS 32.2.2 listens
 on wildcard interfaces and has no supported loopback-only setting; selecting
@@ -14,7 +15,10 @@ IPv4-only does not change that. The recorder connects to `127.0.0.1` with
 authentication, but that client address does not restrict server binding.
 Ordinary [Windows Firewall application rules](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules)
 match full executable paths, so fresh test/install locations can trigger new
-network-access prompts. Keep the user installation path stable during updates.
+network-access prompts. Official installations should keep the same OBS executable
+path across ordinary launches and in-place updates. This avoids prompts caused by
+version-specific installation folders; do not claim that it overrides Windows
+policy or guarantees silence after a user or administrator changes firewall rules.
 Never suppress these prompts by changing firewall settings or adding rules
 without explicit authorization. A loopback-only third-party build requires a
 separately reviewed dependency-build and redistribution change.
