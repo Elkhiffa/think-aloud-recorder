@@ -47,6 +47,10 @@ class VaultReuseRequired(ValueError):
     pass
 
 
+class _ReadinessPaused(Exception):
+    """Stop automatic OBS work at an I/O boundary; cleanup remains allowed."""
+
+
 class DesktopService:
     def __init__(self, root=None):
         self.root = Path(root or recorder.ROOT).resolve()
@@ -56,9 +60,13 @@ class DesktopService:
         self._shutdown_lock = threading.Lock()
         self._obs_shutdown_result = None
         self._readiness_thread = None
+        self._readiness_pending = False
         self._dialog_open = False
         self._startup_launch_attempted = False
         self._window = None
+        self._main_foreground_probe = lambda: False
+        self._main_activation_generation = 0
+        self._automatic_readiness = threading.local()
         self._job = None
         self._background_jobs = {}
         self._background_history = {}
@@ -100,6 +108,52 @@ class DesktopService:
     def set_window(self, window):
         self._window = window
         return ok()
+
+    def set_main_foreground_probe(self, probe):
+        self._main_foreground_probe = probe
+
+    def _main_is_foreground(self):
+        try:
+            return not self._closed.is_set() and self._main_foreground_probe() is True
+        except Exception:
+            return False
+
+    def main_activation_changed(self):
+        with self._lock:
+            self._main_activation_generation += 1
+        if self._main_is_foreground():
+            self._request_readiness(invalidate=True)
+        else:
+            self._defer_readiness()
+
+    def _automatic_probe_allowed(self):
+        if not getattr(self._automatic_readiness, 'foreground_only', False):
+            return True
+        generation = getattr(self._automatic_readiness, 'generation', None)
+        if not self._main_is_foreground():
+            return False
+        with self._lock:
+            return generation == self._main_activation_generation
+
+    def _defer_readiness(self):
+        with self._lock:
+            self._readiness.update(ready=False, checking=False, checked_at=None)
+            return deepcopy(self._readiness)
+
+    def _run_automatic_readiness(self, *, invalidate=True, generation=None):
+        if generation is None:
+            with self._lock:
+                generation = self._main_activation_generation
+        self._automatic_readiness.generation = generation
+        self._automatic_readiness.foreground_only = True
+        try:
+            if not self._automatic_probe_allowed():
+                return self._defer_readiness()
+            self._initialize_obs_once()
+            return self._update_readiness(invalidate=invalidate)
+        finally:
+            self._automatic_readiness.foreground_only = False
+            self._automatic_readiness.generation = None
 
     def _safe_text(self, value):
         text = str(value or '')
@@ -162,7 +216,7 @@ class DesktopService:
                         self._activity['active_id'] = self._active.meta['id'] if self._active else None
                         if self._active is not None:
                             self._readiness.update(ready=False, checking=False)
-                        elif kind == 'saving':
+                        elif kind in ('saving', 'recovery'):
                             # Resume the next-recording CTA immediately after
                             # native stop, rather than waiting for the 5s poll.
                             self._request_readiness(invalidate=True)
@@ -365,25 +419,44 @@ class DesktopService:
         self._recover()
         with self._lock:
             self._activity['kind'] = 'devices'
+        self._run_automatic_readiness()
+
+    def _initialize_obs_once(self):
+        if not self._automatic_probe_allowed():
+            return
+        with self._lock:
             initialize = (not self._closed.is_set() and not self._startup_launch_attempted and self._cfg.get('configured')
                           and self._cfg.get('active_preset_id') and self._active is None
-                          and not self._obs_uncertain and not self._uncertain_ids
-                          and (self.root / 'tools/obs/bin/64bit/obs64.exe').is_file())
-            if initialize:
-                self._startup_launch_attempted = True
-        if initialize and not self._closed.is_set():
+                          and not self._obs_uncertain and not self._uncertain_ids)
+        if not initialize or not (self.root / 'tools/obs/bin/64bit/obs64.exe').is_file():
+            return
+        with self._lock:
+            # The filesystem check can outlast a foreground interval. Reserve
+            # the one-shot attempt only when this generation can still connect.
+            if (not self._automatic_probe_allowed() or self._closed.is_set()
+                    or self._startup_launch_attempted or self._active is not None
+                    or self._obs_uncertain or self._uncertain_ids):
+                return
+            self._startup_launch_attempted = True
+        if not self._closed.is_set():
             try:
                 # The existing client connects before considering a launch and
                 # never launches another instance after a readiness failure.
-                with recorder.obs_connection(launch=True, progress=self._progress):
+                with recorder.obs_connection(launch=True, progress=self._progress,
+                                             continue_if=self._automatic_probe_allowed):
                     pass
+            except recorder.ObsOperationCancelled:
+                # An interrupted handshake has not used the startup attempt.
+                # If OBS was already spawned, its ownership receipt makes the
+                # next activation reconnect to that same child.
+                with self._lock:
+                    self._startup_launch_attempted = False
             except Exception:
                 # The following actual probe supplies the actionable readiness
                 # error. Routine checks never repeat this automatic launch.
                 pass
-        readiness = self._update_readiness()
         with self._lock:
-            if initialize and readiness['ready'] and self._activity['status'] == '待开始':
+            if initialize and self._activity['status'] == '待开始':
                 self._activity['detail'] = ''
 
     def _readiness_is_fresh(self):
@@ -444,36 +517,51 @@ class DesktopService:
         Never switch profiles/collections, configure capture, or stop outputs.
         Service jobs hold the same operation lock, so Start cannot interleave.
         """
-        if self._closed.is_set():
-            return None, ('CLOSING', '正在关闭。')
-        client = recorder.client(False)
+        def check():
+            if self._closed.is_set():
+                raise _ReadinessPaused('CLOSING', '正在关闭。')
+            if not self._automatic_probe_allowed():
+                raise _ReadinessPaused('READINESS_PAUSED', '回到记录器窗口后自动检查录制条件。')
+
+        def request(operation, *args, **kwargs):
+            # Every preceding RPC may have blocked while focus left and came
+            # back. A generation check rejects the old task even after return.
+            check()
+            return operation(*args, **kwargs)
+
+        client = None
         temporary = []
         try:
-            if client.get_record_status().output_active or client.get_stream_status().output_active:
+            client = request(recorder.client, False, continue_if=self._automatic_probe_allowed)
+            if request(client.get_record_status).output_active or request(client.get_stream_status).output_active:
                 return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
-            if (client.get_profile_list().current_profile_name != 'Experience'
-                    or client.get_scene_collection_list().current_scene_collection_name != 'Experience'):
+            if (request(client.get_profile_list).current_profile_name != 'Experience'
+                    or request(client.get_scene_collection_list).current_scene_collection_name != 'Experience'):
                 return None, ('OBS_CONFIGURATION', 'OBS 当前不是记录器专用配置，请打开录制预设并刷新设备 / 设置 OBS。')
-            inputs = client.get_input_list().inputs
+            inputs = request(client.get_input_list).inputs
             result = {}
             for key, kind, prop, settings in (
                 ('mic', 'wasapi_input_capture', 'device_id', {'device_id': 'default'}),
                 ('window', 'window_capture', 'window', {}),
                 ('monitor', 'monitor_capture', 'monitor_id', {}),
             ):
-                if self._closed.is_set():
-                    return None, ('CLOSING', '正在关闭。')
+                check()
                 name = next((item['inputName'] for item in inputs if item.get('inputKind') == kind), None)
                 if name is None:
                     # Check again before any temporary input creation. No source
                     # is added when a user has started an output in OBS itself.
-                    if client.get_record_status().output_active or client.get_stream_status().output_active:
+                    if request(client.get_record_status).output_active or request(client.get_stream_status).output_active:
                         return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
                     name = '就绪检查-' + key + '-' + uuid.uuid4().hex
-                    client.create_input('Experience', name, kind, settings, False)
+                    request(client.create_input, 'Experience', name, kind, settings, False)
                     temporary.append(name)
-                result[key] = client.get_input_properties_list_property_items(name, prop).property_items
+                result[key] = request(client.get_input_properties_list_property_items, name, prop).property_items
+            check()
             return result, None
+        except _ReadinessPaused as paused:
+            return None, paused.args
+        except recorder.ObsOperationCancelled:
+            return None, ('READINESS_PAUSED', '回到记录器窗口后自动检查录制条件。')
         finally:
             for name in reversed(temporary):
                 try:
@@ -481,7 +569,8 @@ class DesktopService:
                 except Exception:
                     pass
             try:
-                client.disconnect()
+                if client is not None:
+                    client.disconnect()
             except Exception:
                 pass
 
@@ -499,12 +588,15 @@ class DesktopService:
 
     def _update_readiness(self, *, devices=None, invalidate=True):
         """Called only while holding the operation lock; never under snapshot I/O lock."""
+        if not self._automatic_probe_allowed():
+            return self._defer_readiness()
         with self._lock:
             cfg = deepcopy(self._cfg)
             has_setup = bool(cfg.get('configured') and cfg.get('active_preset_id'))
             blocked = self._active is not None or self._obs_uncertain or bool(self._uncertain_ids)
             self._mark_readiness_checking(invalidate or blocked)
         errors = []
+        window_selection = None
         def error(code, message, step):
             errors.append(dict(code=code, message=self._safe_text(message), step=step))
         try:
@@ -521,6 +613,8 @@ class DesktopService:
                         devices, problem = self._probe_obs_devices()
                         if problem:
                             error(problem[0], problem[1], 1)
+                    if not self._automatic_probe_allowed():
+                        return self._defer_readiness()
                     if devices is not None:
                         self._cache_devices(devices)
                         source = 'window' if cfg.get('source') == '游戏窗口' else 'monitor'
@@ -528,6 +622,14 @@ class DesktopService:
                             value = cfg.get(key)
                             available = any(str(item.get('itemValue')) == str(value) and item.get('itemEnabled', False)
                                             for item in devices.get(key, []))
+                            if key == 'window':
+                                window_selection = recorder.resolve_window_selection(value, devices.get('window', []))
+                                available = window_selection['status'] == 'matched'
+                                if available:
+                                    cfg['window'] = window_selection['resolved']
+                                elif window_selection['status'] == 'ambiguous':
+                                    error('WINDOW_AMBIGUOUS', '同一游戏进程有多个可用窗口，请打开预设并选择要录制的窗口。', 1)
+                                    continue
                             if not value or not available:
                                 label = self._device_label(key, value)
                                 if key == 'mic':
@@ -538,12 +640,16 @@ class DesktopService:
                                     error('MONITOR_UNAVAILABLE', f'显示器“{label}”未连接或不可用。', 1)
                 except Exception:
                     error('OBS_UNAVAILABLE', '无法连接录制引擎。请打开录制预设并刷新设备 / 设置 OBS。', 1)
+            if not self._automatic_probe_allowed():
+                return self._defer_readiness()
             provider = cfg.get('transcription_provider', 'later')
-            if cfg.get('record_inputs'):
+            if cfg.get('record_inputs') and not any(item['code'] in ('WINDOW_UNAVAILABLE', 'WINDOW_AMBIGUOUS') for item in errors):
                 from input_capture import capture_readiness
                 capture = capture_readiness(cfg, self.root)
                 if not capture['ready']:
                     error('INPUT_CAPTURE_UNAVAILABLE', capture['error'], 1)
+            if not self._automatic_probe_allowed():
+                return self._defer_readiness()
             if provider == 'local' and not self._model.resolve_model():
                 error('LOCAL_MODEL_MISSING', '已选本地转写，但模型缺失、已移动或校验失效；请导入 / 下载模型，或改用 Qwen 转写。', 2)
             elif provider == 'qwen' and not self._has_key():
@@ -552,6 +658,8 @@ class DesktopService:
                       '本机保存的云端密钥无法读取或解密，请重新填写密钥。' if exists else '已选云端转写，但尚未保存本机 API Key。', 2)
             elif provider not in ('later', 'local', 'qwen'):
                 error('TRANSCRIPTION_INVALID', '请选择有效转写方式并保存设置。', 2)
+            if not self._automatic_probe_allowed():
+                return self._defer_readiness()
             if has_setup:
                 try:
                     free = self._probe_location(cfg.get('vault', ''))
@@ -566,22 +674,42 @@ class DesktopService:
             # populates the wizard, but absent selections are not user errors yet.
             errors = [dict(code='SETUP_REQUIRED', message='请先完成并保存录制设置。', step=1)]
         with self._lock:
-            self._readiness = dict(ready=not errors, checking=False, errors=errors, checked_at=time.time())
+            if not self._automatic_probe_allowed():
+                return self._defer_readiness()
+            self._readiness = dict(ready=not errors, checking=False, errors=errors, checked_at=time.time(),
+                                   window_selection=window_selection)
             return deepcopy(self._readiness)
 
     def _request_readiness(self, *, invalidate=False):
+        if not self._main_is_foreground():
+            return False
         with self._lock:
-            if (self._closed.is_set() or self._exit_pending or self._active is not None or self._activity['busy']
-                    or (self._readiness_thread and self._readiness_thread.is_alive())):
+            if self._closed.is_set() or self._exit_pending or self._active is not None or self._activity['busy']:
+                return False
+            if self._readiness_thread and self._readiness_thread.is_alive():
+                self._readiness_pending |= invalidate
+                if invalidate:
+                    self._mark_readiness_checking(True)
                 return False
             self._mark_readiness_checking(invalidate)
+            generation = self._main_activation_generation
             def work():
-                with self._operation_lock:
+                try:
+                    with self._operation_lock:
+                        with self._lock:
+                            if (self._closed.is_set() or self._exit_pending or self._active is not None
+                                    or self._activity['busy'] or not self._main_is_foreground()
+                                    or generation != self._main_activation_generation):
+                                self._readiness.update(ready=False, checking=False)
+                                return
+                        self._run_automatic_readiness(invalidate=invalidate, generation=generation)
+                finally:
                     with self._lock:
-                        if self._closed.is_set() or self._exit_pending or self._active is not None or self._activity['busy']:
-                            self._readiness.update(ready=False, checking=False)
-                            return
-                    self._update_readiness(invalidate=invalidate)
+                        pending = self._readiness_pending
+                        self._readiness_pending = False
+                        self._readiness_thread = None
+                    if pending:
+                        self._request_readiness(invalidate=True)
             self._readiness_thread = threading.Thread(target=work, daemon=True, name='idle-readiness')
             self._readiness_thread.start()
             return True
@@ -910,6 +1038,11 @@ class DesktopService:
             readiness = self._update_readiness()
             if not readiness['ready']:
                 raise RuntimeError('\n'.join(item['message'] for item in readiness['errors']))
+            selection = readiness.get('window_selection')
+            if cfg.get('source') == '游戏窗口' and selection and selection['status'] == 'matched':
+                if selection['requested'] != cfg.get('window'):
+                    raise RuntimeError('录制预设已变化，请重新开始录制。')
+                cfg['window'] = selection['resolved']
             try:
                 session = recorder.Session.start(cfg)
                 with self._lock:

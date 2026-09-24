@@ -642,6 +642,48 @@ async function reviewChecks(context, origin) {
   await page.close();
 }
 
+async function windowSelectionChecks(context, origin) {
+  const page = await context.newPage(), state = snapshot();
+  const saved = 'Synthetic:OldClass:game.exe', live = 'Synthetic:NewClass:game.exe';
+  const other = 'Other:OtherClass:other.exe';
+  state.config.window = saved;
+  state.devices.window = [
+    {itemName:'示例游戏（当前窗口）',itemValue:live,itemEnabled:true},
+    {itemName:'另一个游戏窗口',itemValue:other,itemEnabled:true},
+  ];
+  state.readiness.window_selection = {requested:saved,resolved:live,status:'matched',matched_by:'exe_title'};
+  await bridge(page, state); await page.goto(origin + '/ui/index.html');
+  await page.locator('#settingsButton').click();
+  await check('saved game resolves visibly to its current identity without an unavailable placeholder', async () => {
+    assert.equal(await page.locator('#target').inputValue(), live);
+    assert.match(await page.locator('#target option:checked').innerText(), /已匹配当前窗口/);
+    assert.doesNotMatch(await page.locator('#target').innerText(), /当前未找到/);
+    await screen(page, 'saved-game-unique-match');
+  });
+  await check('polling never replaces a manually chosen different game', async () => {
+    await page.locator('#target').selectOption(other);
+    await page.locator('#game').click(); await page.evaluate(() => poll());
+    assert.equal(await page.locator('#target').inputValue(), other);
+  });
+  await check('cancel preserves the original preset and reopens with the current match', async () => {
+    await page.locator('#wizardCancel').click(); await page.locator('#settingsButton').click();
+    assert.equal(await page.locator('#target').inputValue(), live);
+    assert.equal(await page.evaluate(() => window.__syntheticFixture.snapshot.config.window), saved);
+    assert.equal((await calls(page, 'save_preset')).length, 0);
+  });
+  await check('ambiguous matches retain the saved target and never select a candidate automatically', async () => {
+    await patchSnapshot(page, {readiness:{ready:false,checking:false,errors:[{code:'WINDOW_AMBIGUOUS',step:1,message:'检测到多个匹配的游戏窗口，请重新选择。'}],
+      window_selection:{requested:saved,resolved:null,status:'ambiguous'}}});
+    await page.locator('#game').click(); await page.evaluate(() => poll());
+    assert.equal(await page.locator('#target').inputValue(), saved);
+    assert.match(await page.locator('#target option:checked').innerText(), /当前未找到/);
+    await page.locator('#wizardCancel').click();
+    assert.equal(await page.locator('#recordButton').isDisabled(), true);
+    assert.match(await page.locator('#blockers').innerText(), /多个匹配/);
+  });
+  await page.close();
+}
+
 async function main() {
   fs.mkdirSync(output, { recursive: true });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -656,7 +698,7 @@ async function main() {
       evidence.errors.push(`Blocked non-fixture request: ${route.request().url()}`); return route.abort();
     });
     context.on('page', page => page.on('pageerror', error => evidence.errors.push(error.message)));
-    for (const [name, task] of [['recorder scenarios', homeChecks], ['first launch scenario', firstUseChecks], ['device setup scenarios', deviceSetupChecks], ['vocabulary scenarios', vocabularyChecks], ['update scenarios', updateChecks], ['review scenarios', reviewChecks]]) {
+    for (const [name, task] of [['recorder scenarios', homeChecks], ['first launch scenario', firstUseChecks], ['device setup scenarios', deviceSetupChecks], ['window scenarios', windowSelectionChecks], ['vocabulary scenarios', vocabularyChecks], ['update scenarios', updateChecks], ['review scenarios', reviewChecks]]) {
       if(process.env.TAR_UI_ONLY&&!name.startsWith(process.env.TAR_UI_ONLY+' '))continue;
       (evidence.scenarios||=[]).push(name);
       await check(name, () => task(context, origin));

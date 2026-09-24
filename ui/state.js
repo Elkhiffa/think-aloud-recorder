@@ -88,5 +88,10 @@
       return '';
     }
   }
-  return {State,FIELDS,defaults,splitWords,vocabularyWords,updateView,lastInstallView};
+  function matchedWindowValue(requested,items,selection) {
+    if(selection?.status!=='matched'||selection.requested!==requested||!selection.resolved)return requested;
+    const matches=(items||[]).filter(item=>item.itemEnabled===true&&String(item.itemValue)===selection.resolved);
+    return matches.length===1?selection.resolved:requested;
+  }
+  return {State,FIELDS,defaults,splitWords,vocabularyWords,updateView,lastInstallView,matchedWindowValue};
 });

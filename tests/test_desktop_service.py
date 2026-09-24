@@ -57,6 +57,7 @@ class DesktopServiceTests(unittest.TestCase):
             patch.object(bridge.recorder, 'client', side_effect=ConnectionRefusedError('offline')),
             patch.object(bridge.secret_store, 'has_key', return_value=False),
             patch.object(bridge.DesktopService, '_monitor_loop', return_value=None),
+            patch.object(bridge.DesktopService, '_main_is_foreground', return_value=True),
             patch.object(bridge.DesktopService, '_probe_obs_devices', side_effect=lambda: (deepcopy(self.devices), None)),
         ]
         for item in self.patches:
@@ -77,9 +78,11 @@ class DesktopServiceTests(unittest.TestCase):
         if self.service._job:
             self.service._job.join(5)
             self.assertFalse(self.service._job.is_alive(), 'synthetic job did not finish')
-        if self.service._readiness_thread:
-            self.service._readiness_thread.join(5)
-            self.assertFalse(self.service._readiness_thread.is_alive(), 'synthetic readiness did not finish')
+        while (readiness := self.service._readiness_thread) is not None:
+            readiness.join(5)
+            self.assertFalse(readiness.is_alive(), 'synthetic readiness did not finish')
+            if readiness is self.service._readiness_thread:
+                break
         worker = self.service._background_thread
         if background and worker:
             worker.join(5)
@@ -1088,6 +1091,298 @@ class DesktopServiceTests(unittest.TestCase):
         with self.service._operation_lock:
             return self.service._update_readiness()
 
+    def test_idle_readiness_requires_main_foreground_and_resumes_on_activation(self):
+        with patch.object(self.service, '_main_is_foreground', return_value=False), \
+             patch.object(self.service, '_probe_obs_devices') as probe:
+            self.assertFalse(self.service._request_readiness())
+            self.service.main_activation_changed()
+            probe.assert_not_called()
+            self.assertFalse(self.service.get_state()['data']['readiness']['ready'])
+        with patch.object(self.service, '_probe_obs_devices', return_value=(deepcopy(self.devices), None)) as probe:
+            self.service.main_activation_changed()
+            self.wait()
+            probe.assert_called_once()
+            self.assertTrue(self.service.get_state()['data']['readiness']['ready'])
+
+    def test_startup_defers_obs_launch_until_main_activation(self):
+        self.service._startup_launch_attempted = False
+        with patch.object(self.service, '_main_is_foreground', return_value=False), \
+             patch.object(self.service, '_recover'), patch.object(bridge.recorder, 'client') as client:
+            self.service._startup()
+            client.assert_not_called()
+        self.assertFalse(self.service._startup_launch_attempted)
+        with patch.object(bridge.recorder, 'client') as client:
+            self.service.main_activation_changed()
+            self.wait()
+            client.assert_called_once_with(launch=True, progress=self.service._progress,
+                                           continue_if=self.service._automatic_probe_allowed)
+
+    def test_queued_automatic_probe_is_cancelled_when_main_loses_foreground(self):
+        foreground = {'active': True}
+        with patch.object(self.service, '_main_is_foreground', side_effect=lambda: foreground['active']), \
+             patch.object(self.service, '_probe_obs_devices') as probe:
+            with self.service._operation_lock:
+                self.assertTrue(self.service._request_readiness())
+                foreground['active'] = False
+            self.wait()
+            probe.assert_not_called()
+
+    def test_focus_loss_during_probe_cannot_publish_ready(self):
+        entered, release = threading.Event(), threading.Event()
+        foreground = {'active': True}
+        def probe():
+            entered.set()
+            release.wait(3)
+            return deepcopy(self.devices), None
+        with patch.object(self.service, '_main_is_foreground', side_effect=lambda: foreground['active']), \
+             patch.object(self.service, '_probe_obs_devices', side_effect=probe):
+            self.assertTrue(self.service._request_readiness())
+            self.assertTrue(entered.wait(2))
+            foreground['active'] = False
+            self.service.main_activation_changed()
+            release.set()
+            self.wait()
+            self.assertFalse(self.service.get_state()['data']['readiness']['ready'])
+
+    def test_automatic_probe_checks_focus_before_connecting(self):
+        self.service._automatic_readiness.foreground_only = True
+        try:
+            with patch.object(self.service, '_main_is_foreground', return_value=False), \
+                 patch.object(bridge.recorder, 'client') as client:
+                devices, problem = self.actual_probe(self.service)
+                self.assertIsNone(devices)
+                self.assertEqual(problem[0], 'READINESS_PAUSED')
+                client.assert_not_called()
+        finally:
+            self.service._automatic_readiness.foreground_only = False
+
+    def test_return_to_foreground_queues_fresh_check_behind_inflight_probe(self):
+        entered, release, checked_again = threading.Event(), threading.Event(), threading.Event()
+        foreground, calls = {'active': True}, []
+        def probe():
+            calls.append(1)
+            if len(calls) == 1:
+                entered.set()
+                release.wait(3)
+            else:
+                checked_again.set()
+            return deepcopy(self.devices), None
+        with patch.object(self.service, '_main_is_foreground', side_effect=lambda: foreground['active']), \
+             patch.object(self.service, '_probe_obs_devices', side_effect=probe):
+            self.assertTrue(self.service._request_readiness())
+            self.assertTrue(entered.wait(2))
+            foreground['active'] = False
+            self.service.main_activation_changed()
+            foreground['active'] = True
+            self.service.main_activation_changed()
+            release.set()
+            self.assertTrue(checked_again.wait(2))
+            self.wait()
+            self.assertEqual(len(calls), 2)
+
+    def test_focus_cycle_while_queued_replaces_old_generation_before_running(self):
+        foreground = {'active': True}
+        with patch.object(self.service, '_main_is_foreground', side_effect=lambda: foreground['active']), \
+             patch.object(self.service, '_run_automatic_readiness', wraps=self.service._run_automatic_readiness) as run, \
+             patch.object(self.service, '_probe_obs_devices', return_value=(deepcopy(self.devices), None)) as probe:
+            with self.service._operation_lock:
+                self.assertTrue(self.service._request_readiness())
+                foreground['active'] = False
+                self.service.main_activation_changed()
+                foreground['active'] = True
+                self.service.main_activation_changed()
+            self.wait()
+            run.assert_called_once_with(invalidate=True, generation=self.service._main_activation_generation)
+            probe.assert_called_once()
+
+    def test_focus_cycle_during_launch_file_check_keeps_one_shot_available(self):
+        self.service._startup_launch_attempted = False
+        foreground = {'active': True}
+        is_file = Path.is_file
+
+        def file_check(path):
+            result = is_file(path)
+            if path.name == 'obs64.exe':
+                foreground['active'] = False
+                self.service.main_activation_changed()
+                foreground['active'] = True
+                self.service.main_activation_changed()
+            return result
+
+        with patch.object(self.service, '_main_is_foreground', side_effect=lambda: foreground['active']), \
+             patch.object(self.service, '_request_readiness', return_value=False), \
+             patch.object(bridge.recorder, 'client') as connect:
+            with patch.object(Path, 'is_file', autospec=True, side_effect=file_check):
+                state = self.service._run_automatic_readiness()
+            self.assertFalse(state['ready'])
+            self.assertIsNone(state['checked_at'])
+            self.assertFalse(self.service._startup_launch_attempted)
+            connect.assert_not_called()
+            self.assertTrue(self.service._run_automatic_readiness()['ready'])
+            connect.assert_called_once_with(launch=True, progress=self.service._progress,
+                                            continue_if=self.service._automatic_probe_allowed)
+            self.assertTrue(self.service._startup_launch_attempted)
+
+    def test_automatic_probe_rechecks_focus_after_every_obs_io_and_keeps_cleanup(self):
+        boundaries = [('connect', 1), ('get_record_status', 1), ('get_stream_status', 1),
+            ('get_profile_list', 1), ('get_scene_collection_list', 1), ('get_input_list', 1),
+            ('get_record_status', 2), ('get_stream_status', 2), ('create_input', 1),
+            ('get_input_properties_list_property_items', 1), ('get_input_properties_list_property_items', 3)]
+        for restore_foreground in (False, True):
+            for operation, occurrence in boundaries:
+                with self.subTest(operation=operation, occurrence=occurrence, restore=restore_foreground):
+                    foreground = {'active': True}
+                    client = MagicMock()
+                    client.get_record_status.return_value.output_active = False
+                    client.get_stream_status.return_value.output_active = False
+                    client.get_profile_list.return_value.current_profile_name = 'Experience'
+                    client.get_scene_collection_list.return_value.current_scene_collection_name = 'Experience'
+                    client.get_input_list.return_value.inputs = []
+                    client.get_input_properties_list_property_items.return_value.property_items = []
+                    count = 0
+
+                    def change_focus():
+                        foreground['active'] = False
+                        self.service.main_activation_changed()
+                        if restore_foreground:
+                            foreground['active'] = True
+                            self.service.main_activation_changed()
+
+                    def during_request(*args, **kwargs):
+                        nonlocal count
+                        count += 1
+                        if count == occurrence:
+                            change_focus()
+                        return client if operation == 'connect' else getattr(client, operation).return_value
+
+                    if operation != 'connect':
+                        getattr(client, operation).side_effect = during_request
+                    with patch.object(self.service, '_main_is_foreground', side_effect=lambda: foreground['active']), \
+                         patch.object(self.service, '_request_readiness', return_value=False), \
+                         patch.object(bridge.recorder, 'client', side_effect=during_request if operation == 'connect' else None,
+                                      return_value=client), \
+                         patch.object(self.service, '_probe_obs_devices', side_effect=lambda: self.actual_probe(self.service)), \
+                         patch.object(self.service, '_cache_devices') as cache, \
+                         patch.object(self.service, '_probe_location') as location:
+                        state = self.service._run_automatic_readiness()
+                    expected_creates = occurrence if operation == 'get_input_properties_list_property_items' else int(operation == 'create_input')
+                    self.assertEqual(client.create_input.call_count, expected_creates)
+                    self.assertEqual(client.remove_input.call_count, expected_creates)
+                    expected_properties = occurrence if operation == 'get_input_properties_list_property_items' else 0
+                    self.assertEqual(client.get_input_properties_list_property_items.call_count, expected_properties)
+                    client.disconnect.assert_called_once_with()
+                    cache.assert_not_called()
+                    location.assert_not_called()
+                    self.assertFalse(state['ready'])
+                    self.assertIsNone(state['checked_at'])
+
+    def test_focus_change_during_connection_releases_socket_and_stops_following_probe(self):
+        self.service._startup_launch_attempted = False
+        client = MagicMock()
+        foreground = {'active': True}
+
+        def connect(*args, **kwargs):
+            foreground['active'] = False
+            self.service.main_activation_changed()
+            foreground['active'] = True
+            self.service.main_activation_changed()
+            return client
+
+        with patch.object(self.service, '_main_is_foreground', side_effect=lambda: foreground['active']), \
+             patch.object(self.service, '_request_readiness', return_value=False), \
+             patch.object(bridge.recorder, 'client', side_effect=connect), \
+             patch.object(self.service, '_probe_obs_devices') as probe:
+            state = self.service._run_automatic_readiness()
+        client.disconnect.assert_called_once_with()
+        probe.assert_not_called()
+        self.assertTrue(self.service._startup_launch_attempted)
+        self.assertFalse(state['ready'])
+
+    def test_blocking_obs_rpc_does_not_hold_service_lock_during_focus_notification(self):
+        entered, release = threading.Event(), threading.Event()
+        foreground = {'active': True}
+        client = MagicMock()
+
+        def status():
+            entered.set()
+            release.wait(3)
+            return SimpleNamespace(output_active=False)
+
+        client.get_record_status.side_effect = status
+        with patch.object(self.service, '_main_is_foreground', side_effect=lambda: foreground['active']), \
+             patch.object(bridge.recorder, 'client', return_value=client), \
+             patch.object(self.service, '_probe_obs_devices', side_effect=lambda: self.actual_probe(self.service)):
+            try:
+                self.assertTrue(self.service._request_readiness())
+                self.assertTrue(entered.wait(2))
+                foreground['active'] = False
+                began = time.monotonic()
+                self.service.main_activation_changed()
+                self.assertLess(time.monotonic() - began, .5)
+                self.assertTrue(self.service.get_state()['ok'])
+            finally:
+                release.set()
+                self.wait()
+        client.get_stream_status.assert_not_called()
+        client.create_input.assert_not_called()
+        client.disconnect.assert_called_once_with()
+
+    def test_manual_device_probe_and_refresh_remain_available_outside_main_foreground(self):
+        client = MagicMock()
+        client.get_record_status.return_value.output_active = False
+        client.get_stream_status.return_value.output_active = False
+        client.get_profile_list.return_value.current_profile_name = 'Experience'
+        client.get_scene_collection_list.return_value.current_scene_collection_name = 'Experience'
+        client.get_input_list.return_value.inputs = []
+        client.get_input_properties_list_property_items.return_value.property_items = []
+        with patch.object(self.service, '_main_is_foreground', return_value=False), \
+             patch.object(bridge.recorder, 'client', return_value=client):
+            devices, problem = self.actual_probe(self.service)
+            self.assertIsNone(problem)
+            self.assertEqual(set(devices), {'mic', 'window', 'monitor'})
+            self.assertEqual(client.create_input.call_count, 3)
+            self.assertEqual(client.remove_input.call_count, 3)
+            with patch.object(bridge.recorder, 'devices', return_value=deepcopy(self.devices)), \
+                 patch.object(self.service, '_recover'):
+                self.assertTrue(self.service.refresh_devices()['ok'])
+                self.wait()
+            self.assertEqual(self.service._device_refresh['state'], 'succeeded')
+            self.assertTrue(self.service._readiness['ready'])
+
+    def test_changed_window_class_matches_for_readiness_and_actual_start_without_saving(self):
+        old, current = 'Game:OldRandom:game.exe', 'Game:NewRandom:game.exe'
+        self.service._cfg.update(window=old, record_inputs=True)
+        self.devices['window'] = [dict(itemName='Game', itemValue=current, itemEnabled=True)]
+        before = deepcopy(self.service._cfg)
+        session = self.session()
+        with patch('input_capture.capture_readiness', return_value={'ready': True}) as capture, \
+             patch.object(bridge.recorder.Session, 'start', return_value=session) as start:
+            state = self.readiness()
+            self.assertTrue(state['ready'])
+            self.assertEqual(state['window_selection']['resolved'], current)
+            self.assertEqual(capture.call_args.args[0]['window'], current)
+            # A user's Start operation retains final checking even if focus
+            # changes after the click; this is not an automatic idle probe.
+            with patch.object(self.service, '_main_is_foreground', return_value=False):
+                self.assertTrue(self.service.start_recording()['ok'])
+                self.wait()
+            self.assertEqual(start.call_args.args[0]['window'], current)
+            self.assertEqual(capture.call_args.args[0]['window'], current)
+        self.assertEqual(self.service._cfg, before)
+
+    def test_ambiguous_game_process_blocks_start_and_does_not_guess_input_target(self):
+        self.service._cfg.update(window='Game:OldRandom:game.exe', record_inputs=True)
+        self.devices['window'] = [dict(itemName='Game', itemValue=f'Game:{kind}:game.exe', itemEnabled=True)
+                                  for kind in ('One', 'Two')]
+        with patch('input_capture.capture_readiness') as capture, patch.object(bridge.recorder.Session, 'start') as start:
+            state = self.readiness()
+            self.assertEqual([x['code'] for x in state['errors']], ['WINDOW_AMBIGUOUS'])
+            self.assertFalse(state['ready'])
+            self.service.start_recording()
+            self.wait()
+            start.assert_not_called()
+            capture.assert_not_called()
+
     def test_readiness_tracks_disappearance_and_reappearance_with_labels(self):
         self.assertTrue(self.readiness()['ready'])
         available = deepcopy(self.devices)
@@ -1336,7 +1631,8 @@ class DesktopServiceTests(unittest.TestCase):
              patch.object(bridge.recorder, 'client', side_effect=connect) as launch:
             self.service._startup()
             self.service._startup()
-            launch.assert_called_once_with(launch=True, progress=self.service._progress)
+            launch.assert_called_once_with(launch=True, progress=self.service._progress,
+                                           continue_if=self.service._automatic_probe_allowed)
         self.assertTrue(self.service.get_state()['data']['readiness']['ready'])
         self.assertEqual(self.service.get_state()['data']['activity']['detail'], '')
         client.disconnect.assert_called_once()
