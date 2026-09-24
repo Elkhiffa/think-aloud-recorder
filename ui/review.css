@@ -177,3 +177,24 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 
 .controller .axis-arrow.recent{visibility:visible;opacity:.45}
 .input-timeline:focus{outline:none}.input-timeline:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+/* Real holds use a solid warm rail; grouped navigation remains dashed. */
+:root{--hold-bg:#efdeca;--hold-ink:#604324;--hold-line:#946e40}
+:root[data-theme=dark]{--hold-bg:#59442e;--hold-ink:#f8e3c5;--hold-line:#d7ad76}
+.key-bar.long-press,.key-bar.long-press:hover{opacity:1;color:var(--hold-ink);background:var(--hold-bg);box-shadow:inset 0 0 0 1px var(--hold-line)}
+.key-bar.long-press .bar-duration{width:4px;opacity:1;background:var(--hold-line)}
+.key-bar.long-press.active{box-shadow:inset 0 0 0 2px var(--accent)}
+.fixed-band.long-press .bar-glyph,.fixed-band.active-hold .bar-glyph{color:var(--hold-ink);background:var(--hold-bg);box-shadow:inset 3px 0 var(--hold-line)}
+.held-section{position:absolute;left:-1px;right:-1px;background:var(--hold-bg);box-shadow:inset 4px 0 var(--hold-line),inset 0 0 0 1px var(--hold-line);border-radius:3px;pointer-events:none}
+.input-timeline-panel{position:relative}
+.timeline-return{position:absolute;right:12px;top:48px;z-index:8;display:flex;align-items:center;gap:5px;min-height:32px;padding:5px 10px;border:1px solid var(--accent);border-radius:5px;background:var(--surface);color:var(--accent);font-size:12px;box-shadow:0 3px 12px #29221a20}
+.timeline-return[data-direction=below]{top:auto;bottom:40px}
+.timeline-return svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.timeline-return[data-direction=below] svg{transform:rotate(180deg)}
+.timeline-return:hover{background:var(--soft)}
+.quote-popover{display:flex;flex-direction:column;overflow:hidden}
+.quote-popover-heading{flex:none;min-height:28px}
+.quote-popover.is-pinned .quote-popover-heading{cursor:grab;touch-action:none;user-select:none}
+.quote-popover.is-dragging .quote-popover-heading{cursor:grabbing}
+.quote-popover.is-pinned #quoteTime::before{content:"⠿";font-size:16px;margin-right:8px;color:var(--strong-line)}
+.quote-popover-heading button{cursor:pointer;min-width:28px;min-height:28px}
+.quote-popover p{min-height:0;overflow:auto;overscroll-behavior:contain;user-select:text}

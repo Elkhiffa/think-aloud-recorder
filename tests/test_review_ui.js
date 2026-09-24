@@ -160,3 +160,16 @@ const copyOffset=JSON.stringify(rawOffset),adjusted=input.normalizeInputs(rawOff
 close(adjusted.intervals[0].start,2.8);assert.equal(adjusted.intervals.length,1);assert.equal(adjusted.gaps[0].start,0);close(adjusted.gaps[0].end,2.1);assert.equal(adjusted.duration,12);assert.equal(JSON.stringify(rawOffset),copyOffset);
 const early=input.normalizeInputs(rawOffset,-1.8);assert.equal(early.intervals.length,1);close(early.intervals[0].start,9.2);
 console.log('Non-destructive per-clip alignment, leading gap and video bounds passed.');
+// Real input duration determines holds, never visual padding or a merged burst.
+for(const [seconds,expected] of [[.499,false],[.5,false],[.501,true]]){
+  assert.equal(input.isLongPress({kind:'button',start:2,end:2+seconds,displayEnd:20}),expected);
+}
+assert.equal(input.isLongPress({kind:'button',activity:true,start:1,end:4}),false);
+assert.equal(input.isLongPress({kind:'axis',start:1,end:4}),false);
+assert.equal(input.isLongPress({kind:'motion',start:1,end:4}),false);
+assert.equal(input.isLongPress({kind:'trigger',start:1,end:4}),true);
+assert.equal(input.playheadDirection(2,3,5),-1);
+assert.equal(input.playheadDirection(3,3,5),0);
+assert.equal(input.playheadDirection(8,3,5),0);
+assert.equal(input.playheadDirection(8.1,3,5),1);
+console.log('Strict hold threshold and offscreen playhead boundaries passed.');
