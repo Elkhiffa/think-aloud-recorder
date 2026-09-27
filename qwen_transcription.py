@@ -224,7 +224,13 @@ def normalize_result(raw, duration):
                 raise QwenError('平台没有返回词级时间戳，无法生成逐词同步回看。')
             if result and start < result[-1]['start']:
                 raise QwenError('平台返回的句子时间顺序不正确。')
-            result.append({'start': start, 'end': end, 'text': text, 'words': words})
+            segment = {'start': start, 'end': end, 'text': text, 'words': words}
+            if sentence.get('speaker_id') is not None:
+                from speaker_roles import valid_speaker
+                if not valid_speaker(sentence['speaker_id']):
+                    raise QwenError('平台返回的说话人编号无效，原始返回已保留。')
+                segment['speaker_id'] = sentence['speaker_id']
+            result.append(segment)
     return result
 
 
@@ -274,8 +280,10 @@ def transcribe(audio, cache, options, duration, progress, key, *, client=None,
         if job:
             write(cache / ('任务记录-' + uuid.uuid4().hex[:10] + '.json'), job)
         oss_url = _upload(client, key, options, audio, progress, sleep)
-        parameters = {'channel_id': [0], 'diarization_enabled': False,
+        parameters = {'channel_id': [0], 'diarization_enabled': options.get('diarization_enabled', False) is True,
                       'special_word_filter': {'system_reserved_filter': False}}
+        if parameters['diarization_enabled'] and duration > 2 * 3600:
+            progress('本段录音超过两小时，说话人分离可能耗时较长或失败；任务编号会保留供恢复。')
         if options.get('language'):
             parameters['language_hints'] = [options['language']]
         if terms:

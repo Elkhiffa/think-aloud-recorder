@@ -1,0 +1,4 @@
+interface:
+  display_name: "Think Aloud 体验预处理"
+  short_description: "把体验录制整理为带时间证据的事件、待展开想法和可选问题"
+  default_prompt: "使用 $think-aloud-preprocess，预处理指定的 Think Aloud 场次并回写体验事件。"

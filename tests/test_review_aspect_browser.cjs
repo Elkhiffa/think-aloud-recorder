@@ -14,7 +14,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(__dirname, '..');
 const output = path.resolve(process.env.TAR_ASPECT_OUTPUT || path.join(root, 'work', 'review-aspect'));
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
-const sources = { wide: [960, 540], ultrawide: [1280, 540], portrait: [540, 960] };
+const sources = { wide: [960, 540], ultrawide: [3440, 1440], portrait: [540, 960], letterboxed: [1920,1080] };
+const legacyCrop={version:1,source_width:1920,source_height:1080,left:0,top:138,width:1920,height:804};
 const media = new Map();
 const evidence = { scope: 'Real Edge geometry with synthetic videos and native bridge only. No native window or user installation validation.', checks: [], screenshots: [], errors: [] };
 let origin;
@@ -23,6 +24,7 @@ function html(params) {
   const key = params.get('source') || 'wide';
   const data = { title: '合成比例验证 · ' + key, created: '2026-09-22T10:30:00', desktop: params.get('portable') !== '1', test: true,
     video: `/media/${key}?delay=${Number(params.get('delay')) || 0}`,
+    video_display:key==='letterboxed'?legacyCrop:null,
     segments: Array.from({ length: 60 }, (_, i) => ({ start: i, end: i + .95, text: `合成测试原话 ${i + 1}：逐字稿独立滚动，视频的位置和尺寸应当保持稳定。` })) };
   const values = { TITLE: data.title, DATA: JSON.stringify(data), CSS: read('ui/review.css'), JS: read('ui/review.js'),
     PLYR_CSS: read('ui/vendor/plyr/plyr.css'), PLYR_JS: read('ui/vendor/plyr/plyr.min.js'), PLYR_SVG: read('ui/vendor/plyr/plyr.svg'), LICENSE: 'Synthetic source-aspect browser fixture' };
@@ -53,7 +55,7 @@ async function makeMedia(browser) {
   try {
     await page.goto(origin + '/fixture');
     for (const [key, [width, height]] of Object.entries(sources)) {
-      const bytes = await page.evaluate(async ({ width, height }) => {
+      const bytes = await page.evaluate(async ({ width, height, boxed }) => {
         const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height; document.body.append(canvas);
         const context = canvas.getContext('2d'), stream = canvas.captureStream(0), track = stream.getVideoTracks()[0], chunks = [];
         const mimeType = ['video/webm;codecs=vp8', 'video/webm'].find(type => MediaRecorder.isTypeSupported(type));
@@ -68,12 +70,13 @@ async function makeMedia(browser) {
           context.fillStyle = '#ece7dc'; context.font = 'bold 28px sans-serif'; context.fillText('SYNTHETIC VIDEO', 30, 70);
           context.font = '24px sans-serif'; context.fillText(`${width} x ${height}`, 30, 110);
           context.fillStyle = '#b64b37'; context.fillRect(30, 145, 30 + frame * 18, 8);
+          if(boxed){context.fillStyle='#000';context.fillRect(0,0,width,138);context.fillRect(0,height-138,width,138);}
         }
         draw(0); const started = new Promise(resolve => { recorder.onstart = resolve; }); recorder.start(); await started;
         for (let frame = 1; frame <= 12; frame++) { draw(frame); track.requestFrame(); await new Promise(resolve => setTimeout(resolve, 70)); }
         recorder.stop(); await stopped; stream.getTracks().forEach(track => track.stop()); canvas.remove();
         return Array.from(new Uint8Array(await new Blob(chunks, { type: mimeType }).arrayBuffer()));
-      }, { width, height });
+      }, { width, height, boxed:key==='letterboxed' });
       assert.ok(bytes.length > 1000, `Encoded ${key} fixture has frames`); media.set(key, Buffer.from(bytes));
     }
   } finally { await page.close(); }
@@ -90,8 +93,14 @@ async function geometry(page) {
     const number = value => parseFloat(value) || 0, style = getComputedStyle(layout), paneStyle = getComputedStyle(pane);
     const slot = rect('.video-slot'), file = rect('.file-card'), input = rect('#inputPanel'), copy = rect('#copySplit');
     const fileVisible = getComputedStyle(document.querySelector('.file-card')).display !== 'none';
+    const pixels=rect('video'),shortClip=getComputedStyle(video).clipPath.match(/[\d.]+/g)?.map(Number)||[0];
+    const clip=shortClip.length===1?Array(4).fill(shortClip[0]):shortClip.length===2?[...shortClip,...shortClip]:shortClip.length===3?[...shortClip,shortClip[1]]:shortClip;
+    const visible={width:pixels.width-clip[1]-clip[3],height:pixels.height-clip[0]-clip[2]};
+    const data=JSON.parse(document.querySelector('#review-data').textContent);
+    const cropped=data.video_display&&document.querySelector('#originalFrame').getAttribute('aria-pressed')!=='true';
     return { viewport: { width: innerWidth, height: innerHeight }, video: rect('video'), slot, pane: rect('#videoPane'), text: rect('#transcriptPane'), lines: rect('#lines'), file,
-      source: [video.videoWidth, video.videoHeight], orientation: document.querySelector('#reviewSplitter').getAttribute('aria-orientation'),
+      source: [video.videoWidth, video.videoHeight], visible, aspect:cropped?data.video_display.width/data.video_display.height:video.videoWidth/video.videoHeight,
+      orientation: document.querySelector('#reviewSplitter').getAttribute('aria-orientation'),
       available: layout.getBoundingClientRect().width - number(style.paddingLeft) - number(style.paddingRight) - number(style.getPropertyValue('--splitter-size')),
       input, copy, header: rect('.review-header'), fileVisible, gap: number(paneStyle.rowGap), objectFit: getComputedStyle(video).objectFit,
       reservedHeight: input.height + (fileVisible ? file.height : 0) + number(paneStyle.rowGap) * (fileVisible ? 2 : 1),
@@ -101,8 +110,9 @@ async function geometry(page) {
 }
 const close = (a, b, label, tolerance = 1) => assert.ok(Math.abs(a - b) <= tolerance, `${label}: ${a} vs ${b}`);
 function ratioCheck(g) {
-  close(g.slot.width,g.input.width,'video and recent operations share one width');close(g.slot.width,g.pane.width,'player occupies left pane');assert.ok(g.slot.height<=g.pane.height-g.reservedHeight+1,'player respects available height');
-  close(g.video.width, g.slot.width, 'video width matches its slot'); close(g.video.height, g.slot.height, 'video height matches its slot');
+  close(g.input.width,g.pane.width,'recent operations retain the chosen column width');assert.ok(g.slot.width<=g.pane.width+1,'player fits left pane');assert.ok(g.slot.height<=g.pane.height-g.reservedHeight+1,'player respects available height');
+  close(g.slot.width/g.slot.height,g.aspect,'slot follows the visible source aspect',.005);
+  close(g.visible.width,g.slot.width,'visible picture fills slot width');close(g.visible.height,g.slot.height,'visible picture fills slot height');
   close(g.slot.y, g.pane.y, 'slot is top-aligned'); assert.equal(g.objectFit, 'contain');
   assert.ok(g.file.bottom <= g.pane.bottom + 1, 'file controls remain in their pane');
   assert.ok(g.input.bottom <= g.pane.bottom + 1, 'operation panel remains within its pane');
@@ -133,11 +143,11 @@ async function openPage(context, source, options = {}) {
 }
 async function run(context) {
   for (const source of Object.keys(sources)) {
-    await check(`${source}: first-open width at least 900 and contain preserves source pixels; stale ratio ignored`, async () => {
+    await check(`${source}: first-open picture fits viewport and source pixels; stale ratio ignored`, async () => {
       const page = await openPage(context, source);
       try {
         const g = await geometry(page); assert.deepEqual(g.source, sources[source]); fittedCheck(g);
-        assert.ok(g.pane.width>=899,'first-open video width is at least 900 when space allows');close(g.viewport.width, 1440, 'fixed outer width'); close(g.viewport.height, 900, 'fixed outer height');
+        assert.ok(g.slot.height>=g.pane.height-g.reservedHeight-1||g.pane.width>=g.available*.65,'video uses the available height or most of the horizontal space');close(g.viewport.width, 1440, 'fixed outer width'); close(g.viewport.height, 900, 'fixed outer height');
         assert.ok(Math.abs(g.pane.width / g.available - .24) > .02, 'source fit overrides the saved split');
         await screen(page, `${source}-1240x900`);
         const before = g.slot;
@@ -150,6 +160,29 @@ async function run(context) {
       } finally { await page.close(); }
     });
   }
+  await check('player grows with viewport, keeps a readable sidebar, and has no reserved blank input panel',async()=>{
+    const samples=[];
+    for(const source of ['wide','ultrawide']){
+      const page=await openPage(context,source);
+      try{
+        await page.setViewportSize({width:2226,height:1120});await settle(page);
+        const large=await geometry(page);fittedCheck(large);
+        assert.ok(large.slot.width>1290&&large.slot.height>540,'large window is not capped by the former pixel target');
+        assert.ok(large.slot.height>=large.pane.height-large.reservedHeight-1||large.text.width<=481,'viewport is used by the player with a compact readable sidebar');
+        assert.ok(large.input.height<100,'unavailable input is a compact explanation');
+        await screen(page,`${source}-minimum-size-2226x1120`);
+        await page.setViewportSize({width:1000,height:700});await settle(page);
+        const small=await geometry(page);fittedCheck(small);
+        assert.ok(small.slot.width<large.slot.width,'small window scales picture down without overflow');
+        await page.setViewportSize({width:2226,height:1120});await settle(page);
+        const restored=await geometry(page);fittedCheck(restored);
+        close(restored.slot.width,large.slot.width,'enlarging an untouched window restores target width');
+        close(restored.slot.height,large.slot.height,'enlarging an untouched window restores target height');
+        samples.push({source,large,small,restored});
+      }finally{await page.close();}
+    }
+    return samples;
+  });
   await check('late saved layout response and portable saved preference cannot override source fit', async () => {
     const page = await openPage(context, 'portrait', { late: true, saved: { columns: .8, rows: .54 } });
     try {
@@ -208,7 +241,7 @@ async function run(context) {
         if (height === 700) await screen(page, 'portrait-wrapped-controls-1000x700');
         samples.push({ height, paneWidth: g.pane.width, slotWidth: g.slot.width, slotHeight: g.slot.height, inputHeight: g.input.height, reservedHeight: g.reservedHeight });
       }
-      assert.ok(new Set(samples.map(sample => sample.inputHeight)).size > 1, 'test crosses the real compact operation-panel breakpoint');
+      assert.ok(samples.every(sample=>sample.inputHeight<100), 'empty input card remains compact across window heights');
       const before = await geometry(page);
       for (const mode of ['collapsed', 'device', 'keys']) {
         await page.locator(`[data-input-mode="${mode}"]`).click(); await settle(page);
@@ -242,9 +275,33 @@ async function run(context) {
   await check('missing metadata retains bounded saved-column fallback', async () => {
     const page = await openPage(context, 'missing', { skipReady: true, saved: { columns: .4, rows: .54 } });
     try {
-      const g = await geometry(page); assert.deepEqual(g.source, [0, 0]); close(g.pane.width,Math.min(900,g.available-280),'bounded first-open target',1);
+      const g = await geometry(page); assert.deepEqual(g.source, [0, 0]); close(g.pane.width,g.available*.74,'bounded first-open proportion',1);
       assert.equal(await page.locator('.video-slot').evaluate(node => node.classList.contains('source-aspect')), false); return g;
     } finally { await page.close(); }
+  });
+  await check('3440x1440 stays free of player bars at short, wide and tall window sizes',async()=>{
+    const page=await openPage(context,'ultrawide'),samples=[];
+    try{
+      for(const size of [{width:1920,height:650},{width:3440,height:1440},{width:1000,height:900},{width:1440,height:640}]){
+        await page.setViewportSize(size);await settle(page);const g=await geometry(page);ratioCheck(g);samples.push(g);
+      }
+      await screen(page,'ultrawide-short-window');return samples;
+    }finally{await page.close();}
+  });
+  await check('verified legacy black bars hide without altering media and original frame is reversible',async()=>{
+    const page=await openPage(context,'letterboxed');
+    try{
+      const src=await page.locator('video').getAttribute('src');ratioCheck(await geometry(page));
+      await page.locator('#fileActionsToggle').click();await page.locator('#originalFrame').click();await settle(page);
+      const original=await geometry(page);ratioCheck(original);close(original.aspect,16/9,'original aspect',.001);
+      await page.locator('#fileActionsToggle').click();await page.locator('#originalFrame').click();await settle(page);
+      const cropped=await geometry(page);ratioCheck(cropped);close(cropped.aspect,1920/804,'visible crop aspect',.001);
+      assert.equal(await page.locator('video').getAttribute('src'),src);await screen(page,'legacy-letterboxing-hidden');
+      await page.locator('.plyr__controls [data-plyr="fullscreen"]').click();await settle(page);
+      const fullscreen=await geometry(page);close(fullscreen.visible.width/fullscreen.visible.height,1920/804,'fullscreen preserves crop',.005);
+      await page.locator('.plyr__controls [data-plyr="fullscreen"]').click();await settle(page);ratioCheck(await geometry(page));
+      return {original,cropped};
+    }finally{await page.close();}
   });
 }
 async function main() {

@@ -22,7 +22,7 @@ async function main(){
  const playback=()=>page.locator('video').evaluate(v=>({time:v.currentTime,paused:v.paused,rate:v.playbackRate,rect:v.getBoundingClientRect().toJSON()}));
  await page.waitForTimeout(400);await seek(4.8);await page.waitForFunction(()=>document.querySelectorAll('#currentKeys .keycap').length===4);
  await check('pending review and overlapping held inputs',async()=>{assert.equal(await page.locator('#transcriptTab').textContent(),'转写中');assert.equal(await page.locator('#transcriptTab').isDisabled(),true);assert.equal(await page.locator('#currentKeys .keycap').count(),4);assert.equal(await page.locator('#inputTab').getAttribute('aria-selected'),'true');});
- await check('video source ratio and stable geometry across display modes',async()=>{const before=await playback();assert.equal(await page.locator('video').evaluate(v=>getComputedStyle(v).objectFit),'contain');assert.ok(Math.abs(before.rect.width-(await page.locator('#inputPanel').boundingBox()).width)<1);for(const mode of ['device','collapsed','keys']){await page.locator(`[data-input-mode=${mode}]`).click();const after=await playback();for(const k of ['x','y','width','height'])assert.ok(Math.abs(after.rect[k]-before.rect[k])<1);}});
+ await check('video source ratio and stable geometry across display modes',async()=>{const before=await playback();assert.equal(await page.locator('video').evaluate(v=>getComputedStyle(v).objectFit),'contain');const media=await page.locator('video').evaluate(v=>({width:v.videoWidth,height:v.videoHeight,slot:v.closest('.video-slot').getBoundingClientRect().toJSON()}));assert.ok(Math.abs(before.rect.width/before.rect.height-media.width/media.height)<.01);assert.ok(before.rect.width<=media.slot.width+1&&before.rect.height<=media.slot.height+1);for(const mode of ['device','collapsed','keys']){await page.locator(`[data-input-mode=${mode}]`).click();const after=await playback();for(const k of ['x','y','width','height'])assert.ok(Math.abs(after.rect[k]-before.rect[k])<1);}});
  await check('shared track grid and actual interval durations; long holds never jump lanes',async()=>{
    const measure=()=>page.evaluate(()=>{const rect=el=>el.getBoundingClientRect().toJSON(),bar=id=>rect(document.querySelector(`[data-input-id="${id}"]`));return {heads:[...document.querySelectorAll('.timeline-column-headings span')].map(rect),w:bar('k-w-1'),q:bar('k-q-1'),mouse:bar('m-left-1')};});
    const before=await measure();assert.ok(Math.abs(before.w.x-before.heads[2].x-5)<1);assert.ok(before.w.width<40);assert.equal(await page.locator('[data-input-id="k-a-1"]').count(),0);assert.ok((await page.locator('[data-input-id="k-w-1"] .bar-glyph').textContent()).includes('↖'));assert.ok(before.q.x>=before.heads[5].x);assert.ok(before.mouse.x>before.q.right);
@@ -261,6 +261,20 @@ async function main(){
      assert.notEqual(colors.held,colors.tap);assert.notEqual(colors.rail,'none');assert.equal(colors.burst,'dashed');
      await page.screenshot({path:path.join(out,`holds-${theme}.png`)});
    }
+ });
+ await check('all-input review preserves background controls and changes display scope only',async()=>{
+   await page.evaluate(()=>{window.__snapshot.inputs={version:1,recording_scope:'all',state:'complete',duration:32,timebase:'video_seconds',gaps:[],
+     intervals:[{id:'through',device:'keyboard',code:'W',kind:'button',start:1,end:10},{id:'background',device:'xbox',code:'A',kind:'button',start:6,end:7}],
+     window_states:[{start:0,end:3,state:'foreground'},{start:3,end:8,state:'background'},{start:8,end:32,state:'foreground'}]};window.__snapshot.revision='all-input-scope';});
+   await page.waitForFunction(()=>!document.querySelector('#inputScopeLabel').hidden);await page.locator('#inputTab').click();await seek(6.2);
+   assert.equal(await page.locator('#inputScope').inputValue(),'all');assert.equal(await page.locator('#inputFocusState').textContent(),'游戏在后台');
+   assert.equal(await page.locator('[data-input-id="background"]').count(),1);
+   const before=await playback();await page.locator('#inputScope').selectOption('foreground');await settleVideo();
+   assert.equal(await page.locator('[data-input-id="background"]').count(),0);
+   assert.equal(await page.locator('#currentKeys [data-recent-id]').count(),0);
+   assert.equal((await playback()).time,before.time);assert.equal((await playback()).paused,before.paused);
+   await page.locator('#inputScope').selectOption('all');await settleVideo();assert.equal(await page.locator('[data-input-id="background"]').count(),1);
+   assert.equal(await page.locator('#timelineGaps .timeline-gap').count(),0);
  });
  await check('no browser exceptions',async()=>assert.deepEqual(errors,[]));
  await browser.close();server.close();const report={scope:'Synthetic production browser acceptance; no actual OBS/device/native capture validation.',checks,errors,passed:checks.every(c=>c.pass)};fs.writeFileSync(path.join(out,'acceptance.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));if(!report.passed)process.exitCode=1;

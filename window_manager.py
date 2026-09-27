@@ -250,18 +250,23 @@ class WindowManager:
                 self._closing = False
 
     def _review_window_options(self):
-        """Leave room for a 900px video plus timeline on ordinary desktops.
+        """Size the review against its monitor, like a large browser player.
 
         Use pywebview's existing monitor coordinates/work area. Smaller screens
         retain the responsive player rather than receiving an offscreen window.
         """
-        options={'width':1440,'height':900}
+        options={'width':1720,'height':1000}
         try:
-            screens=self.webview.screens
-            if not isinstance(screens,(list,tuple)) or not screens:return options
+            # pywebview exposes a lazy Proxy; isinstance(..., list) rejects it.
+            screens=list(self.webview.screens)
+            if not screens:return options
             selected=screens[0]
             main=getattr(self,'main',None)
-            x,y=getattr(main,'x',None),getattr(main,'y',None)
+            try:
+                x,y=getattr(main,'x',None),getattr(main,'y',None)
+            except Exception:
+                # Reviews can outlive the main window. Keep the monitor sizing.
+                x=y=None
             if type(x) in (int,float) and type(y) in (int,float):
                 selected=next((screen for screen in screens
                     if screen.x<=x<screen.x+screen.width and screen.y<=y<screen.y+screen.height),selected)
@@ -271,7 +276,8 @@ class WindowManager:
             work_width,work_height=getattr(frame,'Width',None),getattr(frame,'Height',None)
             if type(work_width) is int and 560<=work_width<=width:width=work_width
             if type(work_height) is int and 540<=work_height<=height:height=work_height
-            options.update(width=min(1440,max(560,width-48)),height=min(900,max(540,height-64)),screen=selected)
+            options.update(width=max(560,min(width-48,int(width*.9))),
+                           height=max(540,min(height-64,int(height*.92))),screen=selected)
         except Exception:
             # An unavailable monitor enumeration must not block existing reviews.
             pass

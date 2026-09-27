@@ -14,6 +14,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import desktop_service as bridge
+import device_inventory
 import hotword_files
 from updater import UpdateManager as RealUpdateManager
 
@@ -59,6 +60,7 @@ class DesktopServiceTests(unittest.TestCase):
             patch.object(bridge.DesktopService, '_monitor_loop', return_value=None),
             patch.object(bridge.DesktopService, '_main_is_foreground', return_value=True),
             patch.object(bridge.DesktopService, '_probe_obs_devices', side_effect=lambda: (deepcopy(self.devices), None)),
+            patch.object(device_inventory, 'devices', return_value=deepcopy(self.devices)),
         ]
         for item in self.patches:
             item.start()
@@ -1298,11 +1300,10 @@ class DesktopServiceTests(unittest.TestCase):
                                             continue_if=self.service._automatic_probe_allowed)
             self.assertTrue(self.service._startup_launch_attempted)
 
-    def test_automatic_probe_rechecks_focus_after_every_obs_io_and_keeps_cleanup(self):
+    def test_automatic_probe_rechecks_focus_after_every_obs_io_and_disconnects(self):
         boundaries = [('connect', 1), ('get_record_status', 1), ('get_stream_status', 1),
-            ('get_profile_list', 1), ('get_scene_collection_list', 1), ('get_input_list', 1),
-            ('get_record_status', 2), ('get_stream_status', 2), ('create_input', 1),
-            ('get_input_properties_list_property_items', 1), ('get_input_properties_list_property_items', 3)]
+            ('get_profile_list', 1), ('get_scene_collection_list', 1),
+            ('get_record_status', 2), ('get_stream_status', 2)]
         for restore_foreground in (False, True):
             for operation, occurrence in boundaries:
                 with self.subTest(operation=operation, occurrence=occurrence, restore=restore_foreground):
@@ -1340,11 +1341,9 @@ class DesktopServiceTests(unittest.TestCase):
                          patch.object(self.service, '_cache_devices') as cache, \
                          patch.object(self.service, '_probe_location') as location:
                         state = self.service._run_automatic_readiness()
-                    expected_creates = occurrence if operation == 'get_input_properties_list_property_items' else int(operation == 'create_input')
-                    self.assertEqual(client.create_input.call_count, expected_creates)
-                    self.assertEqual(client.remove_input.call_count, expected_creates)
-                    expected_properties = occurrence if operation == 'get_input_properties_list_property_items' else 0
-                    self.assertEqual(client.get_input_properties_list_property_items.call_count, expected_properties)
+                    client.create_input.assert_not_called()
+                    client.remove_input.assert_not_called()
+                    client.get_input_properties_list_property_items.assert_not_called()
                     client.disconnect.assert_called_once_with()
                     cache.assert_not_called()
                     location.assert_not_called()
@@ -1415,8 +1414,8 @@ class DesktopServiceTests(unittest.TestCase):
             devices, problem = self.actual_probe(self.service)
             self.assertIsNone(problem)
             self.assertEqual(set(devices), {'mic', 'window', 'monitor'})
-            self.assertEqual(client.create_input.call_count, 3)
-            self.assertEqual(client.remove_input.call_count, 3)
+            client.create_input.assert_not_called()
+            client.remove_input.assert_not_called()
             with patch.object(bridge.recorder, 'devices', return_value=deepcopy(self.devices)), \
                  patch.object(self.service, '_recover'):
                 self.assertTrue(self.service.refresh_devices()['ok'])
@@ -1589,6 +1588,27 @@ class DesktopServiceTests(unittest.TestCase):
         client.remove_input.assert_not_called()
         client.stop_record.assert_not_called()
         client.set_current_scene_collection.assert_not_called()
+
+    def test_repeated_idle_checks_never_create_or_remove_sources_and_detect_busy_transition(self):
+        client = MagicMock()
+        client.get_record_status.return_value.output_active = False
+        client.get_stream_status.return_value.output_active = False
+        client.get_profile_list.return_value.current_profile_name = 'Experience'
+        client.get_scene_collection_list.return_value.current_scene_collection_name = 'Experience'
+        with patch.object(bridge.recorder, 'client', return_value=client):
+            for _ in range(30):
+                devices, problem = self.actual_probe(self.service)
+                self.assertIsNone(problem)
+                self.assertEqual(devices, self.devices)
+            client.get_record_status.side_effect = [SimpleNamespace(output_active=False), SimpleNamespace(output_active=True)]
+            devices, problem = self.actual_probe(self.service)
+        self.assertIsNone(devices)
+        self.assertEqual(problem[0], 'OBS_BUSY')
+        client.create_input.assert_not_called()
+        client.remove_input.assert_not_called()
+        client.set_input_settings.assert_not_called()
+        client.stop_record.assert_not_called()
+        self.assertEqual(client.disconnect.call_count, 31)
 
     def test_native_picker_keeps_poll_responsive_and_blocks_capture(self):
         entered, release = threading.Event(), threading.Event()

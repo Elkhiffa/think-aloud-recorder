@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from unittest.mock import patch
 
 from input_capture import InputCaptureError, InputRecorder, capture_readiness, prepare_capture
-from input_capture_devices import axis_event, Event, ControllerEvent, XBOX_BUTTONS, PS_BUTTONS
+from input_capture_devices import axis_event, Event, ControllerEvent, SDLControllers, XBOX_BUTTONS, PS_BUTTONS
 from input_capture_windows import parse_obs_window, key_code
 import ctypes
 
@@ -164,6 +164,58 @@ class CollectorTests(unittest.TestCase):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_windows_selects_background_compatible_controller_backend_before_init(self):
+        from unittest.mock import MagicMock
+        dll=MagicMock()
+        dll.SDL_InitSubSystem.return_value=0
+        dll.SDL_NumJoysticks.return_value=0
+        with patch('input_capture_devices.C.CDLL',return_value=dll), patch('input_capture_devices.os.name','nt'):
+            source=SDLControllers('synthetic',lambda event:None,lambda:100.)
+            source.close()
+        calls=dll.mock_calls
+        initialized=next(i for i,c in enumerate(calls) if c[0]=='SDL_InitSubSystem')
+        hints={c.args[0]:c.args[1] for c in calls[:initialized] if c[0]=='SDL_SetHint'}
+        self.assertEqual(hints[b'SDL_JOYSTICK_RAWINPUT'],b'0')
+        self.assertEqual(hints[b'SDL_XINPUT_ENABLED'],b'1')
+        self.assertEqual(hints[b'SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS'],b'1')
+        self.assertEqual(hints[b'SDL_JOYSTICK_HIDAPI_PS5'],b'1')
+
+    def test_sdl_native_packet_layout_to_persisted_buttons_sticks_and_triggers(self):
+        import struct
+        from types import SimpleNamespace
+        # Independent wire bytes exercise the ABI, SDL event pump, recorder and
+        # JSON round trip, rather than feeding pre-decoded dictionaries only.
+        for device in ('xbox','dualsense'):
+            with self.subTest(device=device), TemporaryDirectory() as folder:
+                clock=Clock();events=[]
+                def packet(typ,stamp,control,value=0):
+                    events.append(struct.pack('<IIiBB2xh2x',typ,stamp,17,control,int(typ==0x651),value).ljust(56,b'\0'))
+                for b in (0,9,11):packet(0x651,1000,b)
+                for a in range(6):packet(0x650,1000,a,20000)
+                for b in (0,9,11):packet(0x652,1800,b)
+                for a in range(6):packet(0x650,1800,a,0)
+                def poll(pointer):
+                    if not events:return 0
+                    ctypes.memmove(pointer,events.pop(0),56);return 1
+                native=SDLControllers.__new__(SDLControllers)
+                native.dll=SimpleNamespace(SDL_PollEvent=poll,SDL_GetTicks=lambda:2000)
+                native.controllers={17:dict(pointer=None,device=device,axes=[0]*6)}
+                native.clock=clock
+                source=Source();capture=InputRecorder(folder,lambda:source,clock=clock,flush_interval=60)
+                capture.start(origin=100)
+                source.callback(dict(type='focus',foreground=True,timestamp=100))
+                native.emit=lambda event:source.callback(dict(event,foreground=True))
+                clock.value=102
+                native.pump()
+                result=capture.stop()
+                codes={i['code'] for i in result['intervals']}
+                expected={'A','LB','DPadUp','LeftStick','RightStick','LT','RT'} if device=='xbox' else {'Cross','L1','DPadUp','LeftStick','RightStick','L2','R2'}
+                self.assertEqual(codes,expected)
+                buttons=[i for i in result['intervals'] if i['kind']=='button']
+                self.assertEqual(len(buttons),3)
+                self.assertTrue(all(i['start']==1 and i['end']==1.8 for i in buttons))
+                self.assertEqual(json.loads(capture.path.read_text(encoding='utf-8'))['intervals'],result['intervals'])
+
     def test_opt_out_does_not_import_native_or_readiness(self):
         with patch('input_capture.capture_readiness') as check:
             self.assertIsNone(prepare_capture({}, '.'))
@@ -255,6 +307,21 @@ class RawDecoderTests(unittest.TestCase):
             source._raw(1)
             read.assert_not_called()
         self.assertEqual(events, [])
+
+    def test_recording_scope_reads_keyboard_and_mouse_while_target_is_background(self):
+        from input_capture_windows import RawInput
+        raw = RawInput()
+        source, events = self.source_for(raw, False)
+        source.capture_all = True
+        source._capture_started = 100
+        raw.header.type = 1
+        raw.data.keyboard.vkey = 87
+        source._raw(1)
+        raw.header.type = 0
+        raw.data.mouse.flags = 1
+        raw.data.mouse.x = 12
+        source._raw(1)
+        self.assertEqual([e['code'] for e in events], ['W', 'MouseLeft', 'MouseMove'])
 
     def test_queued_old_event_is_not_attributed_after_focus_return(self):
         from input_capture_windows import RawInput

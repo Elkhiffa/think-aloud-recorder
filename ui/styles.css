@@ -300,6 +300,7 @@ progress{width:100%;height:7px;accent-color:var(--accent);display:block;margin-t
 .input-recording-option .field-note{margin:6px 0 0 27px}
 .session-title-row{display:flex;gap:6px;align-items:center;min-width:0}
 .session-title-row strong{min-width:0;flex:0 1 auto}
+.session-title-row .preprocessing-badge{flex:0 1 auto;font-size:12px;line-height:1.6;color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:1px 7px;white-space:normal}
 .session-rename{width:28px;height:28px;padding:5px;flex:none;border:0;background:transparent;color:var(--muted);border-radius:4px;cursor:pointer}
 .session-rename:hover,.session-rename:focus-visible{color:var(--accent);background:var(--soft)}
 .session-rename svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}

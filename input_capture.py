@@ -1,4 +1,4 @@
-"""Session-scoped, foreground-filtered input intervals on the video's clock.
+"""Session-scoped physical input and independent window state on the video clock.
 
 The native source is deliberately lazy: importing, readiness checks and preparing a
 recorder do not install listeners. Tests inject a source/clock and never capture
@@ -22,6 +22,49 @@ DEVICES = {'keyboard', 'mouse', 'xbox', 'dualsense'}
 KINDS = {'button', 'motion', 'axis', 'trigger'}
 GAP_REASONS = {'focus': '目标窗口不在前台，操作采集已暂停',
                'disconnect': '输入设备已断开', 'capture': '操作采集不可用'}
+UNCERTAIN_INPUT = '前台归属无法确认，此次输入未记录'
+FOREGROUND_MISMATCH = '前台状态校验异常，此区间没有可靠操作记录'
+
+
+def compact_gaps(gaps):
+    """Collapse redundant gap evidence, never infer or reconstruct input.
+
+    Legacy collectors wrote a point for every rejected sample even inside an
+    existing whole-session focus gap. Retain that evidence as a count on the
+    covering gap instead of sending hundreds of thousands of marks to review.
+    Device-specific disconnects cannot cover other devices' missing samples.
+    """
+    rows = sorted((dict(g) for g in gaps), key=lambda g: g['start'])
+    covers = [g for g in rows if g['end'] > g['start'] and not g.get('device')
+              and g.get('type') in ('focus', 'capture')]
+    cursor, cover, kept = 0, None, []
+    for row in rows:
+        if row['start'] == row['end'] and row.get('type') == 'capture' and row.get('reason') == UNCERTAIN_INPUT:
+            while cursor < len(covers) and covers[cursor]['start'] <= row['start']:
+                candidate = covers[cursor]
+                if cover is None or candidate['end'] > cover['end']:
+                    cover = candidate
+                cursor += 1
+            if cover is not None and cover['end'] >= row['end']:
+                cover['discarded_events'] = cover.get('discarded_events', 0) + row.get('discarded_events', 1)
+                if cover['type'] == 'focus':
+                    cover.update(type='capture', reason=FOREGROUND_MISMATCH)
+                continue
+        kept.append(row)
+    result, last = [], {}
+    for row in kept:
+        key = (row.get('type'), row.get('reason'), row.get('device'))
+        previous = last.get(key)
+        if (previous is not None and row['start'] <= previous['end'] + 1e-6
+                and row.get('reason') != '录像启动确认前尚未采集操作'):
+            previous['end'] = max(previous['end'], row['end'])
+            count = previous.get('discarded_events', 0) + row.get('discarded_events', 0)
+            if count:
+                previous['discarded_events'] = count
+        else:
+            result.append(row)
+            last[key] = row
+    return result
 
 
 def enabled(settings):
@@ -56,7 +99,8 @@ def prepare_capture(settings, session_path, *, root=None, clock=time.perf_counte
     from input_capture_windows import WindowsInputSource, resolve_target
     from input_capture_devices import resolve_sdl
     target = resolve_target(settings['window'])
-    return InputRecorder(session_path, lambda: WindowsInputSource(target, resolve_sdl(root), clock), clock=clock)
+    return InputRecorder(session_path, lambda: WindowsInputSource(target, resolve_sdl(root), clock, capture_all=True),
+                         clock=clock, recording_scope='all')
 
 
 def direction(x, y):
@@ -69,11 +113,13 @@ class InputRecorder:
     """Translate sanitized source events to intervals; no raw key/text log."""
 
     def __init__(self, session_path, source_factory, *, clock=time.perf_counter,
-                 flush_interval=1.0):
+                 flush_interval=1.0, recording_scope='foreground'):
         self.path = Path(session_path) / 'input-events.json'
         self.source_factory = source_factory
         self.clock = clock
         self.flush_interval = flush_interval
+        self.recording_scope = recording_scope
+        self._focus_invalid_from = None
         self._lock = threading.RLock()
         self._write_lock = threading.Lock()
         self._writer_stop = threading.Event()
@@ -100,6 +146,7 @@ class InputRecorder:
         self._state = 'prepared'
         self.error = None
         self._last_motion = None
+        self._coverage_gap = None
 
     def _time(self, stamp=None):
         supplied = stamp is not None
@@ -127,7 +174,10 @@ class InputRecorder:
             self._offset = max(0.0, float(video_offset))
             self._state = 'recording'
             self._open_gaps['capture:startup'] = {'start': 0., 'type': 'capture', 'reason': '录像启动确认前尚未采集操作'}
-            self._open_gaps['focus'] = {'start': self._time(), 'type': 'focus', 'reason': GAP_REASONS['focus']}
+            if self.recording_scope == 'all':
+                self._open_gaps['window'] = {'start': self._time(), 'type': 'window', 'state': 'unknown'}
+            else:
+                self._open_gaps['focus'] = {'start': self._time(), 'type': 'focus', 'reason': GAP_REASONS['focus']}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._source = self.source_factory()
@@ -168,13 +218,18 @@ class InputRecorder:
             self._last_motion = None
 
     def feed(self, event):
-        """Only the source calls this. `foreground` is required on every input."""
+        """Only the source calls this; legacy foreground mode retains its gate."""
         with self._lock:
             if self._state != 'recording':
                 return
             at = self._time(event.get('timestamp'))
             self._expire_motion(at)
             typ = event.get('type')
+            if typ in ('invalidate', 'focus_error') and self.recording_scope == 'all':
+                self._focus_invalid_from = at if self._focus_invalid_from is None else min(at, self._focus_invalid_from)
+                # Foreground uncertainty invalidates only window annotations.
+                # Physical input and its video-clock timestamps remain facts.
+                return
             if typ == 'invalidate':
                 cutoff = max(0., at)
                 self._invalid_from = cutoff if self._invalid_from is None else min(self._invalid_from, cutoff)
@@ -206,13 +261,34 @@ class InputRecorder:
                 self._durable_until = at if self._durable_until is None else max(self._durable_until, at)
                 return
             if typ == 'coverage_gap':
-                self._gaps.append({'type': 'capture', 'start': at, 'end': max(at, float(event.get('end', at)) - self._origin + self._offset), 'reason': '前台归属无法确认，此次输入未记录'})
+                end = max(at, float(event.get('end', event.get('timestamp', self.clock()))) - self._origin + self._offset)
+                focus_gap = self._open_gaps.get('focus')
+                if focus_gap and focus_gap['start'] <= at:
+                    # The focus interval already describes this missing range.
+                    focus_gap['discarded_events'] = focus_gap.get('discarded_events', 0) + 1
+                    focus_gap.update(type='capture', reason=FOREGROUND_MISMATCH)
+                    return
+                gap = self._coverage_gap
+                if gap is not None and gap['start'] <= at <= gap['end'] + .064:
+                    gap['end'] = max(gap['end'], end)
+                    gap['discarded_events'] += 1
+                else:
+                    self._coverage_gap = dict(type='capture', start=at, end=end, reason=UNCERTAIN_INPUT, discarded_events=1)
+                    self._gaps.append(self._coverage_gap)
                 return
             if typ == 'ready':
                 self._end_gap('capture:startup', at)
                 return
             if typ == 'focus':
+                self._coverage_gap = None
                 active = event.get('foreground') is True
+                if self.recording_scope == 'all':
+                    state = 'foreground' if active else 'background'
+                    if self._open_gaps.get('window', {}).get('state') != state:
+                        self._end_gap('window', at)
+                        self._open_gaps['window'] = dict(start=at, type='window', state=state)
+                    self._eligible = active
+                    return
                 if active != self._eligible:
                     self._eligible = active
                     if active:
@@ -235,8 +311,9 @@ class InputRecorder:
                 self._end_gap('disconnect:' + str(event.get('device')), at)
                 return
             # A stale callback may arrive just after focus loss; deny by default.
-            if not self._eligible or event.get('foreground') is not True:
+            if self.recording_scope != 'all' and (not self._eligible or event.get('foreground') is not True):
                 return
+            self._coverage_gap = None
             device, code = event.get('device'), event.get('code')
             kind = event.get('kind', 'button')
             if device not in DEVICES or kind not in KINDS or not isinstance(code, str):
@@ -285,6 +362,10 @@ class InputRecorder:
         value = {'version': 1, 'state': self._state, 'duration': round(at, 6),
                  'timebase': 'video_seconds', 'capture_source': 'windows-raw-input+sdl2',
                  'clock': {'basis': 'monotonic', 'offset_seconds': self._offset}}
+        if self.recording_scope == 'all':
+            value['recording_scope'] = 'all'
+            if self._focus_invalid_from is not None:
+                value['window_state_invalid_from'] = self._focus_invalid_from
         if self.error:
             value['error'] = self.error
         return value
@@ -308,7 +389,10 @@ class InputRecorder:
                 count = self._journal_records
             intervals, gaps, _ = _read_journal(self.journal_path, count)
             value['intervals'] = sorted(intervals + pending_intervals + active, key=lambda i: (i['start'], i['id']))
-            value['gaps'] = sorted(gaps + pending_gaps + open_gaps, key=lambda g: g['start'])
+            history = gaps + pending_gaps + open_gaps
+            value['gaps'] = compact_gaps(g for g in history if g.get('type') != 'window')
+            if self.recording_scope == 'all':
+                value['window_states'] = _window_states(history, at, self._focus_invalid_from)
             if self._invalid_from is not None:
                 value = _invalidate_value(value, self._invalid_from)
             return value
@@ -322,10 +406,11 @@ class InputRecorder:
                 self._expire_motion(at)
                 intervals, self._intervals = self._intervals, []
                 gaps, self._gaps = self._gaps, []
+                self._coverage_gap = None
                 value = self._metadata(at)
                 active = [dict(i, end=round(max(i['start'], at), 6)) for i in self._active.values()]
                 open_gaps = [dict(g, end=round(at, 6)) for g in self._open_gaps.values()]
-            records = [('interval', i) for i in intervals] + [('gap', g) for g in gaps]
+            records = [('interval', i) for i in intervals] + [('window' if g.get('type') == 'window' else 'gap', g) for g in gaps]
             try:
                 if self._invalid_from is not None:
                     # Persist authority before changing either data file. If
@@ -450,7 +535,8 @@ def _invalidate_value(value, cutoff):
 def _replace_journal(path, value):
     temp = path.with_suffix('.journal.tmp')
     with temp.open('w', encoding='utf-8', newline='\n') as handle:
-        for kind, items in (('interval', value.get('intervals', [])), ('gap', value.get('gaps', []))):
+        for kind, items in (('interval', value.get('intervals', [])), ('gap', value.get('gaps', [])),
+                            ('window', [dict(g,type='window') for g in value.get('window_states', [])])):
             for item in items:
                 handle.write(json.dumps({'type': kind, 'value': item}, ensure_ascii=False,
                                         separators=(',', ':'), allow_nan=False) + '\n')
@@ -502,13 +588,13 @@ def _read_journal(path, count):
                     break
                 record = json.loads(line)
                 kind, value = record.get('type'), record.get('value')
-                if kind not in ('interval', 'gap') or not isinstance(value, dict):
+                if kind not in ('interval', 'gap', 'window') or not isinstance(value, dict):
                     break
                 if not all(isinstance(value.get(k), (int, float)) and math.isfinite(value[k]) for k in ('start', 'end')):
                     break
                 if value['start'] < 0 or value['end'] < value['start']:
                     break
-                (intervals if kind == 'interval' else gaps).append(value)
+                (intervals if kind == 'interval' else gaps).append(dict(value,type='window') if kind == 'window' else value)
                 complete += 1
     except (OSError, ValueError):
         pass
@@ -518,7 +604,9 @@ def _read_journal(path, count):
 def _trim(value, cutoff):
     value = dict(value)
     value['duration'] = round(min(value['duration'], cutoff), 6)
-    for collection in ('intervals', 'gaps'):
+    for collection in ('intervals', 'gaps', 'window_states'):
+        if collection not in value:
+            continue
         value[collection] = [dict(item, end=min(item['end'], value['duration']))
                              for item in value.get(collection, []) if item['start'] < value['duration']]
     return value
@@ -546,8 +634,10 @@ def recover_capture(session_path, duration=None, *, error=None, trim_to=None):
         else:
             durable = max([0.] + [i['end'] for i in intervals + gaps])
             error = error or '操作日志不完整，缺失区间已标记。'
-        value = {key: checkpoint[key] for key in ('version', 'timebase', 'capture_source', 'clock') if key in checkpoint}
-        value.update(duration=durable, intervals=intervals, gaps=gaps)
+        value = {key: checkpoint[key] for key in ('version', 'timebase', 'capture_source', 'clock', 'recording_scope', 'window_state_invalid_from') if key in checkpoint}
+        value.update(duration=durable, intervals=intervals, gaps=[g for g in gaps if g.get('type') != 'window'])
+        if value.get('recording_scope') == 'all':
+            value['window_states'] = _window_states(gaps, durable, value.get('window_state_invalid_from'))
     else:
         value = dict(checkpoint)
     if revoked is not None:
@@ -567,3 +657,13 @@ def recover_capture(session_path, duration=None, *, error=None, trim_to=None):
         _replace_journal(path.with_name('input-events.journal'), value)
     _atomic_json(path, value)
     return value
+
+
+def _window_states(history, end, invalid_from=None):
+    rows = sorted((dict(start=round(g['start'],6), end=round(g['end'],6), state=g['state']) for g in history
+                   if g.get('type') == 'window'), key=lambda row: row['start'])
+    if invalid_from is not None:
+        rows = [dict(row,end=min(row['end'],invalid_from)) for row in rows if row['start'] < invalid_from]
+        if end > invalid_from:
+            rows.append(dict(start=invalid_from,end=end,state='unknown'))
+    return rows

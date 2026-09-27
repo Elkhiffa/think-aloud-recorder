@@ -141,6 +141,8 @@ class WindowSceneTests(unittest.TestCase):
         client.get_scene_item_list.side_effect = lambda scene: SimpleNamespace(scene_items=[
             dict(sourceName=name, sceneItemId=source['ident']) for name, source in sources.items()])
         client.get_record_status.return_value = SimpleNamespace(output_active=True, output_duration=100)
+        client.get_scene_item_transform.return_value = SimpleNamespace(
+            scene_item_transform=dict(sourceWidth=1920, sourceHeight=1080))
         return client, sources
 
     def test_scene_rebinds_disabled_source_before_enabling_and_updates_local_config(self):
@@ -157,6 +159,42 @@ class WindowSceneTests(unittest.TestCase):
         methods = [call[0] for call in client.mock_calls]
         self.assertLess(methods.index('set_input_settings'), methods.index('set_scene_item_enabled'))
         client.start_record.assert_not_called()
+
+    def test_ultrawide_scene_uses_actual_capture_aspect_with_bounded_encoding_size(self):
+        client,_=self.client([[window(self.current)]])
+        client.get_scene_item_transform.side_effect=[
+            SimpleNamespace(scene_item_transform=dict(sourceWidth=0,sourceHeight=0)),
+            SimpleNamespace(scene_item_transform=dict(sourceWidth=3440,sourceHeight=1440))]
+        with patch.object(recorder,'ensure_idle'),patch.object(recorder.time,'sleep'):
+            geometry=recorder.configure_scene(client,self.config())
+        self.assertEqual(geometry,dict(source_width=3440,source_height=1440,width=1920,height=804))
+        last_video=[c.args[1] for c in client.send.call_args_list if c.args[0]=='SetVideoSettings'][-1]
+        self.assertEqual((last_video['baseWidth'],last_video['baseHeight']),(1920,804))
+        self.assertEqual((last_video['outputWidth'],last_video['outputHeight']),(1920,804))
+        transform=client.set_scene_item_transform.call_args.args[2]
+        self.assertEqual(transform['boundsType'],'OBS_BOUNDS_NONE')
+        self.assertAlmostEqual(transform['scaleX']*3440,1920)
+        self.assertAlmostEqual(transform['scaleY']*1440,804)
+        self.assertEqual(transform['alignment'],5)
+
+    def test_unready_capture_never_silently_records_a_guessed_aspect(self):
+        client,_=self.client([[window(self.current)]])
+        client.get_scene_item_transform.return_value=SimpleNamespace(scene_item_transform=dict(sourceWidth=0,sourceHeight=0))
+        with patch.object(recorder,'ensure_idle'),patch.object(recorder.time,'sleep'):
+            with self.assertRaisesRegex(RuntimeError,'画面的尺寸'):
+                recorder.configure_scene(client,self.config())
+        client.start_record.assert_not_called()
+
+    def test_recording_dimensions_preserve_quality_caps_and_encoder_alignment(self):
+        for sw,sh,expected in [(1920,1080,(1920,1080)),(3440,1440,(1920,804)),
+                              (1080,1920,(608,1080)),(640,360,(640,360)),(1921,1081,(1920,1080))]:
+            with self.subTest(source=(sw,sh)):
+                w,h,fps=recorder.recording_dimensions(sw,sh,'均衡 1080p30')
+                self.assertEqual((w,h),expected)
+                self.assertLess(abs(w/h-sw/sh)/(sw/sh),.002)
+                self.assertEqual((w%2,h%2,fps),(0,0,30))
+        for invalid in (None,True,float('nan'),float('inf'),0,-1,100000):
+            with self.assertRaises(ValueError):recorder.recording_dimensions(invalid,1440,'均衡 1080p30')
 
     def test_ambiguous_or_missing_targets_stay_disabled_and_do_not_change_config(self):
         for options in ([], [window(self.current), window('Game:ThirdClass:game.exe')]):
