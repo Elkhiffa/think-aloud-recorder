@@ -18,13 +18,38 @@ class LifecycleTests(unittest.TestCase):
         small=SimpleNamespace(x=-1280,y=0,width=1280,height=720,frame=SimpleNamespace(Width=1280,Height=680))
         manager=WindowManager(Mock(),SimpleNamespace(screens=[large,small]))
         manager.main=SimpleNamespace(x=100,y=100)
-        self.assertEqual(manager._review_window_options(),dict(width=1440,height=900,screen=large))
+        self.assertEqual(manager._review_window_options(),dict(width=1728,height=956,screen=large))
         manager.main.x=-1000
-        self.assertEqual(manager._review_window_options(),dict(width=1232,height=616,screen=small))
+        self.assertEqual(manager._review_window_options(),dict(width=1152,height=616,screen=small))
 
     def test_review_monitor_lookup_failure_does_not_prevent_opening(self):
         manager=WindowManager(Mock(),SimpleNamespace(screens=[]))
-        self.assertEqual(manager._review_window_options(),dict(width=1440,height=900))
+        self.assertEqual(manager._review_window_options(),dict(width=1720,height=1000))
+
+    def test_review_on_ultrawide_monitor_uses_its_work_area(self):
+        screen=SimpleNamespace(x=0,y=0,width=3440,height=1440,frame=SimpleNamespace(Width=3440,Height=1400))
+        manager=WindowManager(Mock(),SimpleNamespace(screens=[screen]))
+        options=manager._review_window_options()
+        self.assertEqual((options['width'],options['height']),(3096,1288))
+        self.assertLess(options['width'],screen.frame.Width)
+        self.assertLess(options['height'],screen.frame.Height)
+
+    def test_review_accepts_pywebviews_lazy_screen_list(self):
+        # The real webview.screens is a Proxy, not a list or tuple.
+        from proxy_tools import Proxy
+        screen=SimpleNamespace(x=0,y=0,width=3440,height=1440,frame=SimpleNamespace(Width=3440,Height=1400))
+        manager=WindowManager(Mock(),SimpleNamespace(screens=Proxy(lambda:[screen])))
+        self.assertEqual(manager._review_window_options(),dict(width=3096,height=1288,screen=screen))
+
+    def test_closed_main_position_does_not_discard_available_monitor(self):
+        class ClosedWindow:
+            @property
+            def x(self):
+                raise TypeError('native window no longer exists')
+        screen=SimpleNamespace(x=0,y=0,width=3440,height=1440,frame=None)
+        manager=WindowManager(Mock(),SimpleNamespace(screens=[screen]))
+        manager.main=ClosedWindow()
+        self.assertEqual(manager._review_window_options(),dict(width=3096,height=1324,screen=screen))
 
     def setup_manager(self):
         service, window = Mock(), Mock()

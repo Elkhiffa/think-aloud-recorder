@@ -67,7 +67,7 @@ test('wizard explains input capture boundary and does not enable it while select
   toggle.checked=true;toggle.onchange();assert.equal(f.run('store.draft.record_inputs'),true);
   const source=f.elements.get('source');source.value='整个显示器';source.listeners.change();
   assert.equal(toggle.disabled,true);assert.equal(toggle.checked,false);
-  assert.match(f.elements.get('inputRecordingHint').textContent,/改为“游戏窗口”/);
+  assert.match(f.elements.get('inputRecordingHint').textContent,/“游戏窗口”.*操作记录/);
   source.value='游戏窗口';source.listeners.change();assert.equal(toggle.disabled,false);assert.equal(toggle.checked,false);
   assert.equal(f.calls.some(call=>call.name==='start_recording'),false);
 });
@@ -85,6 +85,17 @@ test('playable processing session allows review and naming but keeps reprocessin
   assert.ok(!html.includes('data-session-action="review" data-id="no-video"'));
   f.elements.get('search').value='door';f.elements.get('search').oninput();
   assert.ok(!f.elements.get('sessionList').innerHTML.includes('data-id="no-video"'));
+});
+
+test('external preprocessing badges never change recording state or disable review',async()=>{
+  const sessions=['none','processing','complete','failed','stale'].map((state,i)=>({id:'agent-'+i,
+    game:'原始名称',state:'可回看',can_review:true,preprocessing:{state,...(state==='none'?{}:{label:'外部 <整理>',reason:'保留原始素材'})}}));
+  const f=await fixture(snapshot({sessions}));
+  for(const s of sessions){assert.equal(f.run(`sessionKind(store.snapshot.sessions.find(s=>s.id==='${s.id}'))`),'ready');assert.equal(f.run(`sessionActionBlocked('${s.id}','review')`),false);}
+  const html=f.elements.get('sessionList').innerHTML;
+  assert.equal((html.match(/class="preprocessing-badge"/g)||[]).length,4);
+  assert.equal((html.match(/data-session-action="review"/g)||[]).length,5);
+  assert.match(html,/外部 &lt;整理&gt;/);assert.equal((html.match(/<strong>原始名称/g)||[]).length,5);
 });
 
 test('new preset is independent; editing and cancellation preserve every saved setting',()=>{

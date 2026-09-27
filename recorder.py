@@ -537,17 +537,44 @@ def resolve_window_selection(requested, items):
 
 
 def devices(progress=lambda s:None):
+    import device_inventory
     with obs_connection(progress=progress) as r:
         ensure_idle(r)
-        add(r,'设置：麦克风','wasapi_input_capture',{'device_id':'default'},False)
-        add(r,'设置：窗口','window_capture',{},False)
-        add(r,'设置：显示器','monitor_capture',{},False)
-        result={}
-        for key,name,prop in [('mic','设置：麦克风','device_id'),('window','设置：窗口','window'),('monitor','设置：显示器','monitor_id')]:
-            result[key]=r.get_input_properties_list_property_items(name,prop).property_items
-            result[key]=[x for x in result[key] if x.get('itemEnabled') and x.get('itemValue')]
-        for n in ['设置：麦克风','设置：窗口','设置：显示器']:r.remove_input(n)
+        result=device_inventory.devices()
+        ensure_idle(r)
         return result
+def recording_dimensions(source_width,source_height,preset):
+    """Fit the source in the quality preset, retaining its aspect and even pixels."""
+    limit_width,limit_height,fps=PRESETS[preset]
+    if (type(source_width) not in (int,float) or type(source_height) not in (int,float)
+            or not all(math.isfinite(n) and 16<=n<=32768 for n in (source_width,source_height))):
+        raise ValueError('录制画面尺寸无效。')
+    scale=min(1.,limit_width/source_width,limit_height/source_height)
+    return max(16,round(source_width*scale/2)*2),max(16,round(source_height*scale/2)*2),fps
+
+
+def fit_recording_source(r,item,preset):
+    # OBS reports the actual captured client/display dimensions once the source
+    # is active. Do not infer them from a saved monitor setting or a window title.
+    for _ in range(50):
+        transform=r.get_scene_item_transform('Experience',item['sceneItemId']).scene_item_transform
+        sw,sh=transform.get('sourceWidth',0),transform.get('sourceHeight',0)
+        if type(sw) in (int,float) and type(sh) in (int,float) and sw>=16 and sh>=16:
+            break
+        time.sleep(.1)
+    else:
+        raise RuntimeError('尚未读取到录制画面的尺寸，请显示目标窗口后重试。')
+    w,h,fps=recording_dimensions(sw,sh,preset)
+    r.send('SetVideoSettings',{'baseWidth':w,'baseHeight':h,'outputWidth':w,'outputHeight':h,'fpsNumerator':fps,'fpsDenominator':1})
+    # Independent X/Y scaling differs by at most one encoded pixel after even
+    # rounding, and avoids burning letterboxing into every future recording.
+    r.set_scene_item_transform('Experience',item['sceneItemId'],{
+        'boundsType':'OBS_BOUNDS_NONE','positionX':0,'positionY':0,'alignment':5,
+        'scaleX':w/sw,'scaleY':h/sh,'rotation':0,
+        'cropLeft':0,'cropRight':0,'cropTop':0,'cropBottom':0})
+    return dict(source_width=sw,source_height=sh,width=w,height=h)
+
+
 def configure_scene(r,c,test_file=None):
     ensure_idle(r)
     if r.get_profile_parameter('Output','Mode').parameter_value!='Advanced' or r.get_profile_parameter('AdvOut','RecTracks').parameter_value!='3':
@@ -607,12 +634,17 @@ def configure_scene(r,c,test_file=None):
     expected={'测试素材'} if test_file else {'游戏画面','游戏声音','口述'}
     actual={i['inputName'] for i in r.get_input_list().inputs}
     if not expected.issubset(actual):raise RuntimeError('OBS 录制源未能就绪，已取消开始。')
+    picture='测试素材' if test_file else '游戏画面'
+    item=next((i for i in r.get_scene_item_list('Experience').scene_items if i.get('sourceName')==picture),None)
+    if item is None:raise RuntimeError('未能取得录制画面，已取消开始。')
+    geometry=fit_recording_source(r,item,c['preset'])
     microphone='测试素材' if test_file else '口述'
     for item in r.get_input_list().inputs:
         name=item['inputName']
         if name=='游戏画面':continue
         track_state=r.get_input_audio_tracks(name).input_audio_tracks
         if bool(track_state.get('2'))!=(name==microphone):raise RuntimeError('音轨隔离检查失败：第 2 轨只能包含选定麦克风。')
+    return geometry
 
 def session_lock(fn):
     @functools.wraps(fn)
@@ -866,12 +898,13 @@ class Session:
             ensure_idle(r)
             vault=Path(c['vault']);vault.mkdir(parents=True,exist_ok=True)
             if shutil.disk_usage(vault).free<5*1024**3:raise RuntimeError('保存盘可用空间不足 5 GB。请清理或更换保存位置。')
-            configure_scene(r,c,test_file)
+            video_geometry=configure_scene(r,c,test_file)
             ident=datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]
             game=re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',c['game']).strip(' .')[:60] or '自由探索'
             folder=vault/'场次'/f'{ident} {game}';folder.mkdir(parents=True)
             write(folder/'session.json',dict(id=ident,game=c['game'],created=datetime.now().astimezone().isoformat(),state='待开始',settings=session_settings(c),test=bool(test_file),audio_layout={'track1':'游戏与口述混音，仅回放','track2':'独立口述，唯一转写输入','ffmpeg_map':'0:a:1'}))
             s=cls(folder);s.update(state='启动中')
+            if isinstance(video_geometry,dict):s.update(video_geometry=video_geometry)
             try:
                 from input_capture import prepare_capture
                 s._input_capture=prepare_capture(c,folder,root=ROOT)
@@ -1030,9 +1063,11 @@ class Session:
             progress('提取独立口述音轨（保留静音与时间位置）…')
             self.update(step='提取口述音轨')
             run(['-i',source,'-map','0:a:1','-af','aresample=16000:async=1:first_pts=0','-ac','1','-c:a','flac',p/'口述.flac'],log)
-            from transcription_runtime import profile,prepare_gpu_runtime
+            from transcription_runtime import profile,prepare_gpu_runtime,resume_profile
             options=profile(self.meta['settings'])
-            identity={'options':options,'audio_sha256':sha256(p/'口述.flac')}
+            audio_sha256=sha256(p/'口述.flac')
+            options=resume_profile(p,self.meta.get('transcription_cache'),options,audio_sha256)
+            identity={'options':options,'audio_sha256':audio_sha256}
             fingerprint=hashlib.sha256(json.dumps(identity,sort_keys=True,ensure_ascii=False).encode('utf-8')).hexdigest()[:16]
             chunks=p/'转写原始'/fingerprint;chunks.mkdir(parents=True,exist_ok=True);all_segments=[]
             write(chunks/'配置.json',identity)
@@ -1083,14 +1118,22 @@ class Session:
                         wav.unlink(missing_ok=True)
                     all_segments.extend(segments)
             valid_segments(all_segments,duration)
-            write(p/'录像.whisper.json',{'segments':all_segments,'transcription':options})
+            from speaker_roles import analyze_speakers
+            progress('核对说话人时长与麦克风音量…')
+            speaker_analysis=analyze_speakers(p/'口述.flac',all_segments)
+            write(p/'录像.whisper.json',{'segments':all_segments,'transcription':options,'speaker_analysis':speaker_analysis})
             (p/'录像.srt').write_text('\n\n'.join(f'{i+1}\n{stamp(s["start"])} --> {stamp(s["end"])}\n{s["text"].strip()}' for i,s in enumerate(all_segments))+'\n',encoding='utf-8')
-            (p/'逐字稿.md').write_text('# 口述逐字稿\n\n机器转写未经校对；原话、改口与疑问不转成设计结论。音频是最终依据。\n\n'+(warning+'\n\n' if warning else '')+ '\n\n'.join(f'[{stamp(s["start"])}](录像.mp4#t={s["start"]}) {s["text"]}' for s in all_segments),encoding='utf-8')
+            speaker_note='说话人编号仅适用于本次转写。记录者自动推荐保存在录像.whisper.json 的 speaker_analysis；手动选择保存在 session.json 的 recorder_speaker，且只对匹配的 transcript_id 生效。\n\n' if speaker_analysis['speakers'] else ''
+            (p/'逐字稿.md').write_text('# 口述逐字稿\n\n机器转写未经校对；原话、改口与疑问不转成设计结论。音频是最终依据。\n\n'+speaker_note+(warning+'\n\n' if warning else '')+ '\n\n'.join(f'[{stamp(s["start"])}](录像.mp4#t={s["start"]}) '+(f'【说话人 {s["speaker_id"]}】' if 'speaker_id' in s else '')+s['text'] for s in all_segments),encoding='utf-8')
             (p/'场次说明.md').write_text(f'# {self.meta["game"]}\n\n场次 ID：`{self.meta["id"]}`\n\n开始：{self.meta["created"]}\n\n录像时长：{stamp(duration)}\n\n[同步回看](录像.mp4) · [[逐字稿]] · [[复盘]]\n\n引用格式：`{self.meta["id"]} @ 00:12:03.200–00:12:18.500`\n\n原始录像.mkv：音轨1 游戏与口述混音；音轨2 独立口述。\n\n口述.flac 保留录制时间位置；录像.mp4 保留画面与混音，无重编码。\n\n自动逐字稿可能漏字、误识别和不精确分句，请结合原声校对。\n',encoding='utf-8')
             if not (p/'复盘.md').exists():(p/'复盘.md').write_text('# 复盘\n\n## 回看记录\n\n## Insight\n\n## 待验证\n\n',encoding='utf-8')
             warning=warning or ('未识别出语音，请检查原声。' if not all_segments else '')
             self.update(state='可回看',transcription_state='ready',segments=len(all_segments),completed=datetime.now().astimezone().isoformat(),warning=warning)
             make_player(p,self.meta,all_segments)
+            # Publish only after all required recording/transcript artifacts and
+            # the portable review are complete. External agents are optional.
+            from agent_protocol import try_publish_ready
+            try_publish_ready(p)
             progress(warning or '可回看')
         except Exception as e:
             error=f'{self.meta.get("step","整理")}：{e}'
@@ -1118,6 +1161,10 @@ class Session:
         with zipfile.ZipFile(tmp,'w',compression=zipfile.ZIP_STORED,allowZip64=True) as z:
             for src in folder.rglob('*'):
                 if src.is_file() and not src.name.endswith(('.tmp','.pending.mp4','.lock')):
+                    if src.name in ('agent-ready.json','agent-state.json','experience-events.json') or 'agent-history' in src.relative_to(folder).parts:
+                        # Export only the validated result snapshot below. Job
+                        # leases and machine-local readiness are not portable.
+                        continue
                     if src.parent==folder and src.name.startswith('input-events.') and src.name!='input-events.json':
                         # Recovery journals and revocation fences are local-only.
                         continue
@@ -1142,6 +1189,9 @@ class Session:
             if payload is not None:
                 page = render_player(ROOT,payload)
                 z.writestr((Path('场次') / folder.name / '独立回看.html').as_posix(), page)
+                result=payload.get('preprocessing',{}).get('result')
+                if result is not None:
+                    z.writestr((Path('场次')/folder.name/'体验事件.json').as_posix(),json.dumps(result,ensure_ascii=False,indent=2))
             z.writestr('校验清单.json',json.dumps(hashes,ensure_ascii=False,indent=2))
             z.writestr('办公室打开说明.md',OFFICE)
         with zipfile.ZipFile(tmp) as z:

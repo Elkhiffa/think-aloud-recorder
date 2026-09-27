@@ -304,8 +304,8 @@ class SessionInputTests(unittest.TestCase):
 
     def test_device_enumeration_failure_releases_connection(self):
         client=MagicMock()
-        with patch.object(recorder,'client',return_value=client), patch.object(recorder,'ensure_idle'), patch.object(recorder,'add',side_effect=RuntimeError('synthetic failed source')):
-            with self.assertRaisesRegex(RuntimeError,'synthetic failed source'):recorder.devices()
+        with patch.object(recorder,'client',return_value=client), patch.object(recorder,'ensure_idle'), patch('device_inventory.devices',side_effect=RuntimeError('synthetic failed inventory')):
+            with self.assertRaisesRegex(RuntimeError,'synthetic failed inventory'):recorder.devices()
         client.disconnect.assert_called_once()
 
     def test_recovery_marks_gap_without_resuming_capture(self):

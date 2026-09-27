@@ -66,6 +66,18 @@ def input_payload(folder, meta):
         if not _number(end) or end < 0:
             raise ValueError('操作记录时长无效。')
         base.update(state=data['state'], duration=end)
+        if data.get('recording_scope') == 'all':
+            base['recording_scope'] = 'all'
+            base['window_states'] = []
+            rows = data.get('window_states', [])
+            if not isinstance(rows, list):
+                raise ValueError('窗口状态记录无效。')
+            for row in rows:
+                if (not isinstance(row, dict) or row.get('state') not in ('foreground','background','unknown')
+                        or not _number(row.get('start')) or not _number(row.get('end'))
+                        or not 0 <= row['start'] <= row['end'] <= end + .001):
+                    raise ValueError('窗口状态时间位置无效。')
+                base['window_states'].append({key:row[key] for key in ('start','end','state')})
         for key in ('intervals', 'gaps'):
             rows = data.get(key, [])
             if not isinstance(rows, list):
@@ -81,6 +93,8 @@ def input_payload(folder, meta):
                         clean[field] = str(row[field])[:300]
                 if key == 'gaps' and row.get('device') in ('keyboard','mouse','xbox','dualsense'):
                     clean['device'] = row['device']
+                if key == 'gaps' and type(row.get('discarded_events')) is int and row['discarded_events'] > 0:
+                    clean['discarded_events'] = row['discarded_events']
                 for field in ('value', 'x', 'y') if key == 'intervals' else ():
                     if field in row and _number(row[field]):
                         clean[field] = row[field]
@@ -100,6 +114,8 @@ def input_payload(folder, meta):
                 base[key]=[dict(row,end=min(row['end'],revoked)) for row in base[key] if row['start']<revoked]
             base['gaps'].append(dict(start=revoked,end=end,type='capture',reason='前台边界无法确认，不可信操作数据已清除'))
             base.update(state='failed',error='操作记录存在撤销区间，已隐藏不可信数据。')
+        from input_capture import compact_gaps
+        base['gaps'] = compact_gaps(base['gaps'])
         return base
     except (OSError, ValueError, TypeError) as error:
         return {**base, 'state': 'failed', 'intervals': [], 'gaps': [], 'error': _safe_error(error)}
@@ -124,7 +140,11 @@ def review_payload(folder, meta, segments, *, desktop=False):
         if (not isinstance(start, (int, float)) or not isinstance(end, (int, float))
                 or not math.isfinite(start) or not math.isfinite(end) or not 0 <= start <= end):
             raise ValueError('逐字稿时间位置无效，请恢复整理。')
-        clean.append({'start': start, 'end': end, 'text': str(row.get('text', ''))})
+        segment = {'start': start, 'end': end, 'text': str(row.get('text', ''))}
+        from speaker_roles import valid_speaker
+        if valid_speaker(row.get('speaker_id')):
+            segment['speaker_id'] = row['speaker_id']
+        clean.append(segment)
     clean.sort(key=lambda row: row['start'])
     transcription_state = meta.get('transcription_state')
     if transcription_state not in ('pending', 'ready', 'failed'):
@@ -134,14 +154,40 @@ def review_payload(folder, meta, segments, *, desktop=False):
             (meta.get('transcription_state') is None and meta.get('state') == '可回看')):
         transcription_state='failed'
         transcription_error='已完成的逐字稿文件缺失，请恢复文件或重新转写；录像仍可回看。'
+    from speaker_roles import speaker_payload
+    from agent_protocol import preprocessing_status
+    narration = None
+    try:
+        audio = contained_file(folder, '口述.flac')
+        narration = audio.as_uri() if desktop else '口述.flac'
+    except (OSError, ValueError):
+        pass
     return dict(id=str(meta.get('id', Path(folder).name)), title=session_title(meta),
                 game=str(meta.get('game', '')), session_name=str(meta.get('session_name') or ''),
                 created=str(meta.get('created', '')), test=bool(meta.get('test')),
                 vault_path=str(Path(folder).resolve().parent.parent) if desktop else '../..',
-                inputs=input_payload(folder, meta),
+                inputs=input_payload(folder, meta), video_display=video_display_payload(folder),
+                preprocessing=preprocessing_status(folder, meta, include_result=True),
                 transcription={'state': transcription_state, 'error': transcription_error},
-                segments=clean, desktop=desktop,
+                segments=clean, speakers=speaker_payload(folder,meta,clean), narration=narration, desktop=desktop,
                 video=contained_file(folder, '录像.mp4').as_uri() if desktop else '录像.mp4')
+
+
+def video_display_payload(folder):
+    """Optional non-destructive crop of verified, baked-in letterboxing."""
+    try:
+        path=contained_file(folder,'video-display.json')
+        if path.stat().st_size>4096:return None
+        data=json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(data,dict) or data.get('version')!=1:return None
+        keys=('source_width','source_height','left','top','width','height')
+        if any(type(data.get(k)) is not int for k in keys):return None
+        sw,sh,x,y,w,h=(data[k] for k in keys)
+        if not (16<=sw<=32768 and 16<=sh<=32768 and 0<=x and 0<=y
+                and 16<=w<=sw-x and 16<=h<=sh-y):return None
+        return dict(version=1,**{k:data[k] for k in keys})
+    except (OSError,ValueError,TypeError):
+        return None
 
 
 def session_review_payload(folder, *, desktop=False):
@@ -281,12 +327,16 @@ class ReviewAPI:
 
     def _snapshot_revision(self):
         files=[]
-        for name in ('session.json','录像.whisper.json','input-events.json','input-events.revocation.json'):
+        for name in ('session.json','录像.whisper.json','input-events.json','input-events.revocation.json',
+                     '录像.mp4','口述.flac','agent-ready.json','agent-state.json','experience-events.json'):
             try:
                 info=(self._folder/name).stat()
                 files.append((name,info.st_mtime_ns,info.st_size))
             except FileNotFoundError:
                 files.append((name,'missing'))
+        expiry=self._payload.get('preprocessing',{}).get('expires_at')
+        if _number(expiry):
+            files.append(('agent_lease_expired',time.time()>=expiry))
         # Names are fixed protocol fields; neither native paths nor user content
         # crosses the bridge as part of this inexpensive version fingerprint.
         return hashlib.sha256(json.dumps(files,ensure_ascii=True,separators=(',',':')).encode('utf-8')).hexdigest()
@@ -319,9 +369,38 @@ class ReviewAPI:
             contained_file(self._folder, 'session.json')
             from session_metadata import update_metadata
             meta = update_metadata(self._folder, {'input_offset_seconds': None if seconds is None else round(seconds, 6)})
+            from agent_protocol import try_publish_ready
+            try_publish_ready(self._folder)
             return {'ok': True, 'data': input_alignment(meta)}
         except Exception as error:
             return {'ok': False, 'error': _safe_error(error)}
+
+    def set_recorder_speaker(self, speaker_id, expected_transcript, automatic=False):
+        try:
+            from recorder import read, write
+            from session_metadata import metadata_lock
+            from speaker_roles import transcript_id, valid_speaker
+            if type(automatic) is not bool or (speaker_id is not None and not valid_speaker(speaker_id)):
+                raise ValueError('请选择有效的说话人。')
+            with metadata_lock(self._folder):
+                path=contained_file(self._folder,'session.json')
+                transcript=read(contained_file(self._folder,'录像.whisper.json'))
+                segments=transcript['segments']
+                identity=transcript_id(segments)
+                if expected_transcript != identity:
+                    raise ValueError('逐字稿已更新，请刷新说话人列表后重新选择。')
+                ids={s['speaker_id'] for s in segments if valid_speaker(s.get('speaker_id'))}
+                if not ids or (speaker_id is not None and speaker_id not in ids):
+                    raise ValueError('当前转写中没有这位说话人。')
+                meta=read(path)
+                meta['recorder_speaker']=None if automatic else dict(
+                    transcript_id=identity,speaker_id=speaker_id,source='manual',updated_at=time.time())
+                write(path,meta)
+            from agent_protocol import try_publish_ready
+            try_publish_ready(self._folder)
+            return {'ok':True,'data':session_review_payload(self._folder,desktop=True)['speakers']}
+        except Exception as error:
+            return {'ok':False,'error':_safe_error(error)}
 
     def open_folder(self):
         try:

@@ -27,7 +27,16 @@ Keyboard/mouse use Windows Raw Input via ctypes. Every source event is checked a
 
 Xbox and DualSense use the SDL2 event/controller API. The portable runtime is official pinned SDL2 2.32.10 x64 at `tools/input/SDL2.dll`, prepared by `scripts/fetch_input_runtime.py`, with provenance and zlib license. No global plugin/runtime installation or runtime download occurs. Sensors/rumble are not enabled. A development-only explicit `THINK_ALOUD_SDL2_PATH` can select a DLL.
 
-## Foreground timing and late notifications
+## Foreground timing and late notifications (historical foreground-only mode)
+
+The user explicitly changed the production contract on 2026-09-26: record all
+keyboard, mouse and controller input during a recording and store foreground
+state separately for review filtering. The production `prepare_capture` now
+selects this session-wide mode. The foreground gate/revocation details below
+describe the retained legacy mode, not the current default recording path.
+Window observer failure now makes only the context unknown; it cannot erase or
+halt physical input. Video-clock integrity checks remain in force. See
+`input-gap-recovery-validation.md` for the updated validation.
 
 A dedicated WinEvent observer records timestamped foreground changes independently of capture/disk work. A **single OUTOFCONTEXT hook** receives foreground events and a custom queue-confirmation event from our own message-only hidden window. The durable watermark advances only when that exact self-issued marker callback arrives; elapsed time alone never advances authorization. Pending events beyond the acknowledged watermark remain in memory. If marker acknowledgement stalls, capture fails closed. The native lifecycle test confirmed hundreds of marker callbacks and hook cleanup.
 

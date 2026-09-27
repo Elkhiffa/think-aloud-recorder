@@ -21,6 +21,19 @@ assert.deepEqual(splitBounds(0,240,220,.7),{min:.5,max:.5,value:.5});
 const cramped=splitBounds(300,180,180,.8);
 assert.deepEqual(cramped,{min:.5,max:.5,value:.5});
 const close=(actual,expected)=>assert.ok(Math.abs(actual-expected)<1e-8,`${actual} != ${expected}`);
+const {videoFrame,videoPlacement}=require('../ui/review.js');
+const crop={version:1,source_width:1920,source_height:1080,left:0,top:138,width:1920,height:804};
+const frame=videoFrame(crop,1920,1080);
+assert.equal(frame.height,804);
+assert.equal(videoFrame(crop,1920,1080,true).height,1080);
+assert.equal(videoFrame(crop,3440,1440).height,1440); // Replaced video ignores stale crop.
+assert.equal(videoFrame({...crop,left:50},1920,1080).height,1080);
+let placement=videoPlacement(frame,960,402);
+close(placement.width,960);close(placement.height,540);close(placement.top,-69);close(placement.left,0);
+assert.deepEqual(placement.clip,[69,0,69,0]);
+placement=videoPlacement(frame,3440,1440); // Fullscreen keeps the visible source ratio.
+close((placement.height-placement.clip[0]-placement.clip[2])/placement.width,804/1920);
+assert.equal(videoPlacement(frame,0,400),null);
 // Width budget already excludes layout padding and the divider. The measured
 // chrome includes the toolbar, its wrapped rows, gaps and video-pane padding.
 const source={available:1200,height:700,chromeHeight:52,videoWidth:1920,videoHeight:1080};
@@ -32,9 +45,9 @@ close(fit.width,1172);close(fit.slotHeight,648);close(fit.slotWidth,1152);
 fit=sourceFit({...source,videoWidth:2560,videoHeight:1080});
 close(fit.width,880);close(fit.slotHeight,371.25);
 fit=sourceFit({...source,videoWidth:1080,videoHeight:1920});
-close(fit.width,364.5);close(fit.slotHeight,648);
+close(fit.width,364.5);close(fit.slotWidth,364.5);close(fit.slotHeight,648);
 fit=sourceFit({...source,videoWidth:1080,videoHeight:1920,chromeHeight:102});
-close(fit.width,336.375);close(fit.slotHeight,598); // Wrapped toolbar measured afresh.
+close(fit.width,336.375);close(fit.slotWidth,336.375);close(fit.slotHeight,598); // Wrapped toolbar measured afresh.
 fit=sourceFit({...source,height:300,videoWidth:1080,videoHeight:1920});
 close(fit.width,240);close(fit.slotWidth,139.5);close(fit.slotHeight,248);
 fit=sourceFit({...source,available:300});
@@ -42,6 +55,13 @@ close(fit.width,300*240/560);close(fit.slotWidth/fit.slotHeight,16/9);
 for(const invalid of [{videoWidth:0},{videoHeight:0},{videoWidth:NaN},{videoHeight:Infinity},{available:0},{height:0}]){
   assert.equal(sourceFit({...source,...invalid}),null);
 }
+// The viewport, not a fixed 900x540 target, determines the player's size.
+fit=sourceFit({...source,available:2100,videoWidth:3440,videoHeight:1440});
+close(fit.slotWidth,1548);close(fit.slotHeight,648);
+fit=sourceFit({...source,available:2100,videoWidth:1024,videoHeight:768});
+close(fit.slotWidth,864);close(fit.slotHeight,648); // Height budget clamps without stretching.
+fit=sourceFit({...source,available:2100,height:800,videoWidth:1024,videoHeight:768});
+close(fit.slotWidth,748*4/3);close(fit.slotHeight,748);
 console.log('Review timeline, divider and source-aspect tests passed.');
 const input=require('../ui/review.js');
 const items=input.normalizeInputs({state:'ready',intervals:[
@@ -218,3 +238,14 @@ assert.equal(input.inputHighlight(fadePress,5),0);
 assert.equal(input.inputHighlight(null,1),0);
 assert.equal(input.inputHighlight({...fadePress,start:3,end:3.5},3.1),1);
 console.log('Device afterimages fade independently over two media seconds and reset on re-press.');
+const completeScope=input.normalizeInputs({recording_scope:'all',state:'complete',duration:10,gaps:[],
+ intervals:[{id:'held',device:'keyboard',code:'W',kind:'button',start:1,end:9},{id:'background',device:'xbox',code:'A',kind:'button',start:4,end:5},{id:'tap',device:'mouse',code:'MouseLeft',kind:'button',start:8,end:8}],
+ window_states:[{start:0,end:3,state:'foreground'},{start:3,end:7,state:'background'},{start:7,end:10,state:'foreground'}]});
+const beforeFilter=JSON.stringify(completeScope),focusedScope=input.filterInputScope(completeScope,'foreground');
+assert.deepEqual(focusedScope.intervals.map(i=>[i.code,i.start,i.end]),[['W',1,3],['W',7,9],['MouseLeft',8,8]]);
+assert.equal(input.filterInputScope(completeScope,'all'),completeScope);
+assert.equal(JSON.stringify(completeScope),beforeFilter);
+assert.equal(input.windowStateAt(input.intervalIndex(completeScope.window_states),4),'background');
+assert.equal(input.windowStateAt(input.intervalIndex(completeScope.window_states),10),'unknown');
+assert.deepEqual(input.filterInputScope({...completeScope,window_states:[]},'foreground').intervals,[]);
+console.log('Background input is preserved; display filters clip holds without editing source facts.');

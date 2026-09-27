@@ -170,7 +170,7 @@ function renderInputRecording(locked=false){
  const d=store.draft,available=d?.source==='游戏窗口';
  $('#recordInputs').checked=!!d?.record_inputs;
  $('#recordInputs').disabled=locked||!available;
- setText('inputRecordingHint',available?'仅在选定游戏窗口位于前台时采集；切换到其他软件后暂停操作记录。支持键鼠与手柄在录制中切换。':'将录制范围改为“游戏窗口”并选择目标程序后，才能启用操作记录，避免记入其他软件中的按键。');
+ setText('inputRecordingHint',available?'录制期间完整记录键鼠和手柄操作，包括切到其他软件时的操作；目标窗口的前后台状态另行保存，回看时可筛选。':'选择“游戏窗口”及目标程序后可启用操作记录。操作只在录制期间采集，结束后停止。');
 }
 $('#recordInputs').onchange=()=>{if(store.draft&&store.draft.source==='游戏窗口'){store.updateDraft('record_inputs',$('#recordInputs').checked);renderSummary();}};
 function renderDeviceOptions(force=false){if(!store.draft)return;const d=store.draft,kind=d.source==='整个显示器'?'monitor':'window';const signature=JSON.stringify([store.snapshot?.devices,store.snapshot?.readiness?.window_selection,kind,d.window,d.monitor,d.mic]);if(force||signature!==deviceSignature){const a=fillDevice($('#target'),kind,d[kind]);const b=fillDevice($('#mic'),'mic',d.mic);if(a&&b)deviceSignature=signature;}setText('targetLabel',kind==='monitor'?'显示器':'游戏窗口');const empty=devicesEmpty();setText('refreshDevices',empty?'设置 OBS':'刷新设备');setText('deviceFeedback',store.activity.kind==='devices'&&store.activity.busy?'正在查找可用窗口和麦克风…':empty?'尚未获取到设备。设置 OBS 后，将选中主显示器和默认麦克风。':'找不到游戏窗口？先打开游戏，再刷新。');}
@@ -265,7 +265,8 @@ function sessionRow(s){
  const kind=sessionKind(s),job=store.sessionJob(s.id),state=job?(job.state==='queued'?'等待整理':'后台整理'):s.state||'状态未知';
  const progress=job?(job.state==='queued'?'已保存，等待前面的场次整理完成。':job.detail||'正在整理，仍可继续录制。'):'';
  const title=sessionTitle(s),ident=escapeHTML(s.id);
- const rename=`<button class="session-rename" data-session-action="rename" data-id="${ident}" aria-label="编辑片段名称：${escapeHTML(title)}" title="编辑片段名称"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14Z"/></svg></button>`;
+ const preprocessing=s.preprocessing?.label?`<span class="preprocessing-badge" title="${escapeHTML(s.preprocessing.reason||'外部会话提供的整理结果；录制和回看始终独立可用。')}">${escapeHTML(s.preprocessing.label)}</span>`:'';
+ const rename=`<button class="session-rename" data-session-action="rename" data-id="${ident}" aria-label="编辑片段名称：${escapeHTML(title)}" title="编辑片段名称"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14Z"/></svg></button>${preprocessing}`;
  return `<article class="session-row"><div class="session-main"><div class="session-name"><div class="session-title-row"><strong>${escapeHTML(title)}${s.test?' <span class="test-tag">合成测试</span>':''}</strong>${rename}</div>${s.session_name?`<p class="session-game">${escapeHTML(s.game||'')}</p>`:''}<p class="session-meta"><span>${escapeHTML(formatDate(s.created))}</span><span class="session-duration"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>${escapeHTML(formatTime(s.duration))}</span></p>${progress?`<p class="session-progress">${escapeHTML(progress)}</p>`:''}</div><span class="session-state ${kind}">${escapeHTML(state)}</span>${canReview(s)?`<button class="session-quick" data-session-action="review" data-id="${ident}">${icon('play')}回看</button>`:['pending','failed'].includes(kind)?`<button class="session-quick" data-session-action="process" data-id="${ident}">${kind==='failed'?'重试':'整理'}</button>`:''}<button class="session-toggle" data-detail="${ident}" aria-expanded="${expandedSession===s.id}" aria-label="${expandedSession===s.id?'收起':'展开'}${escapeHTML(title)}详情">${icon('chevron')}</button></div>${expandedSession===s.id?sessionDetail(s):''}</article>`;
 }
 function renameSession(s){

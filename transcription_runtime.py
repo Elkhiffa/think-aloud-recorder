@@ -11,12 +11,13 @@ def profile(settings):
     if settings.get('transcription_provider', 'local') == 'qwen':
         from qwen_transcription import MODEL
         return {
-            'schema': 1, 'provider': 'qwen',
+            'schema': 2, 'provider': 'qwen',
             'model': settings.get('qwen_model', MODEL),
             'region': settings.get('qwen_region', 'beijing'),
             'language': settings.get('language', 'zh'),
             'hotwords': settings.get('hotwords', '').strip(),
             'word_timestamps': True, 'system_reserved_filter': False,
+            'diarization_enabled': True,
         }
     return {
         'schema': 2,
@@ -31,6 +32,30 @@ def profile(settings):
         'no_speech_threshold': 0.6,
         'hotwords': settings.get('hotwords', '').strip(),
     }
+
+
+def resume_profile(folder, cache, options, audio_sha256):
+    """An upgrade must not abandon a billed/in-flight task for a new profile hash."""
+    if not isinstance(cache, str) or options.get('provider') != 'qwen':
+        return options
+    from recorder import read
+    root = Path(folder).resolve()
+    saved = (root/cache).resolve()
+    if not saved.is_relative_to(root/'转写原始'):
+        raise RuntimeError('转写缓存路径无效。')
+    job_file = saved/'云端任务.json'
+    if not job_file.is_file():
+        return options
+    job = read(job_file)
+    if job.get('state') not in ('SUBMITTING', 'PENDING', 'RUNNING', 'SUCCEEDED'):
+        return options
+    if job.get('state') == 'SUCCEEDED' and (saved/'云端原始结果.json').is_file():
+        return options
+    identity = read(saved/'配置.json')
+    previous = identity.get('options', {})
+    if identity.get('audio_sha256') != audio_sha256 or previous.get('provider') != 'qwen':
+        raise RuntimeError('已有云任务的录音与当前音轨不一致，请先核对原任务，避免重复计费。')
+    return previous
 
 
 def refinement_settings(config, previous):

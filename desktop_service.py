@@ -370,8 +370,10 @@ class DesktopService:
                             media = {}
                         background = self._background_for(path)
                         result = self._background_history.get(str(path))
+                        from agent_protocol import preprocessing_status
                         sessions.append(dict(id=ident, game=meta.get('game', ''),
                                              session_name=meta.get('session_name', ''),
+                                             preprocessing=preprocessing_status(path, meta),
                                              can_review=(path / '录像.mp4').is_file() and (path / '录像.mp4').resolve().parent == path.resolve()
                                                  and not bool(self._active and self._active.path.resolve() == path.resolve()),
                                              created=meta.get('created', ''), state=meta.get('state', ''),
@@ -512,10 +514,10 @@ class DesktopService:
         return str(value or '尚未选择')
 
     def _probe_obs_devices(self):
-        """Read actual OBS properties; disabled temporary sources exist only idle.
+        """Read OBS status and native identities without adding/removing sources.
 
-        Never switch profiles/collections, configure capture, or stop outputs.
-        Service jobs hold the same operation lock, so Start cannot interleave.
+        Temporary sources race OBS's asynchronous source-tree label destruction.
+        Inventory never opens capture streams; Start still validates OBS targets.
         """
         def check():
             if self._closed.is_set():
@@ -530,7 +532,6 @@ class DesktopService:
             return operation(*args, **kwargs)
 
         client = None
-        temporary = []
         try:
             client = request(recorder.client, False, continue_if=self._automatic_probe_allowed)
             if request(client.get_record_status).output_active or request(client.get_stream_status).output_active:
@@ -538,24 +539,10 @@ class DesktopService:
             if (request(client.get_profile_list).current_profile_name != 'Experience'
                     or request(client.get_scene_collection_list).current_scene_collection_name != 'Experience'):
                 return None, ('OBS_CONFIGURATION', 'OBS 当前不是记录器专用配置，请打开录制预设并刷新设备 / 设置 OBS。')
-            inputs = request(client.get_input_list).inputs
-            result = {}
-            for key, kind, prop, settings in (
-                ('mic', 'wasapi_input_capture', 'device_id', {'device_id': 'default'}),
-                ('window', 'window_capture', 'window', {}),
-                ('monitor', 'monitor_capture', 'monitor_id', {}),
-            ):
-                check()
-                name = next((item['inputName'] for item in inputs if item.get('inputKind') == kind), None)
-                if name is None:
-                    # Check again before any temporary input creation. No source
-                    # is added when a user has started an output in OBS itself.
-                    if request(client.get_record_status).output_active or request(client.get_stream_status).output_active:
-                        return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
-                    name = '就绪检查-' + key + '-' + uuid.uuid4().hex
-                    request(client.create_input, 'Experience', name, kind, settings, False)
-                    temporary.append(name)
-                result[key] = request(client.get_input_properties_list_property_items, name, prop).property_items
+            import device_inventory
+            result = device_inventory.devices(check=check)
+            if request(client.get_record_status).output_active or request(client.get_stream_status).output_active:
+                return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
             check()
             return result, None
         except _ReadinessPaused as paused:
@@ -563,11 +550,6 @@ class DesktopService:
         except recorder.ObsOperationCancelled:
             return None, ('READINESS_PAUSED', '回到记录器窗口后自动检查录制条件。')
         finally:
-            for name in reversed(temporary):
-                try:
-                    client.remove_input(name)
-                except Exception:
-                    pass
             try:
                 if client is not None:
                     client.disconnect()
@@ -933,7 +915,7 @@ class DesktopService:
                 self._cache_devices(result)
                 self._recover()
                 self._update_readiness(devices=result)
-                self._progress('设备列表已从 OBS 刷新；未开始电平检测。', status='设备已就绪')
+                self._progress('设备列表已刷新，录制引擎已连接；未开始采集。', status='设备已就绪')
                 with self._lock:
                     self._device_refresh = dict(id=refresh_id, state='succeeded', error='')
             except Exception as error:

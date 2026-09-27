@@ -1,8 +1,9 @@
-"""Windows Raw Input listener bounded to one live target window/session.
+"""Windows Raw Input listener bounded to the recording session.
 
 RIDEV_INPUTSINK delivers physical events without disabling the application's
-normal input. Every event is checked against the captured HWND and process
-identity before it reaches the recorder. All registrations are removed on exit.
+normal input. Production capture retains physical events regardless of focus;
+the bound target's foreground state is independent metadata. The legacy
+foreground-only mode remains explicit. All registrations are removed on exit.
 """
 from __future__ import annotations
 import ctypes as C
@@ -206,6 +207,21 @@ class ForegroundLedger:
         with self.lock:
             self.watermark = max(self.watermark, timestamp)
 
+    def reconcile(self, foreground, timestamp):
+        """Recover a missed notification from this observation forward only.
+
+        Called on an acknowledged marker, not on the input delivery thread.
+        Never backdate the recovered transition or authorize the pending past.
+        The uncertain boundary remains excluded and late WinEvents still revoke.
+        """
+        with self.lock:
+            if not self.transitions or self.transitions[-1][1] != bool(foreground):
+                boundary = max(self.watermark, self.transitions[-1][0] if self.transitions else timestamp)
+                self.uncertain.append((boundary, timestamp))
+                self.transitions.append((timestamp, bool(foreground)))
+                return True
+        return False
+
     def drain(self, cursor):
         with self.lock:
             return list(self.transitions[cursor:]), len(self.transitions), self.watermark
@@ -238,6 +254,8 @@ class ForegroundObserver:
         self.thread = None
         self.unhooked = False
         self.markers_acknowledged = 0
+        self.focus_reconciliations = 0
+        self._focus_candidate = None
         self.marker_hwnd = None
 
     def start(self):
@@ -251,6 +269,17 @@ class ForegroundObserver:
         self.stopping.set()
         if self.thread and self.thread is not threading.current_thread():
             self.thread.join(timeout=2)
+
+    def _confirm_focus(self, active, at):
+        current = self.ledger.transitions[-1][1] if self.ledger.transitions else None
+        if current == active:
+            self._focus_candidate = None
+        elif self._focus_candidate is None or self._focus_candidate[0] != active:
+            self._focus_candidate = (active, at)
+        elif at - self._focus_candidate[1] >= .064:
+            if self.ledger.reconcile(active, at):
+                self.focus_reconciliations += 1
+            self._focus_candidate = None
 
     def _run(self):
         hook = marker_window = None
@@ -285,6 +314,11 @@ class ForegroundObserver:
                 if event == marker_event and hwnd == marker_window and obj == marker_object:
                     fence = waiting.pop(child, None)
                     if fence is not None:
+                        # Games can leave the WinEvent state stale. Check the
+                        # live HWND on this independent observer's acknowledged
+                        # queue turn; old queued input remains outside coverage.
+                        observed_focus = user.GetForegroundWindow() == self.target.hwnd
+                        self._confirm_focus(observed_focus, mapper.now())
                         # The same OUTOFCONTEXT hook receives all preceding
                         # foreground callbacks before this marker. The 32 ms
                         # margin bounds common 10-16 ms system tick resolution.
@@ -327,8 +361,11 @@ _SOURCE_LOCK = threading.Lock()
 
 
 class WindowsInputSource:
-    def __init__(self, target, sdl_path, clock=time.perf_counter):
+    def __init__(self, target, sdl_path, clock=time.perf_counter, *, capture_all=False):
         self.target, self.sdl_path, self.clock = target, sdl_path, clock
+        self.capture_all = capture_all
+        self._capture_started = float('inf')
+        self._context_failed = False
         self._stop = threading.Event()
         self._ready = threading.Event()
         self._thread = None
@@ -377,6 +414,8 @@ class WindowsInputSource:
         foreground = self._foreground()
         if foreground != self._eligible:
             self._eligible = foreground
+            if self.capture_all:
+                return foreground
             self._eligible_since = self.clock() if foreground else float('inf')
             self._mouse_xy = None
             self._mouse_accum = [0, 0]
@@ -388,16 +427,20 @@ class WindowsInputSource:
         if self._resume_due is None or self.clock() < self._resume_due:
             return
         self._resume_due = None
-        if not self._foreground():
+        if not self.capture_all and not self._foreground():
             self._focus()
             return
         self._resume_keyboard()
-        if self._controllers and self._foreground():
+        if self._controllers and (self.capture_all or self._foreground()):
             self._controllers.resume()
 
     def _emit(self, event):
         if event['type'] in ('connect', 'disconnect'):
             self._pending.append(event)
+            return
+        if self.capture_all:
+            if event.get('timestamp', self.clock()) >= self._capture_started:
+                self._pending.append(dict(event))
             return
         # Re-check for each event; never trust a foreground state cached by a
         # previous timer iteration. Also discard older messages queued outside.
@@ -412,25 +455,46 @@ class WindowsInputSource:
         # No state is sampled while another program is foreground. A resumed
         # hold is marked explicitly rather than pretending to know its onset.
         for vk, code in KEY_NAMES.items():
-            if not self._foreground():
+            if not self.capture_all and not self._foreground():
                 return
             if self.user.GetAsyncKeyState(vk) & 0x8000:
                 self._emit({'type': 'button', 'device': 'keyboard', 'code': code,
                                'down': True, 'timestamp': self.clock(), 'foreground': True, 'resumed': True})
         for vk, code in ((1, 'MouseLeft'), (2, 'MouseRight'), (4, 'MouseMiddle'), (5, 'MouseX1'), (6, 'MouseX2')):
-            if not self._foreground():
+            if not self.capture_all and not self._foreground():
                 return
             if self.user.GetAsyncKeyState(vk) & 0x8000:
                 self._emit({'type': 'button', 'device': 'mouse', 'code': code,
                                'down': True, 'timestamp': self.clock(), 'foreground': True, 'resumed': True})
 
     def _invalidate(self, timestamp):
+        if self.capture_all:
+            if not self._context_failed:
+                self.callback({'type': 'focus_error', 'timestamp': timestamp})
+            self._context_failed = True
+            return
         if self._invalid_sent is None or timestamp < self._invalid_sent:
             self._invalid_sent = timestamp
             self.callback({'type': 'invalidate', 'timestamp': timestamp})
         self._stop.set()
 
     def _flush_pending(self, through=None):
+        if self.capture_all:
+            ledger = self._observer.ledger
+            if ledger.invalid_from is not None or self._observer.error:
+                at = ledger.invalid_from if ledger.invalid_from is not None else ledger.watermark
+                self._invalidate(at if math.isfinite(at) else self._capture_started)
+            if not self._context_failed:
+                transitions, self._focus_cursor, _ = ledger.drain(self._focus_cursor)
+                self._pending.extend({'type':'focus','timestamp':stamp,'foreground':active} for stamp,active in transitions)
+            watermark = self.clock() if through is None else through
+            ready = sorted((e for e in self._pending if e['timestamp'] <= watermark), key=lambda e:e['timestamp'])
+            self._pending = [e for e in self._pending if e['timestamp'] > watermark]
+            for event in ready:
+                self.callback(event)
+            # Input persistence no longer waits for foreground notification.
+            self.callback({'type':'watermark','timestamp':watermark})
+            return
         if self._observer.ledger.invalid_from is not None:
             self._invalidate(self._observer.ledger.invalid_from)
             self._pending.clear()
@@ -444,6 +508,11 @@ class WindowsInputSource:
         ready = sorted((e for e in self._pending if e['timestamp'] <= watermark), key=lambda e: (e['timestamp'], e['type'] != 'focus'))
         self._pending = [e for e in self._pending if e['timestamp'] > watermark]
         for event in ready:
+            if event['type'] == 'focus' and event.get('foreground'):
+                # A missed focus notification may recover after the polling
+                # gate already resumed. Re-sample held controls after the new
+                # validated boundary instead of losing an entire long hold.
+                self._resume_due = self.clock() + .064
             if event['type'] in ('focus', 'connect', 'disconnect', 'coverage_gap') or self._observer.ledger.authorized(event['timestamp']):
                 self.callback(event)
             else:
@@ -461,7 +530,7 @@ class WindowsInputSource:
         return self.clock() - age / 1000.
 
     def _raw(self, handle):
-        if not self._focus():
+        if not self.capture_all and not self._focus():
             return
         size = W.UINT()
         if self.user.GetRawInputData(handle, 0x10000003, None, C.byref(size), C.sizeof(Header)) == 0xffffffff:
@@ -473,7 +542,7 @@ class WindowsInputSource:
             raise InputCaptureError('读取原始输入失败。')
         raw = C.cast(buffer, C.POINTER(RawInput)).contents
         stamp = self._stamp()
-        if stamp < self._eligible_since:
+        if stamp < (self._capture_started if self.capture_all else self._eligible_since):
             return
         if raw.header.type == 1:
             key = raw.data.keyboard
@@ -529,7 +598,14 @@ class WindowsInputSource:
             self.process_handle = process_handle
             self._mapper = SystemTickClock(self.clock, self.kernel.GetTickCount64)
             self._observer = ForegroundObserver(self.target, self.clock, self._invalidate, self._mapper)
-            self._observer.start()
+            try:
+                self._observer.start()
+            except InputCaptureError:
+                if not self.capture_all:
+                    raise
+                # Window state may be unavailable without losing physical input.
+                self._context_failed = True
+                self.callback({'type':'focus_error','timestamp':self.clock()})
             wndproc_type = C.WINFUNCTYPE(C.c_ssize_t, W.HWND, W.UINT, W.WPARAM, W.LPARAM)
 
             class WindowClass(C.Structure):
@@ -574,13 +650,17 @@ class WindowsInputSource:
             if not hwnd:
                 raise InputCaptureError('无法创建操作采集窗口。')
             from input_capture_devices import SDLControllers
-            self._controllers = SDLControllers(self.sdl_path, self._emit, self.clock, self._foreground)
+            self._controllers = SDLControllers(self.sdl_path, self._emit, self.clock,
+                                                (lambda: True) if self.capture_all else self._foreground)
             devices = (RawDevice * 2)(RawDevice(1, 2, 0x100, hwnd), RawDevice(1, 6, 0x100, hwnd))
             if not self.user.RegisterRawInputDevices(devices, 2, C.sizeof(RawDevice)):
                 raise InputCaptureError('无法订阅键鼠输入，请检查程序权限。')
             raw_registered = True
+            self._capture_started = self.clock()
             self.callback({'type': 'ready', 'timestamp': self.clock()})
             self._focus()
+            if self.capture_all:
+                self._resume_due = self.clock()
             self._ready.set()
             message = W.MSG()
             while not self._stop.is_set():
@@ -600,7 +680,7 @@ class WindowsInputSource:
             # Wait only for a real marker acknowledgement, never advance a fence
             # merely because wall time elapsed. Unconfirmed tail remains absent.
             deadline = stop_at + .5
-            while self._observer.ledger.watermark < stop_at and self.clock() < deadline and not self._observer.error:
+            while not self.capture_all and self._observer.ledger.watermark < stop_at and self.clock() < deadline and not self._observer.error:
                 time.sleep(.005)
             self._flush_pending(through=stop_at)
         except Exception as exc:

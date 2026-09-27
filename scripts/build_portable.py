@@ -26,11 +26,11 @@ from scripts.verify_runtime_seed import verify_runtime_seed
 from scripts.brand_launcher import branded_stub
 
 ROOT_FILES = (
-    'app.py', 'app_paths.py', 'desktop_service.py', 'hotword_files.py', 'hotword_ui.py',
+    'app.py', 'app_paths.py', 'desktop_service.py', 'device_inventory.py', 'hotword_files.py', 'hotword_ui.py',
     'model_manager.py', 'model-manifest.json', 'media_runtime.py', 'portable_check.py', 'portable_config.py',
     'portable_entry.py', 'processing_worker.py', 'processing.py', 'qwen_transcription.py',
     'recorder.py', 'window_manager.py', 'review_runtime.py', 'scel_to_text.py', 'secret_store.py',
-    'transcription_runtime.py', 'player.html', 'requirements-lock.txt',
+    'transcription_runtime.py', 'speaker_roles.py', 'agent_protocol.py', 'agent_cli.py', 'player.html', 'requirements-lock.txt',
     'input_capture.py', 'input_capture_windows.py', 'input_capture_devices.py', 'session_metadata.py',
     'updater.py', 'update_installer.py',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md', 'docs/updates.md',
@@ -38,6 +38,7 @@ ROOT_FILES = (
     'scripts/fetch_media_runtime.py',
     'scripts/verify_runtime_seed.py', 'scripts/migrate_layout.py', 'scripts/runtime-seed.json', 'docs/release-readiness.md',
     'vocabularies/uiux-terms.txt', 'docs/uiux-vocabulary.md', 'docs/input-capture-validation.md',
+    'docs/agent-integration.md',
 )
 OPTIONAL_ROOT_FILES = ('README.md',)
 BLOCKED_PARTS = {'__pycache__', '.git', '.cache', 'cache', 'caches', 'logs', 'log',

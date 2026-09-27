@@ -13,6 +13,18 @@ from review_runtime import ReviewAPI, prepare_window, render_player, review_payl
 
 
 class ReviewTests(unittest.TestCase):
+    def test_verified_display_crop_is_optional_bounded_and_contains_no_extra_fields(self):
+        from review_runtime import video_display_payload
+        path=self.folder/'video-display.json'
+        self.assertIsNone(video_display_payload(self.folder))
+        crop=dict(version=1,source_width=1920,source_height=1080,left=0,top=138,width=1920,height=804)
+        recorder.write(path,dict(crop,private='not exported'))
+        self.assertEqual(video_display_payload(self.folder),crop)
+        self.assertEqual(review_payload(self.folder,self.meta,self.segments)['video_display'],crop)
+        for bad in (dict(crop,width=2000),dict(crop,top=-1),dict(crop,height=True),dict(crop,version=2),[],{'width':1}):
+            recorder.write(path,bad)
+            self.assertIsNone(video_display_payload(self.folder))
+
     def setUp(self):
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -65,7 +77,7 @@ class ReviewTests(unittest.TestCase):
             self.assertFalse(api.open_document('../outside')['ok'])
             self.assertTrue(api.open_document('notes')['ok'])
         self.assertEqual({name for name in dir(api) if not name.startswith('_')},
-                         {'ready', 'open_folder', 'copy_path', 'open_document', 'get_layout', 'save_layout', 'get_snapshot', 'rename_session', 'set_input_offset'})
+                         {'ready', 'open_folder', 'copy_path', 'open_document', 'get_layout', 'save_layout', 'get_snapshot', 'rename_session', 'set_input_offset', 'set_recorder_speaker'})
 
     def test_input_offset_is_per_session_metadata_and_never_rewrites_captured_facts(self):
         recorder.write(self.folder/'input-events.json',dict(version=1,state='complete',duration=10,

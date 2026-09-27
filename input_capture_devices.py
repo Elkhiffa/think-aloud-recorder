@@ -84,6 +84,14 @@ class SDLControllers:
             fn = getattr(self.dll, name)
             fn.argtypes, fn.restype = args, restype
         self.dll.SDL_SetHint(b'SDL_JOYSTICK_ALLOW_BACKGROUND_EVENTS', b'1')
+        # This recorder has no SDL foreground window. Use SDL's XInput backend
+        # for Xbox-compatible pads instead of the hybrid Raw Input backend:
+        # missing HID reports there can leave only its separately polled
+        # triggers, while all buttons and sticks silently stay at rest.
+        # Keyboard/mouse Raw Input and the per-event foreground gate are separate.
+        if os.name == 'nt':
+            self.dll.SDL_SetHint(b'SDL_JOYSTICK_RAWINPUT', b'0')
+            self.dll.SDL_SetHint(b'SDL_XINPUT_ENABLED', b'1')
         self.dll.SDL_SetHint(b'SDL_JOYSTICK_HIDAPI_PS5', b'1')
         self.dll.SDL_SetHint(b'SDL_JOYSTICK_HIDAPI_PS5_RUMBLE', b'0')
         if self.dll.SDL_InitSubSystem(self.FLAGS) != 0:
