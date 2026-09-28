@@ -97,6 +97,23 @@ def main(argv=None):
     visual_overview = commands.add_parser('visual-overview', help='完整时间范围的紧凑导航；不展开原话、图片或低层节点')
     visual_overview.add_argument('index')
     visual_overview.add_argument('--bins', type=int, default=32)
+    visual_plan = commands.add_parser('visual-plan', help='复用已有索引，分组并建立首轮、补图和复核共用的预算')
+    visual_plan.add_argument('index')
+    visual_plan.add_argument('--output', required=True)
+    visual_plan.add_argument('--total-views', type=int, default=24)
+    visual_plan.add_argument('--initial-views', type=int, default=12)
+    visual_plan.add_argument('--review-views', type=int, default=4)
+    visual_packet = commands.add_parser('visual-packet', help='带问题领取一小包画面；不调用模型')
+    visual_packet.add_argument('plan')
+    visual_packet.add_argument('--request-id', required=True)
+    visual_packet.add_argument('--phase', required=True, choices=('initial','inspect','review'))
+    visual_packet.add_argument('--question', required=True)
+    visual_packet.add_argument('--at', action='append', type=float)
+    visual_packet.add_argument('--start', type=float)
+    visual_packet.add_argument('--end', type=float)
+    visual_packet.add_argument('--limit', type=int, default=6)
+    visual_budget = commands.add_parser('visual-budget', help='查看本场取材计划的共用预算')
+    visual_budget.add_argument('plan')
     visual_review = commands.add_parser('visual-review', help='仅在本机打开候选检查页；Ctrl+C 结束')
     visual_review.add_argument('index')
     visual_review.add_argument('--port', type=int, default=0)
@@ -136,6 +153,17 @@ def main(argv=None):
         elif name == 'visual-overview':
             from visual_nodes import read_overview
             value = read_overview(args.index, bins=args.bins)
+        elif name == 'visual-plan':
+            from visual_evidence import create_plan
+            value = create_plan(args.index, args.output, total=args.total_views,
+                                initial=args.initial_views, review=args.review_views)
+        elif name == 'visual-packet':
+            from visual_evidence import packet
+            value = packet(args.plan, args.request_id, phase=args.phase, question=args.question,
+                           times=args.at, start=args.start, end=args.end, limit=args.limit)
+        elif name == 'visual-budget':
+            from visual_evidence import budget_status
+            value = budget_status(args.plan)
         elif name == 'visual-review':
             from visual_nodes import review_server
             with review_server(args.index, args.port) as server:

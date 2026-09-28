@@ -10,9 +10,12 @@
 & "$app\runtime\python.exe" "$app\agent_cli.py" evidence "$session"
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-nodes "$session" --output "$work\visual-pass-01" --max-images 120
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-overview "$work\visual-pass-01\index.json"
-& "$app\runtime\python.exe" "$app\agent_cli.py" visual-read "$work\visual-pass-01\index.json" --offset 0 --limit 30
+& "$app\runtime\python.exe" "$app\agent_cli.py" visual-plan "$work\visual-pass-01\index.json" --output "$work\evidence-plan-01" --total-views 24 --initial-views 12 --review-views 4
+& "$app\runtime\python.exe" "$app\agent_cli.py" visual-packet "$work\evidence-plan-01\plan.json" --request-id first --phase initial --question "浏览主要过程的候选画面"
+& "$app\runtime\python.exe" "$app\agent_cli.py" visual-read "$work\visual-pass-01\index.json" --start 120 --end 180 --limit 10
 & "$app\runtime\python.exe" "$app\agent_cli.py" evidence "$session" --start 120 --end 180
-& "$app\runtime\python.exe" "$app\agent_cli.py" frame "$session" --at 135 --output "$work\frame-135.jpg"
+& "$app\runtime\python.exe" "$app\agent_cli.py" visual-packet "$work\evidence-plan-01\plan.json" --request-id transition --phase inspect --question "这段操作前后界面是否切换" --start 132 --end 138 --limit 4
+& "$app\runtime\python.exe" "$app\agent_cli.py" visual-budget "$work\evidence-plan-01\plan.json"
 & "$app\runtime\python.exe" "$app\agent_cli.py" renew "$session" --token "$token" --seconds 1800
 & "$app\runtime\python.exe" "$app\agent_cli.py" validate "$session" --file "$candidate"
 & "$app\runtime\python.exe" "$app\agent_cli.py" submit "$session" --token "$token" --file "$candidate"
@@ -33,6 +36,12 @@
 `frame` 使用本机 FFmpeg，输出最大宽度 1920 的画面，并返回时间与源 revision。输出必须是场次之外工作目录中的新 `.jpg`/`.png`。调用成功并不等于已检查画面：用图像查看工具读取后才能记入检查范围。若需要判断状态变化，要检查前后帧或视频片段，不把一帧当成持续过程。原声路径由 evidence 提供。
 
 `visual-overview INDEX [--bins 32]` 返回全时间范围的紧凑导航表，不含原话正文、图片或全部节点详情。它使用既有完整索引，不是重新抽帧；源 revision 检查与详细读取相同。原话仍单独完整读取，概览中的未配图、弱变化和省略范围仍需按需展开或标明未审查。`visual-read` 与概览的 `read_metrics` 只计返回字符／路径，不代表模型 token、费用或已看图数量。
+
+`visual-plan` 绑定原索引摘要和源 revision，在新工作目录生成 `plan.json`、`budget.json`。只归并连续近似图／既有运动段并保留短变化组，不把像素相似当作相同 UI 或相同目标。完整索引保留不动，首轮包不是全部候选清单。默认 24/12/4 是总发放额／首轮上限／复核预留，实际是否足够须以小样本判断。
+
+`visual-packet` 发放图片而不调用模型。`initial` 使用计划选图；`inspect/review` 必须给出问题与 1–12 个 `--at` 时间点，或最多 120 秒的 `--start/--end` 区间（`--limit` 2–12，默认 6）。复用现有图片或仅定位补图，返回实际显示时间、路径和 SHA-256。`state=ready` 后才能实际打开图片；`budget_exceeded` 不取图，`pending/failed` 保留预算且不自动重跑。重复相同请求编号只返回原回执，真正重看须用新编号；同一画面复核仍计次。`deferred_bundles`、`deferred_initial_transitions` 表示未完整发放的变化组，不能写成已检查。
+
+`visual-budget` 是所有调用者共用的发放账本，不是实际看图或 token 统计。禁止通过另建计划、旧 `frame` 或直接打开完整图集绕过同场预算；超额时保留具体待查问题。不同阶段的图片联系表仍按原始时间点计次，未实际看的已发图也保守计入。源或索引变化需新版本计划，须连同已有用量报告交接，不得以素材变化静默重置整场预算。旧版本无这些命令时手工执行相同记录与限制，不能假装入口已经硬性拦截。
 
 ## 候选结果
 
