@@ -15,7 +15,8 @@ from recorder import write
 from session_metadata import metadata_lock
 import visual_nodes as visual
 
-VERSION = 1
+VERSION = 2
+SELECTION_VERSION = 2
 
 
 def _hash(path):
@@ -68,6 +69,7 @@ def _groups(index, index_path):
     groups, anchor = [], None
     for at, row in sorted(pictures.items()):
         signature = _signature(_picture(index_path, row['path']))
+        row['near_black'] = float(signature.max()) < 10
         previous = groups[-1] if groups else None
         barrier = previous and bisect_right(barriers, previous['end']) != bisect_right(barriers, at)
         motion = bool(previous and set(previous['motion']).intersection(row['motion']))
@@ -93,7 +95,7 @@ def _groups(index, index_path):
     return groups, pictures
 
 
-def _initial_times(groups, limit):
+def _initial_times_legacy(groups, limit):
     if not groups:
         return [], []
     chosen = {min(g['times'][0] for g in groups)}
@@ -121,6 +123,34 @@ def _initial_times(groups, limit):
     return sorted(chosen), deferred
 
 
+def _initial_times(groups, limit, pictures=None):
+    """A first look is temporal orientation, not a bundle-completeness quota.
+
+    Preserve all transition references in the plan, but offer one representative
+    per occurrence initially. Close neighbours are deferred to targeted packets.
+    """
+    pictures = pictures or {}
+    available = {g['times'][len(g['times'])//2] for g in groups}
+    usable = {t for t in available if not pictures.get(t, {}).get('near_black')}
+    available = usable or available  # Dark footage can still be the only evidence.
+    if not available:
+        return [], []
+    chosen = {min(available)}
+    if limit > 1:
+        chosen.add(max(available))
+    spacing = (max(available)-min(available)) / max(2, 2*limit)
+    remaining = available-chosen
+    while remaining and len(chosen) < limit:
+        at = max(remaining, key=lambda t:(min(abs(t-c) for c in chosen), -t))
+        if min(abs(at-c) for c in chosen) < spacing:
+            break
+        chosen.add(at)
+        remaining.remove(at)
+    deferred = [g['id'] for g in groups if g['kind']=='transient'
+                and not set(g['times']).issubset(chosen)]
+    return sorted(chosen), deferred
+
+
 def create_plan(index_path, output, *, total=24, initial=12, review=4):
     for value in (total,initial,review):
         if type(value) is not int or value < 0:
@@ -135,14 +165,16 @@ def create_plan(index_path, output, *, total=24, initial=12, review=4):
     if output.exists() or output.is_relative_to(library):
         raise ValueError('取材计划需保存在资料库以外的新目录。')
     groups, pictures = _groups(index,index_path)
-    times, deferred = _initial_times(groups,initial)
+    times, deferred = _initial_times(groups,initial,pictures)
     if _hash(index_path) != digest or protocol._identity(folder)[2] != index['revision']:
         raise ValueError('准备期间来源发生变化，请重新准备。')
-    plan = dict(version=VERSION, kind='visual-evidence-plan', index=str(index_path), index_sha256=digest,
+    plan = dict(version=VERSION, selection_version=SELECTION_VERSION,
+                kind='visual-evidence-plan', index=str(index_path), index_sha256=digest,
                 revision=index['revision'], session_id=index['session_id'], range=index['range'],
                 budget=dict(total=total, initial=initial, review_reserve=review),
                 groups=groups, initial_times=times, deferred_transitions=deferred,
                 source_coverage=index['coverage'],
+                near_black_candidates=sum(p.get('near_black',False) for p in pictures.values()),
                 notes=['相似像素分组不是界面等价、目标分段或已完成检查。',
                        '未配图节点与弱变化仍在完整索引中；它们没有因本计划被审查。',
                        '预算计经此入口发放的时间点次数，含补图和重复复核；不是实际模型用量。'])
@@ -155,15 +187,20 @@ def create_plan(index_path, output, *, total=24, initial=12, review=4):
                 appearance_groups=sum(g['kind']!='transient' for g in groups),
                 protected_transitions=sum(g['kind']=='transient' for g in groups),
                 initial_image_times=len(times), deferred_transitions=len(deferred),
-                budget=plan['budget'], source_coverage=plan['source_coverage'],
+                budget=plan['budget'], selection_version=SELECTION_VERSION,
+                near_black_candidates=plan['near_black_candidates'], source_coverage=plan['source_coverage'],
                 instruction='先领 initial 包；完整索引是回查资料，不是必须全读的任务清单。')
 
 
 def _plan(path):
     path = Path(path).resolve()
     plan = _load(path)
-    if path.name != 'plan.json' or plan.get('version') != VERSION or plan.get('kind') != 'visual-evidence-plan':
+    if path.name != 'plan.json' or plan.get('version') not in (1,VERSION) or plan.get('kind') != 'visual-evidence-plan':
         raise ValueError('取材计划格式无效。')
+    if plan['version']==2 and 'selection_version' not in plan:
+        raise ValueError('取材计划缺少选图版本。')
+    if plan.get('selection_version',1) not in (1,SELECTION_VERSION):
+        raise ValueError('不支持此计划的选图版本。')
     index_path = Path(plan['index']).resolve()
     index, _ = visual._read_fresh_index(index_path, visual._Timings())
     if _hash(index_path) != plan['index_sha256'] or index['revision'] != plan['revision']:
@@ -186,7 +223,7 @@ def budget_status(plan_path):
         return _usage(plan,_load(root/'budget.json'))
 
 
-def _window_times(index,start,end,limit):
+def _window_times_legacy(index,start,end,limit):
     protocol._span(dict(start=start,end=end),index['source']['duration_seconds'])
     if start>=end or end-start>120:
         raise ValueError('补证据区间须大于 0 且不超过 120 秒。')
@@ -213,6 +250,68 @@ def _window_times(index,start,end,limit):
     return sorted(selected),deferred
 
 
+def _window_choice(index,start,end,limit):
+    """Rank readable interval interiors, with temporal suppression.
+
+    A weak observation can outrank an intense primary animation. This is a
+    numerical readability heuristic, not detection of a popup or UI meaning.
+    """
+    protocol._span(dict(start=start,end=end),index['source']['duration_seconds'])
+    if start>=end or end-start>120:
+        raise ValueError('补证据区间须大于 0 且不超过 120 秒。')
+    if start<index['range']['start'] or end>index['range']['end']:
+        raise ValueError('补证据区间须位于此索引覆盖的请求范围内。')
+    selected={start,end}
+    candidates={}
+    rows=list(visual._candidate_rows(index,start,end))
+    for record in rows:
+        row=record['row']
+        left,right=max(start,row['start']),min(end,row['end'])
+        at=(left+right)/2
+        if row['kind'] in ('context','motion','transient'):
+            representative=next((f['time'] for f in row['frames']
+                                 if f['role'] in ('peak','representative')),at)
+            if left<=representative<=right:
+                at=representative
+        metrics=row.get('metrics',{})
+        def number(name,default):
+            value=metrics.get(name,default)
+            return value if protocol._number(value) else default
+        # Weak-change intervals describe how long a local change remained
+        # readable. Their centre avoids repeatedly returning the onset frame.
+        duration=min(3,max(.05,right-left))
+        movement=min(1,max(0,number('moving_tile_fraction',.5)))
+        delta=max(0,number('adjacent_global',.05))
+        quality=duration*max(.05,1-movement)/(.01+delta)
+        if row['kind'] in ('context','motion'):
+            quality=1.0
+        candidate=dict(time=at,quality=quality,id=record['id'],level=record['level'],
+                       interval=[left,right],reason='interval_readability_and_time_separation')
+        if at not in candidates or quality>candidates[at]['quality']:
+            candidates[at]=candidate
+    gap=(end-start)/max(1,limit-1)
+    decisions=[]
+    while candidates and len(selected)<limit:
+        def rank(item):
+            distance=min(abs(item['time']-t) for t in selected)
+            return item['quality']*min(1,distance/gap),distance,-item['time']
+        best=max(candidates.values(),key=rank)
+        candidates.pop(best['time'])
+        # Do not use spare slots on frame-adjacent variants of the same burst.
+        if min(abs(best['time']-t) for t in selected)<gap/4:
+            continue
+        selected.add(best['time'])
+        decisions.append(best)
+    deferred=sum(not {f['time'] for f in r['row']['frames'] if start<=f['time']<=end}.issubset(selected)
+                 for r in rows)
+    return sorted(selected),deferred,decisions
+
+
+def _window_times(index,start,end,limit):
+    times,deferred,_=_window_choice(index,start,end,limit)
+    return times,deferred
+
+
 def _frame(video,at):
     # Seek to the requested display time; preserve the actual PTS of its frame.
     with closing(visual._decode(video,at,at,{})) as decoded:
@@ -233,6 +332,8 @@ def packet(plan_path, request_id, *, phase, question, times=None, start=None, en
         raise ValueError('单次补图上限应为 2–12。')
     root,plan,index=_plan(plan_path)
     deferred=0
+    decisions=[]
+    selection_version=plan.get('selection_version',1)
     if phase=='initial':
         if times is not None or start is not None or end is not None:
             raise ValueError('首轮使用计划中的代表图；定向补图请使用 inspect。')
@@ -248,10 +349,15 @@ def packet(plan_path, request_id, *, phase, question, times=None, start=None, en
     else:
         if start is None or end is None:
             raise ValueError('补图或复核须给出具体时间点或短区间。')
-        wanted,deferred=_window_times(index,start,end,limit)
+        if selection_version==1:
+            wanted,deferred=_window_times_legacy(index,start,end,limit)
+        else:
+            wanted,deferred,decisions=_window_choice(index,start,end,limit)
     if not wanted:
         raise ValueError('此计划没有可发放的画面。')
     spec=dict(phase=phase,question=question,times=wanted,deferred_bundles=deferred)
+    if selection_version!=1:
+        spec['selection_version']=selection_version
     request_path=root/'requests'/(request_id+'.json')
     with metadata_lock(root):
         ledger=_load(root/'budget.json')
@@ -269,6 +375,9 @@ def packet(plan_path, request_id, *, phase, question, times=None, start=None, en
             return dict(state=old['state'],request_id=request_id,budget=_usage(plan,ledger),
                         note='请求已经保留预算；不自动重跑，请检查工作记录。')
         usage=_usage(plan,ledger)
+        if phase=='initial' and selection_version!=1 and usage['by_phase']['initial']:
+            return dict(state='initial_already_issued',budget=usage,
+                        note='首轮已发放；重取原回执请用原编号，进一步取材须走 inspect/review。')
         reserve=usage['review_reserved_remaining'] if phase!='review' else 0
         if len(wanted)>usage['remaining']-reserve or (phase=='initial' and
                     usage['by_phase']['initial']+len(wanted)>plan['budget']['initial']):
@@ -300,6 +409,7 @@ def packet(plan_path, request_id, *, phase, question, times=None, start=None, en
         _plan(plan_path)  # Revalidate after seeking, before publishing any image references.
         result=dict(state='ready',request_id=request_id,phase=phase,question=question,frames=frames,
                     deferred_bundles=deferred,actual_image_inspection=False,
+                    selection_version=selection_version,selection=decisions,
                     deferred_initial_transitions=len(plan['deferred_transitions']) if phase=='initial' else None,
                     note='只有实际查看后才能记录检查范围；本包不证明整个时间段已检查。')
         with metadata_lock(root):

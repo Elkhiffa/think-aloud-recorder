@@ -460,6 +460,50 @@ def read_index(path, *, start=None, end=None, offset=0, limit=40):
     return value
 
 
+def _candidate_rows(index,start,end):
+    """Flatten only intersecting observations; never embed an entire motion tree."""
+    for node in index['nodes']:
+        if node['end']<start or node['start']>end:
+            continue
+        yield dict(id=node['id'],parent=None,level='primary',row=node)
+        for i,row in enumerate(node.get('motion_observations',[])):
+            if row['end']>=start and row['start']<=end:
+                yield dict(id=f"{node['id']}/w{i+1}",parent=node['id'],level='weak',row=row)
+
+
+def read_candidates(path, *, start, end, offset=0, limit=24):
+    """Compact interval navigation with a single bound across primary/weak rows."""
+    timings=_Timings()
+    path=Path(path).resolve()
+    index,index_bytes=_read_fresh_index(path,timings)
+    protocol._span(dict(start=start,end=end),index['source']['duration_seconds'])
+    if start>=end or end-start>120:
+        raise ValueError('候选区间须大于 0 且不超过 120 秒。')
+    if start<index['range']['start'] or end>index['range']['end']:
+        raise ValueError('候选区间须位于索引范围内。')
+    if type(offset) is not int or offset<0 or type(limit) is not int or not 1<=limit<=60:
+        raise ValueError('offset 需非负，limit 应为 1–60。')
+    records=sorted(_candidate_rows(index,start,end),key=lambda r:(r['row']['start'],r['row']['end'],r['id']))
+    rows=[]
+    for record in records[offset:offset+limit]:
+        row=record['row']
+        rows.append([record['id'],record['level'],row['kind'],row['start'],row['end'],
+                     [f['time'] for f in row['frames'] if start<=f['time']<=end],
+                     sum(bool(f.get('path')) for f in row['frames'] if start<=f['time']<=end)])
+    value=dict(version=1,kind='visual-interval-candidates',index=str(path),
+               session_id=index['session_id'],revision=index['revision'],range=dict(start=start,end=end),
+               total_matching=len(records),offset=offset,
+               next_offset=offset+limit if offset+limit<len(records) else None,
+               columns=['id','level','kind','start','end','frame_times_in_range','pictured_in_range'],rows=rows,
+               node_index_complete=index['coverage'].get('node_index_complete',False),
+               actual_image_inspection=False,
+               note='仅像素候选导航；未展开原话、输入、图片或整段弱变化。用同场 visual-packet 预算取图。')
+    characters=len(json.dumps(value,ensure_ascii=False,allow_nan=False))
+    value['read_metrics']=dict(index_bytes=index_bytes,returned_rows=len(rows),
+                               data_characters_without_read_metrics=characters,returned_unique_image_paths=0)
+    return value
+
+
 def read_overview(path, *, bins=32):
     """Bounded, non-semantic navigation over every indexed interval; no pictures."""
     if type(bins) is not int or not 1 <= bins <= 120:
@@ -504,7 +548,7 @@ def read_overview(path, *, bins=32):
                             '跨分区节点会重复计入 overlapping_nodes；node_starts 与 weak_starts 按起点归属。',
                             '有配图节点不代表所看分区内一定有配图；原话引用只来自有限关联，不等于全部逐字稿。',
                             '本概览没有展示图片或原话；空计数不证明无操作或无目标。'],
-                     next_step='先单独读取完整原话；用 visual-read INDEX --start 起点 --end 终点 按需展开并实际检查图像。')
+                     next_step='先单独读取完整原话；用 visual-plan/visual-packet 限额看图，visual-candidates 按短区间紧凑定位。')
     with timings.measure('measure_response'):
         characters = len(json.dumps(value, ensure_ascii=False, allow_nan=False))
     value['read_metrics'] = dict(version=1, timing=timings.snapshot(), index_bytes=index_bytes,

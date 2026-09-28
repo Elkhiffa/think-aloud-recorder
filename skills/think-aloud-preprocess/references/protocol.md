@@ -12,7 +12,7 @@
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-overview "$work\visual-pass-01\index.json"
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-plan "$work\visual-pass-01\index.json" --output "$work\evidence-plan-01" --total-views 24 --initial-views 12 --review-views 4
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-packet "$work\evidence-plan-01\plan.json" --request-id first --phase initial --question "浏览主要过程的候选画面"
-& "$app\runtime\python.exe" "$app\agent_cli.py" visual-read "$work\visual-pass-01\index.json" --start 120 --end 180 --limit 10
+& "$app\runtime\python.exe" "$app\agent_cli.py" visual-candidates "$work\visual-pass-01\index.json" --start 120 --end 180 --limit 10
 & "$app\runtime\python.exe" "$app\agent_cli.py" evidence "$session" --start 120 --end 180
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-packet "$work\evidence-plan-01\plan.json" --request-id transition --phase inspect --question "这段操作前后界面是否切换" --start 132 --end 138 --limit 4
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-budget "$work\evidence-plan-01\plan.json"
@@ -42,6 +42,10 @@
 `visual-packet` 发放图片而不调用模型。`initial` 使用计划选图；`inspect/review` 必须给出问题与 1–12 个 `--at` 时间点，或最多 120 秒的 `--start/--end` 区间（`--limit` 2–12，默认 6）。复用现有图片或仅定位补图，返回实际显示时间、路径和 SHA-256。`state=ready` 后才能实际打开图片；`budget_exceeded` 不取图，`pending/failed` 保留预算且不自动重跑。重复相同请求编号只返回原回执，真正重看须用新编号；同一画面复核仍计次。`deferred_bundles`、`deferred_initial_transitions` 表示未完整发放的变化组，不能写成已检查。
 
 `visual-budget` 是所有调用者共用的发放账本，不是实际看图或 token 统计。禁止通过另建计划、旧 `frame` 或直接打开完整图集绕过同场预算；超额时保留具体待查问题。不同阶段的图片联系表仍按原始时间点计次，未实际看的已发图也保守计入。源或索引变化需新版本计划，须连同已有用量报告交接，不得以素材变化静默重置整场预算。旧版本无这些命令时手工执行相同记录与限制，不能假装入口已经硬性拦截。
+
+`visual-candidates`（0.6.5）要求 start/end，范围最长 120 秒，`limit` 1–60、默认 24。主要与弱候选共用分页数量上限，返回紧凑 columns/rows 与 next_offset，不展开原话、按键、图片或完整 motion 子树。它没有实际看图，也不是流程识别。`visual-read` 保留完整格式，但小 limit 不能保证小输出。
+
+0.6.5 新计划为 `version=2, selection_version=2`：首轮避免邻近动画重复占位，区间包按局部稳定程度与时间距离排序，选择变化中段而不是优先凑满一个末端三图组；回执 selection 记录来源候选与选择原因。`initial_already_issued` 表示首轮已发，若要取回原回执使用原请求编号。0.6.5 读取旧版计划时保持原始排序／回执／预算，不能自动改写旧计划。旧软件不支持新计划，不能混用。画面分组、稳定度、近黑筛选均是机械信号，不能替代 UI 文本核对或玩家目标判断。
 
 ## 候选结果
 

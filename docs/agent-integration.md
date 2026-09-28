@@ -36,6 +36,8 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 新增 `visual-plan INDEX --output NEW_DIR`、`visual-packet PLAN --request-id ID --phase initial|inspect|review --question TEXT` 和 `visual-budget PLAN`，将首轮、定向补图与复核纳入同一个发放预算。默认总额 24、首轮最多 12、复核预留 4，属于试验配置。补图用 `--at` 指定时间，或 `--start/--end/--limit` 请求短区间。每个调用者共享同场计划，不能以新计划或直接打开原图绕过额度；完整机械索引不是必须全部读完的任务清单。预算只计算入口发放次数，不能代替实际看图记录或模型计费统计。详见上述文档的“共用预算的取材计划”。
 
+0.6.5 增加 `visual-candidates INDEX --start SEC --end SEC [--limit 24]`：将短区间内主要及弱候选平铺成有上限的导航表，不携带整段运动树与原话。新的选图计划采用分散首轮和局部稳定程度排序，缓解近邻动画挤占名额；旧计划保留旧算法与原预算，新计划格式需 0.6.5。完整 `visual-read` 接口保持兼容。
+
 ```powershell
 & 'F:\ThinkAloud\app\runtime\python.exe' 'F:\ThinkAloud\app\agent_cli.py' scan 'F:\think-aloud-database'
 ```

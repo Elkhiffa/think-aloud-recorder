@@ -97,6 +97,12 @@ def main(argv=None):
     visual_overview = commands.add_parser('visual-overview', help='完整时间范围的紧凑导航；不展开原话、图片或低层节点')
     visual_overview.add_argument('index')
     visual_overview.add_argument('--bins', type=int, default=32)
+    candidates = commands.add_parser('visual-candidates', help='紧凑读取短区间内的主要与弱候选；不展开原话或整段运动树')
+    candidates.add_argument('index')
+    candidates.add_argument('--start',type=float,required=True)
+    candidates.add_argument('--end',type=float,required=True)
+    candidates.add_argument('--offset',type=int,default=0)
+    candidates.add_argument('--limit',type=int,default=24)
     visual_plan = commands.add_parser('visual-plan', help='复用已有索引，分组并建立首轮、补图和复核共用的预算')
     visual_plan.add_argument('index')
     visual_plan.add_argument('--output', required=True)
@@ -157,6 +163,9 @@ def main(argv=None):
             from visual_evidence import create_plan
             value = create_plan(args.index, args.output, total=args.total_views,
                                 initial=args.initial_views, review=args.review_views)
+        elif name == 'visual-candidates':
+            from visual_nodes import read_candidates
+            value = read_candidates(args.index,start=args.start,end=args.end,offset=args.offset,limit=args.limit)
         elif name == 'visual-packet':
             from visual_evidence import packet
             value = packet(args.plan, args.request_id, phase=args.phase, question=args.question,

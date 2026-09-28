@@ -46,6 +46,8 @@ class EvidencePlanTests(unittest.TestCase):
     def test_shared_budget_preserves_review_reserve_and_does_not_extract_when_rejected(self):
         p=Path(evidence.create_plan(self.value['index'],self.root/'small',total=4,initial=2,review=2)['plan'])
         evidence.packet(p,'first',phase='initial',question='先看')
+        if evidence.budget_status(p)['remaining']>2:
+            evidence.packet(p,'fill',phase='inspect',question='使用首轮未发满的剩余名额',times=[1])
         with patch.object(evidence,'_frame') as frame:
             denied=evidence.packet(p,'extra',phase='inspect',question='还有一张',times=[.625])
         self.assertEqual(denied['state'],'budget_exceeded')
@@ -133,13 +135,13 @@ class EvidencePlanTests(unittest.TestCase):
             groups,_=evidence._groups(index,Path(self.value['index']))
         self.assertEqual([g['times'] for g in groups],[[0,1],[2],[3]])
 
-    def test_transient_bundle_is_kept_whole_or_explicitly_deferred(self):
+    def test_legacy_initial_transient_bundle_remains_compatible(self):
         groups=[dict(id='a',kind='appearance',times=[0]),
                 dict(id='b',kind='transient',times=[1,1.1,1.2]),
                 dict(id='c',kind='appearance',times=[3])]
-        chosen,deferred=evidence._initial_times(groups,6)
+        chosen,deferred=evidence._initial_times_legacy(groups,6)
         self.assertTrue({1,1.1,1.2}.issubset(chosen));self.assertFalse(deferred)
-        chosen,deferred=evidence._initial_times(groups,4)
+        chosen,deferred=evidence._initial_times_legacy(groups,4)
         self.assertFalse({1,1.1,1.2}.intersection(chosen));self.assertEqual(deferred,['b'])
 
     def test_initial_transitions_do_not_displace_broad_temporal_orientation(self):
@@ -152,6 +154,73 @@ class EvidencePlanTests(unittest.TestCase):
         self.assertTrue(any(45<=at<=55 for at in chosen))
         self.assertTrue(any(70<=at<=85 for at in chosen))
         self.assertTrue(deferred)
+
+    def test_initial_skips_near_black_and_does_not_fill_with_adjacent_burst_frames(self):
+        groups=[dict(id=str(t),kind='appearance',times=[t]) for t in (0,1,10,10.1,10.2,30,50,80,100)]
+        pictures={0:dict(near_black=True),1:dict(near_black=True)}
+        selected,_=evidence._initial_times(groups,8,pictures)
+        self.assertNotIn(0,selected);self.assertNotIn(1,selected)
+        self.assertEqual(sum(10<=t<=10.2 for t in selected),1)
+        self.assertLess(len(selected),8)
+
+    def test_readable_weak_state_can_outrank_a_dense_primary_tail(self):
+        # Different lengths and locations guard against fitting one real timestamp.
+        for start,end,popup in ((0,25,6),(30,80,61),(0,5,1.7)):
+            duration=(end-start)/30
+            weak=dict(kind='change',start=popup,end=popup+duration,
+                      frames=[dict(time=popup,role='before'),dict(time=popup+duration,role='after')],
+                      metrics=dict(adjacent_global=.006,moving_tile_fraction=.1))
+            tail=dict(id='tail',kind='transient',start=end-.15,end=end,
+                      frames=[dict(time=end-.15,role='before'),dict(time=end-.1,role='peak'),dict(time=end,role='after')],
+                      metrics=dict(adjacent_global=.3,moving_tile_fraction=.8))
+            motion=dict(id='m',kind='motion',start=start,end=end,
+                        frames=[dict(time=start,role='before'),dict(time=end,role='after')],motion_observations=[weak])
+            index=dict(source=dict(duration_seconds=end),range=dict(start=start,end=end),nodes=[motion,tail])
+            selected,_,decisions=evidence._window_choice(index,start,end,4)
+            self.assertIn((weak['start']+weak['end'])/2,selected)
+            self.assertIn(start,selected);self.assertIn(end,selected)
+            self.assertTrue(any(d['level']=='weak' for d in decisions))
+            self.assertEqual(sum(end-.2<=t<=end for t in selected),1)
+
+    def test_plan_without_selection_version_uses_legacy_window_and_preserves_receipt(self):
+        plan=evidence._load(self.plan)
+        plan['version']=1
+        plan.pop('selection_version')
+        evidence.write(self.plan,plan)
+        with patch.object(evidence,'_window_choice',side_effect=AssertionError('must retain legacy')):
+            first=evidence.packet(self.plan,'legacy',phase='inspect',question='既有计划',start=.58,end=.85,limit=4)
+            replay=evidence.packet(self.plan,'legacy',phase='inspect',question='既有计划',start=.58,end=.85,limit=4)
+        self.assertTrue(replay['replayed'])
+        self.assertEqual(first['frames'],replay['frames'])
+        self.assertEqual(first['budget'],replay['budget'])
+
+    def test_compact_interval_read_is_bounded_and_filters_nested_observations(self):
+        index_path=Path(self.value['index'])
+        index=json.loads(index_path.read_text(encoding='utf-8'))
+        node=index['nodes'][0]
+        node['start']=0;node['end']=3
+        node['transcript']=[dict(text='not-to-repeat'*10000)]
+        node['motion_observations']=[dict(kind='change',start=i/100,end=i/100+.01,frames=[])
+                                     for i in range(300)]
+        index_path.write_text(json.dumps(index),encoding='utf-8')
+        result=visual.read_candidates(index_path,start=.6,end=.8,limit=3)
+        self.assertEqual(len(result['rows']),3)
+        self.assertIsNotNone(result['next_offset'])
+        self.assertLess(result['read_metrics']['data_characters_without_read_metrics'],2500)
+        self.assertNotIn('not-to-repeat',json.dumps(result))
+        page=visual.read_candidates(index_path,start=.6,end=.8,limit=60)
+        for row in page['rows']:
+            self.assertGreaterEqual(row[4],.6);self.assertLessEqual(row[3],.8)
+        self.assertTrue(any(row[1]=='weak' for row in page['rows']))
+
+    def test_compact_candidates_cli_and_limits(self):
+        output=io.StringIO()
+        with redirect_stdout(output):
+            code=agent_cli.main(['visual-candidates',self.value['index'],'--start','0','--end','1','--limit','2'])
+        self.assertEqual(code,0)
+        self.assertLessEqual(len(json.loads(output.getvalue())['data']['rows']),2)
+        for kwargs in (dict(start=0,end=0),dict(start=0,end=1,limit=61),dict(start=0,end=999)):
+            with self.assertRaises(ValueError):visual.read_candidates(self.value['index'],**kwargs)
 
     def test_cli_budget_is_json_without_images(self):
         output=io.StringIO()
