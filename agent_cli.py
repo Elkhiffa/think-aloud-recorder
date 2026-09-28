@@ -97,16 +97,16 @@ def main(argv=None):
     visual_review = commands.add_parser('visual-review', help='仅在本机打开候选检查页；Ctrl+C 结束')
     visual_review.add_argument('index')
     visual_review.add_argument('--port', type=int, default=0)
-    for name in ('publish', 'status', 'evidence', 'claim', 'renew', 'fail', 'validate', 'submit', 'frame'):
+    for name in ('publish', 'status', 'evidence', 'claim', 'reprocess', 'renew', 'fail', 'validate', 'submit', 'frame'):
         command = commands.add_parser(name)
         command.add_argument('session')
         if name in ('renew', 'fail', 'submit'):
             command.add_argument('--token', required=True)
-        if name in ('claim', 'renew'):
+        if name in ('claim', 'reprocess', 'renew'):
             command.add_argument('--seconds', type=int, default=1800)
-        if name == 'claim':
+        if name in ('claim', 'reprocess'):
             command.add_argument('--worker', required=True)
-        if name == 'fail':
+        if name in ('fail', 'reprocess'):
             command.add_argument('--reason', required=True)
         if name in ('validate', 'submit'):
             command.add_argument('--file', required=True, help='工作目录中的候选结果 JSON')
@@ -147,6 +147,8 @@ def main(argv=None):
             value = protocol.evidence(args.session, args.start, args.end)
         elif name == 'claim':
             value = protocol.claim(args.session, args.worker, args.seconds)
+        elif name == 'reprocess':
+            value = protocol.reprocess(args.session, args.worker, args.reason, args.seconds)
         elif name == 'renew':
             value = protocol.renew(args.session, args.token, args.seconds)
         elif name == 'fail':

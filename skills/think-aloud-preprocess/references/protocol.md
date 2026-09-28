@@ -6,7 +6,10 @@
 & "$app\runtime\python.exe" "$app\agent_cli.py" scan "$database"
 & "$app\runtime\python.exe" "$app\agent_cli.py" publish "$session"
 & "$app\runtime\python.exe" "$app\agent_cli.py" claim "$session" --worker "本次会话标识" --seconds 1800
+& "$app\runtime\python.exe" "$app\agent_cli.py" reprocess "$session" --worker "本次会话标识" --reason "用户要求用画面节点重新分析并比较" --seconds 1800
 & "$app\runtime\python.exe" "$app\agent_cli.py" evidence "$session"
+& "$app\runtime\python.exe" "$app\agent_cli.py" visual-nodes "$session" --output "$work\visual-pass-01" --max-images 120
+& "$app\runtime\python.exe" "$app\agent_cli.py" visual-read "$work\visual-pass-01\index.json" --offset 0 --limit 30
 & "$app\runtime\python.exe" "$app\agent_cli.py" evidence "$session" --start 120 --end 180
 & "$app\runtime\python.exe" "$app\agent_cli.py" frame "$session" --at 135 --output "$work\frame-135.jpg"
 & "$app\runtime\python.exe" "$app\agent_cli.py" renew "$session" --token "$token" --seconds 1800
@@ -19,6 +22,10 @@
 输出是 UTF-8 JSON：成功 `{ok:true,data:...}`，失败 `{ok:false,error:...}` 并退出 1。领取时读取 `data.claimed`；false 时 reason 为 `busy` 或 `complete`。令牌仅属于该次领取，默认 30 分钟，可在到期前续期。不要将令牌写入分析文档。
 
 `scan` 只读就绪信号；`scan --publish` 可为资料库中所有整理完成的旧场次补发/更新信号，所以只在已获授权的场次范围内使用。单场次用 `publish` 更精确。录制/转写未完成或失败的场次不会发布。合成测试仅用 `--include-test` 纳入。
+
+`reprocess` 仅用于用户明确授权重做的已有结果，要求填写理由。领取成功前，接口将原结果的原始字节保存到场次 `agent-history` 并校验 SHA-256；返回备份路径与摘要。备份失败则不建立新任务。有效的其他领取仍返回 `busy`，不得手工抢占。重做中旧结果继续可读，失败或超时也不移除；新结果只有通过正常 `validate`／`submit` 后才替换。`status` 的 `reanalysis` 描述重做进展，`state=complete` 仍指原结果可用。无既有结果时用 `claim`。旧结果过期时也要保留基线，但比较报告须区分素材变更。
+
+`visual-nodes` 默认检查整场，支持 `--start`／`--end` 和 1–500 的图片预算（默认 120）。输出必须为资料库以外的新目录，不覆盖已有索引。`visual-read` 按页（最多 100 节点）或时间段读取，校验源 revision 后返回实际图片路径、原话引用与有限操作摘要。须实际用看图工具检查图片才能计入 `video_ranges`；逐帧机械检测不等于模型检查。配图不足时按需缩短范围补取，详见安装目录的 `docs/visual-nodes.md`。`visual-review INDEX` 可启动仅本机的检查页。
 
 `evidence` 提供原话稳定引用 `t000001`、说话人信息、素材路径、缺口与窗口状态。带时间范围时还提供输入引用 `i0000001`、已对齐的 start/end，以及原始 source_start/source_end。若 `inputs.truncated=true`，按更短时间段重读；不能把截断部分当没有输入。
 
@@ -42,9 +49,9 @@
   },
   "events": [{
     "id": "e1", "start": 130, "end": 140,
-    "title": "符合证据的简短事件名",
+    "title": "尝试找到并比较适用的装备",
     "summary": "观察到什么、做了什么、结果如何；未知项明确标注。",
-    "context": "补充当时的目标或前后关系；推测须说明。",
+    "context": "记录者当前目标与前后关系；仅从画面推测时明确说明，无法识别时写目标未明。",
     "basis": "explicit", "kind": "friction",
     "evidence": [
       {"kind": "quote", "ref": "t000012"},
@@ -60,6 +67,7 @@
 - 时间单位是相对录像开始的秒。所有证据必须位于对应事件时间段，画面证据还必须落在实际检查的 video_ranges 中。一帧用 start=end。
 - basis：`explicit`（有原话引用的明确表达）、`observed`（可见现象）、`inferred`（推测）。这是事件依据类型，不是量化置信度。
 - kind：`friction`、`positive`、`routine`、`question`。用 summary 区分事实与假设，分类本身不代表设计结论。
+- 事件以目标与过程组织，沿用 v1 的 title/context/summary，正常过程可用 `routine`；不新增私有 schema。问题从事件中归纳，在 summary/ideas 或单独对比报告中记录，并引用事件和源证据。没有原话不等于没有目标；画面推测目标时用 `inferred`，不要因存在无关原话就标成 `explicit`。
 - 原话和输入只填引用，不手工复制文本或调整时间；发布时程序从当前素材展开，防止引用漂移。参考 quote.speaker_id 保留其他讲述者的身份。
 - coverage.transcript / inputs 为 `full`、`partial` 或 `none`，只描述本轮实际检查范围。无有效操作时记 `none` 并写限制；缺口不等于没有操作。
 - events 最多 300，每事件证据最多 30；ideas 最多 100；questions 最多 30。多数场次应远少于上限，无充分依据可返回空列表。
