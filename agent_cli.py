@@ -94,6 +94,9 @@ def main(argv=None):
     visual_read.add_argument('--end', type=float)
     visual_read.add_argument('--offset', type=int, default=0)
     visual_read.add_argument('--limit', type=int, default=40)
+    visual_overview = commands.add_parser('visual-overview', help='完整时间范围的紧凑导航；不展开原话、图片或低层节点')
+    visual_overview.add_argument('index')
+    visual_overview.add_argument('--bins', type=int, default=32)
     visual_review = commands.add_parser('visual-review', help='仅在本机打开候选检查页；Ctrl+C 结束')
     visual_review.add_argument('index')
     visual_review.add_argument('--port', type=int, default=0)
@@ -130,6 +133,9 @@ def main(argv=None):
         elif name == 'visual-read':
             from visual_nodes import read_index
             value = read_index(args.index, start=args.start, end=args.end, offset=args.offset, limit=args.limit)
+        elif name == 'visual-overview':
+            from visual_nodes import read_overview
+            value = read_overview(args.index, bins=args.bins)
         elif name == 'visual-review':
             from visual_nodes import review_server
             with review_server(args.index, args.port) as server:

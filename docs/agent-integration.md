@@ -32,7 +32,7 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 `agent_cli.py` 是外部会话的本地接口，使用自带 Python。`scan` 读取就绪场次；`publish` 为指定旧场次补发或更新信号；`claim` 领取，`reprocess` 备份后重新领取已有结果，`renew` 续期，`evidence` 读概览/区间，`frame` 提取图片，`validate` 校验候选，`submit` 提交，`fail` 记录原因，`status` 回读状态。完整参数见 `--help`。
 
-画面候选试验另提供 `visual-nodes`、`visual-read`、`visual-review`：先在本地逐帧压缩画面变化，再按需给 agent 提供带时间戳的图片与原话/操作引用。它不领取分析任务、不提交体验事件，也不自动运行，详见 [画面变化候选](visual-nodes.md)。不要将机械候选直接视为玩家目标或问题。
+画面候选试验另提供 `visual-nodes`、`visual-overview`、`visual-read`、`visual-review`：先在本地逐帧压缩画面变化，先读全程紧凑概览，再按需展开带时间戳的图片与原话/操作引用。它不领取分析任务、不提交体验事件，也不自动运行，详见 [画面变化候选](visual-nodes.md)。概览不能替代实际看图或完整原话；不要将机械候选直接视为玩家目标或问题。分阶段机器统计与返回字符量可用于控制取材开销，不能换算为真实模型额度消耗。
 
 ```powershell
 & 'F:\ThinkAloud\app\runtime\python.exe' 'F:\ThinkAloud\app\agent_cli.py' scan 'F:\think-aloud-database'

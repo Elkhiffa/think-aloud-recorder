@@ -4,6 +4,7 @@ The index describes pixel changes, not UI states, player intent or problems.
 Two sequential decode passes bound memory: detection, then budgeted screenshots.
 """
 from collections import Counter
+from contextlib import closing, contextmanager
 from fractions import Fraction
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,6 +25,45 @@ CAUTIONS = [
     '原话未表达目标不等于没有目标；输入缺失不等于没有操作。',
     '图片预算只限制配图；未配图的候选仍需按时间回看，不能当作没有变化。',
 ]
+
+
+class _Timings:
+    """Disjoint caller wall times, never CPU time or a sum across workers."""
+    def __init__(self):
+        self.started = time.perf_counter()
+        self.seconds = Counter()
+        self.calls = Counter()
+
+    @contextmanager
+    def measure(self, name):
+        began = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.seconds[name] += time.perf_counter() - began
+            self.calls[name] += 1
+
+    def snapshot(self):
+        wall = time.perf_counter() - self.started
+        return dict(wall_seconds=round(wall, 6),
+                    stages={name: dict(seconds=round(seconds, 6), calls=self.calls[name])
+                            for name, seconds in self.seconds.items()},
+                    unattributed_seconds=round(max(0, wall - sum(self.seconds.values())), 6))
+
+
+def _timed_frames(frames, timings, stage):
+    """Time frame supply only, excluding the consumer's work between yields."""
+    try:
+        while True:
+            with timings.measure(stage):
+                try:
+                    value = next(frames)
+                except StopIteration:
+                    return
+            yield value
+    finally:
+        with timings.measure(stage):
+            frames.close()
 
 
 def _dump(path, value):
@@ -190,8 +230,10 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
     """
     from visual_change import VisualChangeDetector
     started = time.monotonic()
+    timings = _Timings()
     folder, output = Path(folder).resolve(), Path(output).resolve()
-    meta, material, revision, _ = protocol._identity(folder)
+    with timings.measure('source_validation'):
+        meta, material, revision, _ = protocol._identity(folder)
     if meta.get('state') == '录制中':
         raise ValueError('该场次仍在录制，请等待录像保存后再提取。')
     duration = material['duration']
@@ -212,43 +254,53 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
     detector = VisualChangeDetector(config or dict(max_dimension=320))
     output.mkdir(parents=True)
     (output / 'images').mkdir()
+    stats, image_stats = {}, {}
     try:
-        stats = {}
         last_notice = 0
-        for at, picture in _decode(video, start, end, stats):
-            width = min(320, picture.width)
-            height = max(1, round(picture.height * width / picture.width))
-            rgb = picture.reformat(width=width, height=height, format='rgb24').to_ndarray()
-            detector.feed(at, rgb)
-            if progress and time.monotonic() - last_notice >= 5:
-                progress(dict(phase='detect', at=at, end=end, frames=stats['decoded_frames']))
-                last_notice = time.monotonic()
+        with closing(_timed_frames(_decode(video, start, end, stats), timings, 'detect_decode')) as frames:
+            for at, picture in frames:
+                with timings.measure('detect_resize'):
+                    width = min(320, picture.width)
+                    height = max(1, round(picture.height * width / picture.width))
+                    rgb = picture.reformat(width=width, height=height, format='rgb24').to_ndarray()
+                with timings.measure('detect_changes'):
+                    detector.feed(at, rgb)
+                if progress and time.monotonic() - last_notice >= 5:
+                    with timings.measure('progress_callback'):
+                        progress(dict(phase='detect', at=at, end=end, frames=stats['decoded_frames']))
+                    last_notice = time.monotonic()
         if not stats.get('decoded_frames'):
             raise ValueError('该区间没有可解码画面。')
         display_start = max(start, stats['first_frame'])
         display_end = end if stats.get('reached_end') else min(end, stats['last_frame_end'])
         stats['display_coverage'] = dict(start=display_start, end=display_end)
-        result = detector.finish(max(stats['last_frame'], display_end))
-        nodes = sorted(result['nodes'], key=lambda n: (n['start'], n['end']))
-        for i, node in enumerate(nodes):
-            node['id'] = f'v{i + 1:06d}'
-        chosen = _select_times(nodes, max_images)
+        with timings.measure('detect_finish'):
+            result = detector.finish(max(stats['last_frame'], display_end))
+        with timings.measure('select_images'):
+            nodes = sorted(result['nodes'], key=lambda n: (n['start'], n['end']))
+            for i, node in enumerate(nodes):
+                node['id'] = f'v{i + 1:06d}'
+            chosen = _select_times(nodes, max_images)
         images = {}
         if progress:
-            progress(dict(phase='images', selected=len(chosen), nodes=len(nodes)))
-        for at, picture in _decode(video, start, end, {}):
-            if at not in chosen:
-                continue
-            content = _jpeg(picture)
-            digest = hashlib.sha256(content).hexdigest()
-            relative = 'images/' + digest + '.jpg'
-            path = output / relative
-            if not path.exists():
-                with path.open('xb') as handle:
-                    handle.write(content)
-            images[at] = relative
-            if len(images) == len(chosen):
-                break
+            with timings.measure('progress_callback'):
+                progress(dict(phase='images', selected=len(chosen), nodes=len(nodes)))
+        with closing(_timed_frames(_decode(video, start, end, image_stats), timings, 'image_decode')) as frames:
+            for at, picture in frames:
+                if at not in chosen:
+                    continue
+                with timings.measure('image_resize_encode'):
+                    content = _jpeg(picture)
+                with timings.measure('image_hash_write'):
+                    digest = hashlib.sha256(content).hexdigest()
+                    relative = 'images/' + digest + '.jpg'
+                    path = output / relative
+                    if not path.exists():
+                        with path.open('xb') as handle:
+                            handle.write(content)
+                    images[at] = relative
+                if len(images) == len(chosen):
+                    break
         if len(images) != len(chosen):
             raise ValueError('第二次解码未能复现选中的时间戳；未发布索引。')
         for node in nodes:
@@ -261,9 +313,11 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
             for observation in node.get('motion_observations', []):
                 for frame in observation['frames']:
                     frame['path'] = None
-        context = _context(folder, meta, duration, nodes)
-        if protocol._identity(folder)[2] != revision:
-            raise ValueError('提取期间素材、转写或输入同步已更新；请在新目录重新提取。')
+        with timings.measure('associate_evidence'):
+            context = _context(folder, meta, duration, nodes)
+        with timings.measure('source_validation'):
+            if protocol._identity(folder)[2] != revision:
+                raise ValueError('提取期间素材、转写或输入同步已更新；请在新目录重新提取。')
         missed = sum(not any(f['path'] for f in n['frames']) for n in nodes)
         uncovered = []
         if display_start > start + 1e-7:
@@ -301,56 +355,163 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
                                    node_index_complete=detector_stats.get('node_index_complete', True),
                                    meaning='complete 仅表示所选范围内有时间戳的解码帧已检查，不表示语义无遗漏。',
                                    notes=CAUTIONS + extra_notes + context.pop('notes')),
-                     context=context, nodes=nodes, elapsed_seconds=round(time.monotonic() - started, 3))
-        serialized = json.dumps(index, ensure_ascii=False, allow_nan=False)
-        if len(serialized.encode('utf-8')) > MAX_INDEX_BYTES:
-            raise ValueError('候选索引过大，请缩小提取区间。')
-        template = (Path(__file__).resolve().parent / 'ui' / 'visual-nodes.html').read_text(encoding='utf-8')
-        safe_json = serialized.replace('<', '\\u003c').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029')
-        if template.count('__VISUAL_DATA__') != 1:
-            raise ValueError('检查页模板数据插槽无效。')
-        with (output / 'review.html').open('x', encoding='utf-8') as handle:
-            handle.write(template.replace('__VISUAL_DATA__', safe_json))
-        _dump(output / 'index.json', index)
+                     context=context, nodes=nodes, metrics_file='metrics.json',
+                     elapsed_seconds=round(time.monotonic() - started, 3))
+        with timings.measure('publish_index_review'):
+            serialized = json.dumps(index, ensure_ascii=False, allow_nan=False)
+            if len(serialized.encode('utf-8')) > MAX_INDEX_BYTES:
+                raise ValueError('候选索引过大，请缩小提取区间。')
+            template = (Path(__file__).resolve().parent / 'ui' / 'visual-nodes.html').read_text(encoding='utf-8')
+            safe_json = serialized.replace('<', '\\u003c').replace('\u2028', '\\u2028').replace('\u2029', '\\u2029')
+            if template.count('__VISUAL_DATA__') != 1:
+                raise ValueError('检查页模板数据插槽无效。')
+            with (output / 'review.html').open('x', encoding='utf-8') as handle:
+                handle.write(template.replace('__VISUAL_DATA__', safe_json))
+            _dump(output / 'index.json', index)
+        metrics = dict(version=1, kind='visual-preprocess-metrics', state='complete',
+                       session_id=meta['id'], revision=revision, range=index['range'],
+                       timing=timings.snapshot(),
+                       timing_scope='extract entry through saved index/review; excludes metrics/status writes and CLI response',
+                       timing_basis='single-task caller wall time; not CPU time; parallel task times must not be added as wall time',
+                       detector_config=index['detector_config'], max_images=max_images,
+                       counts=dict(detect_frames=stats.get('decoded_frames', 0),
+                                   image_pass_frames=image_stats.get('decoded_frames', 0),
+                                   image_pass_last_frame=image_stats.get('last_frame'),
+                                   candidate_nodes=len(nodes),
+                                   weak_observations=index['coverage']['weak_motion_observations_without_images'],
+                                   omitted_nodes=detector_stats.get('omitted_nodes', 0),
+                                   omitted_weak_observations=detector_stats.get('omitted_weak_motion_observations', 0),
+                                   selected_image_times=len(images), unique_image_files=len(set(images.values())),
+                                   unpictured_nodes=missed, index_bytes=(output/'index.json').stat().st_size,
+                                   review_bytes=(output/'review.html').stat().st_size),
+                       coverage=dict(decoded_range_complete=scan_complete,
+                                     node_index_complete=index['coverage']['node_index_complete'],
+                                     uncovered_ranges=uncovered,
+                                     omitted_time_range=detector_stats.get('omitted_time_range'),
+                                     meaning='Machine counts only; selected images are not images inspected by an agent.'))
+        _dump(output / 'metrics.json', metrics)
         _dump(output / 'status.json', dict(state='complete', session_id=meta['id'], revision=revision))
         return dict(index=str(output / 'index.json'), review=str(output / 'review.html'),
+                    metrics=str(output / 'metrics.json'),
                     coverage=index['coverage'], elapsed_seconds=index['elapsed_seconds'])
     except Exception as error:
-        _dump(output / 'status.json', dict(state='failed', error=str(error)))
+        try:
+            if not (output / 'metrics.json').exists():
+                _dump(output / 'metrics.json', dict(version=1, kind='visual-preprocess-metrics', state='failed',
+                      timing=timings.snapshot(), counts=dict(detect_frames=stats.get('decoded_frames', 0),
+                      image_pass_frames=image_stats.get('decoded_frames', 0)),
+                      timing_scope='partial attempt through failure; incomplete counts are not final coverage'))
+        except Exception:
+            pass  # Optional diagnostics must not mask the original failure.
+        try:
+            _dump(output / 'status.json', dict(state='failed', error=str(error)))
+        except Exception:
+            pass  # Preserve the root exception even when the destination is full.
         raise
 
 
-def read_index(path, *, start=None, end=None, offset=0, limit=40):
-    path = Path(path).resolve()
-    if path.stat().st_size > MAX_INDEX_BYTES:
-        raise ValueError('索引超过 32 MB。')
-    index = json.loads(path.read_text(encoding='utf-8'))
+def _read_fresh_index(path, timings):
+    with timings.measure('read_parse_index'):
+        index_bytes = path.stat().st_size
+        if index_bytes > MAX_INDEX_BYTES:
+            raise ValueError('索引超过 32 MB。')
+        index = json.loads(path.read_text(encoding='utf-8'))
     if index.get('version') != VERSION or index.get('kind') != 'visual-change-candidates':
         raise ValueError('不支持的画面候选索引。')
+    # Shared by detail and overview: compact reads cannot bypass source checks.
+    with timings.measure('source_validation'):
+        if protocol._identity(Path(index['source']['session_folder']))[2] != index['revision']:
+            raise ValueError('源素材或同步信息已改变，此索引已过期。')
+    return index, index_bytes
+
+
+def read_index(path, *, start=None, end=None, offset=0, limit=40):
+    timings = _Timings()
+    path = Path(path).resolve()
+    index, index_bytes = _read_fresh_index(path, timings)
     if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
         raise ValueError('offset 需非负，limit 应为 1–100。')
     if start is not None or end is not None:
         if start is None or end is None:
             raise ValueError('请同时提供 start 与 end。')
         protocol._span(dict(start=start, end=end), index['source']['duration_seconds'])
-    # Never return stale pictures as current evidence (including input revocation).
-    folder = Path(index['source']['session_folder'])
-    if protocol._identity(folder)[2] != index['revision']:
-        raise ValueError('源素材或同步信息已改变，此索引已过期。')
-    rows = index['nodes']
-    if start is not None:
-        rows = [n for n in rows if n['end'] >= start and n['start'] <= end]
-    selected = rows[offset:offset + limit]
-    for node in selected:
-        for frame in node['frames']:
-            if frame.get('path'):
-                image = (path.parent / frame['path']).resolve()
-                if not image.is_relative_to(path.parent / 'images') or not image.is_file():
-                    raise ValueError('候选图片路径无效。')
-                frame['absolute_path'] = str(image)
-    return {k: v for k, v in index.items() if k != 'nodes'} | dict(
+    with timings.measure('filter_resolve_images'):
+        rows = index['nodes']
+        if start is not None:
+            rows = [n for n in rows if n['end'] >= start and n['start'] <= end]
+        selected = rows[offset:offset + limit]
+        for node in selected:
+            for frame in node['frames']:
+                if frame.get('path'):
+                    image = (path.parent / frame['path']).resolve()
+                    if not image.is_relative_to(path.parent / 'images') or not image.is_file():
+                        raise ValueError('候选图片路径无效。')
+                    frame['absolute_path'] = str(image)
+    value = {k: v for k, v in index.items() if k != 'nodes'} | dict(
         index=str(path), total_matching=len(rows), offset=offset,
         next_offset=offset + limit if offset + limit < len(rows) else None, nodes=selected)
+    with timings.measure('measure_response'):
+        characters = len(json.dumps(value, ensure_ascii=False, allow_nan=False))
+    value['read_metrics'] = dict(version=1, timing=timings.snapshot(), index_bytes=index_bytes,
+                                returned_nodes=len(selected), data_characters_without_read_metrics=characters,
+                                returned_unique_image_paths=len({f['absolute_path'] for n in selected
+                                    for f in n['frames'] if f.get('absolute_path')}),
+                                meaning='Characters of returned data before read_metrics; excludes CLI envelope; not tokens or proof of image inspection.')
+    return value
+
+
+def read_overview(path, *, bins=32):
+    """Bounded, non-semantic navigation over every indexed interval; no pictures."""
+    if type(bins) is not int or not 1 <= bins <= 120:
+        raise ValueError('概览分区数应为 1–120。')
+    timings = _Timings()
+    path = Path(path).resolve()
+    index, index_bytes = _read_fresh_index(path, timings)
+    start, end = index['range']['start'], index['range']['end']
+    if end <= start:
+        raise ValueError('候选索引时间范围无效。')
+    nodes = index['nodes']
+    omitted = index['stats'].get('detector', {}).get('omitted_time_range')
+    with timings.measure('aggregate_timeline'):
+        weak_starts = [max(start, row['start']) for n in nodes for row in n.get('motion_observations', [])]
+        table = []
+        for i in range(bins):
+            left = start + (end - start) * i / bins
+            right = end if i == bins - 1 else start + (end - start) * (i + 1) / bins
+            def owns(at):
+                return left <= at < right or (i == bins - 1 and at == right)
+            overlapping = [n for n in nodes if n['end'] >= left and
+                           (n['start'] < right or (i == bins - 1 and n['start'] == right))]
+            quotes = {r['id'] for n in overlapping for r in n.get('transcript', [])}
+            table.append([left, right, len(overlapping), sum(owns(max(start,n['start'])) for n in nodes),
+                          dict(Counter(n['kind'] for n in overlapping)),
+                          sum(any(f.get('path') for f in n['frames']) for n in overlapping),
+                          sum(owns(at) for at in weak_starts), len(quotes),
+                          sum(n.get('transcript_omitted',0)>0 for n in overlapping),
+                          sum(n.get('input_summary',{}).get('gap_count',0)>0 for n in overlapping),
+                          bool(omitted and omitted[1]>=left and omitted[0]<=right)])
+        value = dict(version=VERSION, kind='visual-candidate-overview', index=str(path),
+                     session_id=index['session_id'], revision=index['revision'], range=index['range'],
+                     coverage=index['coverage'],
+                     omissions=dict(major_nodes=index['stats'].get('detector',{}).get('omitted_nodes',0),
+                                    weak_observations=index['stats'].get('detector',{}).get('omitted_weak_motion_observations',0),
+                                    time_range=omitted),
+                     columns=['start','end','overlapping_nodes','node_starts','node_kinds',
+                              'pictured_nodes','weak_starts','linked_quote_refs',
+                              'nodes_with_omitted_quotes','nodes_with_input_gaps','index_omissions'], rows=table,
+                     actual_image_inspection=False,
+                     notes=['分区仅汇总完整索引；未重新抽帧、未删除候选，不代表目标或流程分段。',
+                            '跨分区节点会重复计入 overlapping_nodes；node_starts 与 weak_starts 按起点归属。',
+                            '有配图节点不代表所看分区内一定有配图；原话引用只来自有限关联，不等于全部逐字稿。',
+                            '本概览没有展示图片或原话；空计数不证明无操作或无目标。'],
+                     next_step='先单独读取完整原话；用 visual-read INDEX --start 起点 --end 终点 按需展开并实际检查图像。')
+    with timings.measure('measure_response'):
+        characters = len(json.dumps(value, ensure_ascii=False, allow_nan=False))
+    value['read_metrics'] = dict(version=1, timing=timings.snapshot(), index_bytes=index_bytes,
+                                returned_rows=len(table), data_characters_without_read_metrics=characters,
+                                returned_unique_image_paths=0,
+                                meaning='Overview characters before read_metrics; not tokens, model cost or semantic coverage.')
+    return value
 
 
 def review_server(path, port=0):

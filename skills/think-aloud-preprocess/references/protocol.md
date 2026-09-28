@@ -9,6 +9,7 @@
 & "$app\runtime\python.exe" "$app\agent_cli.py" reprocess "$session" --worker "本次会话标识" --reason "用户要求用画面节点重新分析并比较" --seconds 1800
 & "$app\runtime\python.exe" "$app\agent_cli.py" evidence "$session"
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-nodes "$session" --output "$work\visual-pass-01" --max-images 120
+& "$app\runtime\python.exe" "$app\agent_cli.py" visual-overview "$work\visual-pass-01\index.json"
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-read "$work\visual-pass-01\index.json" --offset 0 --limit 30
 & "$app\runtime\python.exe" "$app\agent_cli.py" evidence "$session" --start 120 --end 180
 & "$app\runtime\python.exe" "$app\agent_cli.py" frame "$session" --at 135 --output "$work\frame-135.jpg"
@@ -30,6 +31,8 @@
 `evidence` 提供原话稳定引用 `t000001`、说话人信息、素材路径、缺口与窗口状态。带时间范围时还提供输入引用 `i0000001`、已对齐的 start/end，以及原始 source_start/source_end。若 `inputs.truncated=true`，按更短时间段重读；不能把截断部分当没有输入。
 
 `frame` 使用本机 FFmpeg，输出最大宽度 1920 的画面，并返回时间与源 revision。输出必须是场次之外工作目录中的新 `.jpg`/`.png`。调用成功并不等于已检查画面：用图像查看工具读取后才能记入检查范围。若需要判断状态变化，要检查前后帧或视频片段，不把一帧当成持续过程。原声路径由 evidence 提供。
+
+`visual-overview INDEX [--bins 32]` 返回全时间范围的紧凑导航表，不含原话正文、图片或全部节点详情。它使用既有完整索引，不是重新抽帧；源 revision 检查与详细读取相同。原话仍单独完整读取，概览中的未配图、弱变化和省略范围仍需按需展开或标明未审查。`visual-read` 与概览的 `read_metrics` 只计返回字符／路径，不代表模型 token、费用或已看图数量。
 
 ## 候选结果
 
