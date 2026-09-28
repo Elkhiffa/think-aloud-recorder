@@ -228,6 +228,7 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
     Partial files remain diagnostic artifacts after a failure, with status.json
     failed. index.json and review.html appear only after source revalidation.
     """
+    from av.video.reformatter import VideoReformatter
     from visual_change import VisualChangeDetector
     started = time.monotonic()
     timings = _Timings()
@@ -256,13 +257,18 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
     (output / 'images').mkdir()
     stats, image_stats = {}, {}
     try:
+        # Keep the scaler context for this extraction instead of rebuilding it
+        # for every decoded frame. Reformat still receives each frame's format
+        # and colour metadata; no sampling or detector parameters change.
+        reformatter = VideoReformatter()
         last_notice = 0
         with closing(_timed_frames(_decode(video, start, end, stats), timings, 'detect_decode')) as frames:
             for at, picture in frames:
                 with timings.measure('detect_resize'):
                     width = min(320, picture.width)
                     height = max(1, round(picture.height * width / picture.width))
-                    rgb = picture.reformat(width=width, height=height, format='rgb24').to_ndarray()
+                    rgb = reformatter.reformat(picture, width=width, height=height,
+                                               format='rgb24').to_ndarray()
                 with timings.measure('detect_changes'):
                     detector.feed(at, rgb)
                 if progress and time.monotonic() - last_notice >= 5:

@@ -96,6 +96,47 @@ class VisualNodesTests(unittest.TestCase):
         self.assertTrue(linked)
         self.assertTrue(any(n['transcript'] for n in index['nodes']))
 
+    def test_reused_scaler_preserves_vfr_candidates_and_image_bytes(self):
+        class FrameLocalReformatter:
+            def reformat(self, picture, **options):
+                return picture.reformat(**options)
+
+        # Compare the previous frame-local implementation with the reused
+        # context on a real VFR video, including a brief state and boundary PTS.
+        with patch('av.video.reformatter.VideoReformatter', FrameLocalReformatter):
+            before = visual.extract(self.folder, self.root / 'frame-local',
+                                    start=.58, end=2.7, max_images=8)
+        after = visual.extract(self.folder, self.root / 'reused',
+                               start=.58, end=2.7, max_images=8)
+        before_index = json.loads(Path(before['index']).read_text(encoding='utf-8'))
+        after_index = json.loads(Path(after['index']).read_text(encoding='utf-8'))
+        for field in ('nodes', 'stats', 'coverage', 'context', 'range', 'source', 'detector_config'):
+            self.assertEqual(before_index[field], after_index[field], field)
+        before_images = {p.name: p.read_bytes() for p in (self.root / 'frame-local/images').iterdir()}
+        after_images = {p.name: p.read_bytes() for p in (self.root / 'reused/images').iterdir()}
+        self.assertTrue(before_images)
+        self.assertEqual(before_images, after_images)
+        self.assertEqual(self.original, {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                                        for p in self.folder.iterdir()})
+
+    def test_reused_scaler_tracks_changing_frame_formats_and_colour_metadata(self):
+        from av.video.reformatter import VideoReformatter
+        reused = VideoReformatter()
+        rng = np.random.default_rng(24)
+        # Revisit a format after changes, so a stale cached conversion is visible.
+        for width, height, fmt, colorspace, color_range in (
+                (640, 360, 'yuv420p', 1, 1), (640, 360, 'yuv420p', 5, 2),
+                (360, 640, 'yuv444p', 5, 1), (160, 90, 'rgb24', 1, 2),
+                (640, 360, 'yuv420p', 1, 1)):
+            rgb = rng.integers(0, 256, (height, width, 3), dtype=np.uint8)
+            frame = av.VideoFrame.from_ndarray(rgb, format='rgb24').reformat(format=fmt)
+            frame.colorspace, frame.color_range = colorspace, color_range
+            target_width = min(320, width)
+            options = dict(width=target_width, height=round(height * target_width / width), format='rgb24')
+            expected = frame.reformat(**options).to_ndarray()
+            actual = reused.reformat(frame, **options).to_ndarray()
+            np.testing.assert_array_equal(expected, actual)
+
     def test_metrics_are_local_wall_times_and_machine_counts_not_semantic_coverage(self):
         value, index = self.extract(max_images=1, config=dict(max_nodes=2))
         metrics = json.loads(Path(value['metrics']).read_text(encoding='utf-8'))
