@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>视觉候选检查 · Think Aloud</title>
+  <style>
+    :root{color-scheme:light;--bg:#ede7db;--surface:#fcfaf5;--soft:#e8e2d8;--tint:#f2e8dc;--text:#292722;--muted:#716c63;--line:#dcd5c9;--strong-line:#c7bfb1;--accent:#b64b37;--accent-hover:#993b2a;--inverse:#fffcf7;--warning:#8b462f;--warning-bg:#f8e9e3;--green:#38715a}
+    *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--strong-line) transparent}
+    [hidden]{display:none!important}
+    body{margin:0;height:100vh;height:100dvh;display:flex;flex-direction:column;overflow:hidden;background:var(--surface);color:var(--text);font:14px/1.6 "Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif}
+    button,select{font:inherit;color:inherit}button{cursor:pointer}button:disabled{cursor:default;opacity:.5}
+    button:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+    button{border:1px solid var(--line);border-radius:5px;background:var(--surface)}button:hover:not(:disabled){background:var(--tint);border-color:var(--strong-line)}
+    h1,h2,h3,p,figure,dl,dd{margin:0}h1,h2,h3{font-weight:600;line-height:1.45}h1{font-size:22px;letter-spacing:-.4px}h2{font-size:17px}h3{font-size:14px}svg{fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+    .muted{color:var(--muted)}.mono,time{font-variant-numeric:tabular-nums}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .page-header{flex:none;padding:19px 28px 16px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px 28px;align-items:end}
+    .brand{display:flex;align-items:center;gap:9px;margin-bottom:10px;color:var(--accent)}.brand svg{width:23px;height:23px;fill:currentColor;stroke:none}.brand strong{font:700 19px/1.2 Georgia,"Times New Roman",serif;letter-spacing:-.3px;color:var(--text)}.brand span{font-size:12px;color:var(--muted);border-left:1px solid var(--line);padding-left:10px;margin-left:3px}
+    .session-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.session-meta{display:flex;flex-wrap:wrap;gap:3px 14px;margin-top:6px;font-size:12px;color:var(--muted)}
+    .stats{display:flex;gap:26px;padding-bottom:2px}.stats div{min-width:58px}.stats dt{font-size:12px;color:var(--muted);margin-bottom:3px}.stats dd{font-size:25px;line-height:1.25;font-weight:550;font-variant-numeric:tabular-nums;white-space:nowrap}.stats small{font-size:12px;color:var(--muted);font-weight:400;margin-left:4px}
+    .boundary{flex:none;display:flex;align-items:flex-start;gap:10px;padding:10px 28px;background:var(--bg);border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}.boundary svg{width:17px;height:17px;flex:none;margin-top:2px;color:var(--accent)}.boundary strong{color:var(--text);font-weight:550}
+    .workbench{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 350px;grid-template-rows:auto minmax(0,1fr);overflow:hidden}
+    .source-panel{grid-column:1;grid-row:1;min-width:0;padding:15px 22px 13px;border-bottom:1px solid var(--line);background:var(--bg)}
+    .section-heading{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:10px}.section-heading .muted{font-size:12px}.source-heading h2{font-size:14px}.video-shell{background:#24221e;border-radius:5px;overflow:hidden;position:relative;min-height:120px;display:flex;align-items:center;justify-content:center}
+    video{width:100%;height:clamp(170px,27vh,285px);display:block;object-fit:contain;background:#24221e}.video-empty{padding:24px;text-align:center;color:#e6dfd3}.video-empty strong{display:block;font-weight:550;margin-bottom:6px}.video-empty p{font-size:12px;color:#c7bfb1;max-width:420px}.video-status{font-size:12px;color:var(--muted);margin-top:7px;min-height:19px}.video-status.is-error{color:var(--warning)}
+    .detail-panel{grid-column:1;grid-row:2;min-width:0;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}.detail-heading{position:sticky;top:0;z-index:2;background:var(--surface);border-bottom:1px solid var(--line);padding:15px 22px 13px}.detail-title-line{display:flex;align-items:center;justify-content:space-between;gap:14px}.detail-kicker{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:12px;color:var(--muted);margin-bottom:6px}.detail-reason{font-size:13px;line-height:1.7;color:var(--muted);margin-top:6px;overflow-wrap:anywhere;max-height:4.9em;overflow:auto}.detail-navigation{display:flex;gap:6px;flex:none}.icon-button{width:32px;height:32px;display:grid;place-items:center;padding:0}.icon-button svg{width:17px;height:17px}
+    .detail-body{padding:18px 22px 26px}.detail-empty{padding:36px 22px;color:var(--muted)}.detail-empty strong{display:block;font-size:16px;color:var(--text);margin-bottom:8px}.detail-empty p{font-size:13px;max-width:480px}.frame-heading{display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:6px;margin-bottom:10px}.frame-heading p{font-size:12px;color:var(--muted)}
+    .frames{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.frames.single{grid-template-columns:minmax(0,1fr)}.frame{min-width:0;border:1px solid var(--line);border-radius:5px;overflow:hidden;background:var(--bg)}.frame.is-active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}.frame-seek{display:block;width:100%;padding:0;border:0;border-radius:0;background:#24221e!important;text-align:left}.frame-seek img{display:block;width:100%;aspect-ratio:16/9;object-fit:contain;background:#24221e}.frame-placeholder{min-height:112px;aspect-ratio:16/9;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:6px;padding:18px;background:var(--soft);color:var(--muted);font-size:12px;text-align:center}.frame-placeholder strong{font-size:13px;font-weight:550;color:var(--text)}.frame-caption{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 10px;font-size:12px}.frame-label{min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px}.frame-label time{font-weight:600}.frame-role{color:var(--muted);overflow-wrap:anywhere}.expand-button{border:0;background:transparent;padding:2px 3px;color:var(--accent);font-size:12px;flex:none}.no-images{padding:14px 15px;border:1px dashed var(--strong-line);border-radius:5px;background:var(--bg);font-size:13px;color:var(--muted);margin-bottom:12px}.no-images strong{display:block;color:var(--text);margin-bottom:4px;font-weight:550}
+    .evidence-section{margin-top:22px;padding-top:17px;border-top:1px solid var(--line)}.evidence-heading{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 10px;margin-bottom:10px}.evidence-heading p{font-size:12px;color:var(--muted)}.transcript-list{display:flex;flex-direction:column;gap:12px}.utterance{padding-left:12px;border-left:2px solid var(--strong-line)}.utterance-meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;font-size:12px;color:var(--muted);margin-bottom:3px}.time-button{padding:0;border:0;border-radius:2px;background:none;color:var(--accent);font-size:12px;font-variant-numeric:tabular-nums}.utterance-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.8}.quiet-empty{color:var(--muted);font-size:13px}.input-summary{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px;color:var(--muted)}.input-summary strong{font-weight:600;color:var(--text)}.key-list{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}.key{padding:2px 7px;border:1px solid var(--line);border-radius:4px;background:var(--bg);font-size:12px;overflow-wrap:anywhere}.gap-note{font-size:12px;color:var(--warning);margin-top:8px}.mechanics{margin-top:22px;border-top:1px solid var(--line);padding-top:14px}.mechanics summary{cursor:pointer;color:var(--muted);font-size:12px}.mechanics pre{font:12px/1.7 Consolas,"Microsoft YaHei UI",monospace;white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border-radius:5px;padding:12px;margin:10px 0 0;max-height:260px;overflow:auto}
+    .candidate-panel{grid-column:2;grid-row:1/3;display:flex;flex-direction:column;min-height:0;min-width:0;border-left:1px solid var(--line);background:var(--surface)}.candidate-tools{padding:16px 18px 12px;flex:none;border-bottom:1px solid var(--line)}.candidate-tools .section-heading{margin-bottom:12px}.candidate-tools h2{font-size:16px}.candidate-tools label{font-size:12px;color:var(--muted)}.filter-row{display:flex;align-items:center;gap:10px}.filter-row select{height:36px;flex:1;min-width:0;padding:0 8px;border:1px solid var(--strong-line);border-radius:5px;background:var(--surface);font-size:13px}.list-hint{font-size:12px;color:var(--muted);margin-top:9px}.candidate-list{list-style:none;padding:0;margin:0;flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable}.candidate-row{border-bottom:1px solid var(--line)}.candidate-button{border:0;border-radius:0;display:block;width:100%;text-align:left;padding:14px 16px 14px 18px;background:transparent;position:relative}.candidate-button:hover:not(:disabled){background:var(--bg)}.candidate-button[aria-pressed=true]{background:var(--tint)}.candidate-button[aria-pressed=true]::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent)}.candidate-top{display:flex;justify-content:space-between;gap:10px;align-items:baseline}.candidate-time{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}.candidate-number{font-size:11px;color:var(--muted)}.candidate-reason{font-size:12px;color:var(--muted);margin-top:7px;line-height:1.65;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}.candidate-bottom{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;margin-top:10px;font-size:11px;color:var(--muted)}.kind-tag{display:inline-flex;align-items:center;gap:5px;color:var(--muted)}.kind-tag::before{content:"";width:5px;height:5px;flex:none;background:var(--accent);border-radius:50%}.kind-tag[data-kind=motion]::before{background:#7c725f}.kind-tag[data-kind=context]::before{background:#668173}.kind-tag[data-kind=transient]::before{background:#a47234}.unpictured{color:var(--warning)}.list-empty{padding:28px 18px;font-size:13px;color:var(--muted)}
+    .coverage{flex:none;padding:13px 18px 15px;background:var(--bg);border-top:1px solid var(--line);font-size:12px;color:var(--muted);max-height:200px;overflow:auto}.coverage-title{font-size:12px;color:var(--text);font-weight:600;margin-bottom:4px}.coverage-line{margin-top:4px}.coverage details{margin-top:7px}.coverage summary{cursor:pointer}.coverage ul{margin:6px 0 0;padding-left:17px}.coverage li{margin-top:4px;overflow-wrap:anywhere}.load-error{margin:24px 28px;border:1px solid var(--strong-line);border-radius:6px;padding:20px;background:var(--warning-bg);color:var(--warning)}.load-error h2{font-size:17px;margin-bottom:8px}.load-error p{font-size:13px}.load-error pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin-bottom:0}
+    .motion-observations{margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}.motion-observations summary{cursor:pointer;color:var(--muted);font-size:13px}.observation-explanation{margin-top:9px;font-size:12px;color:var(--muted);line-height:1.8}.observation-list{list-style:none;margin:10px 0 0;padding:0;max-height:240px;overflow:auto;overscroll-behavior:contain}.observation-list li{display:flex;align-items:baseline;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}.observation-list li:last-child{border-bottom:0}.observation-number{min-width:22px;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}.observation-omitted{font-size:12px;color:var(--muted);margin-top:9px}
+    .image-dialog{width:min(1280px,calc(100vw - 32px));max-height:calc(100dvh - 32px);padding:0;border:1px solid var(--strong-line);border-radius:7px;background:var(--surface);color:var(--text)}.image-dialog::backdrop{background:#24221ed1}.image-dialog-header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line)}.image-dialog-header h2{font-size:14px}.image-dialog img{display:block;width:100%;max-height:calc(100dvh - 115px);object-fit:contain;background:#24221e}.image-dialog .icon-button{flex:none}
+    @media(min-width:1600px){.workbench{grid-template-columns:minmax(0,1fr) 390px}.source-panel,.detail-heading,.detail-body{padding-left:30px;padding-right:30px}.frames{grid-template-columns:repeat(3,minmax(0,1fr))}.frames.single{grid-template-columns:minmax(0,1fr)}}
+    @media(max-width:1050px){.workbench{grid-template-columns:minmax(0,1fr) 300px}.page-header{padding-left:20px;padding-right:20px}.boundary{padding-left:20px;padding-right:20px}.stats{gap:17px}.source-panel,.detail-heading,.detail-body{padding-left:17px;padding-right:17px}.frames{gap:9px}.candidate-tools,.coverage{padding-left:15px;padding-right:15px}.candidate-button{padding-left:15px;padding-right:13px}}
+    @media(max-width:800px){body{height:auto;min-height:100dvh;overflow:auto}.page-header{grid-template-columns:minmax(0,1fr);gap:15px;padding:18px 18px 15px}.brand{margin-bottom:12px}.stats{gap:0;border-top:1px solid var(--line);padding-top:12px}.stats div{flex:1}.stats dd{font-size:22px}.boundary{padding:10px 18px}.workbench{display:flex;flex-direction:column;overflow:visible;flex:none}.source-panel{order:1;padding:14px 18px 12px}.candidate-panel{order:2;border-left:0;border-bottom:1px solid var(--line)}.candidate-tools{padding:14px 18px 11px;display:grid;grid-template-columns:minmax(0,1fr) minmax(160px,.9fr);gap:5px 16px;align-items:center}.candidate-tools .section-heading{margin:0}.list-hint{grid-column:1/-1;margin-top:0}.candidate-list{flex:auto;max-height:240px}.candidate-button{padding:11px 18px}.candidate-reason{margin-top:4px;-webkit-line-clamp:1}.candidate-bottom{margin-top:5px}.coverage{max-height:none;padding:10px 18px 12px}.detail-panel{order:3;overflow:visible}.detail-heading{top:0;padding:14px 18px 12px}.detail-body{padding:17px 18px 28px}.video-shell{min-height:0}video{height:auto;max-height:320px;aspect-ratio:16/9}.frames{grid-template-columns:repeat(2,minmax(0,1fr))}.image-dialog{width:calc(100vw - 20px)}}
+    @media(max-width:460px){h1{font-size:20px}.brand span{font-size:11px}.candidate-tools{grid-template-columns:minmax(0,1fr)}.filter-row{margin-top:4px}.frames{grid-template-columns:minmax(0,1fr)}.stats dd{font-size:21px}.detail-title-line{gap:8px}.detail-title-line h2{font-size:16px}}
+  </style>
+</head>
+<body>
+  <header class="page-header">
+    <div>
+      <div class="brand"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M4 16C4 10 7 7 13 6v4c-3 1-4 3-4 5h4v10H4Z"/><path d="M16 16c0-6 3-9 9-10v4c-3 1-4 3-4 5h4v10h-9Z"/><path d="M30 3h6v35l-3-4-3 4Z"/></svg><strong>Think Aloud</strong><span>视觉候选检查</span></div>
+      <h1 class="session-title" id="session-title">正在读取候选数据</h1>
+      <div class="session-meta"><span id="session-range">检查范围 —</span><span id="session-id"></span></div>
+    </div>
+    <dl class="stats"><div><dt>机械候选</dt><dd id="candidate-stat">—</dd></div><div><dt>提取图片</dt><dd id="image-stat">—</dd></div><div><dt>处理耗时</dt><dd id="elapsed-stat">—</dd></div></dl>
+  </header>
+  <aside class="boundary"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></svg><p><strong>本地机械预处理结果。</strong>候选仅提示画面变化或上下文位置，不等于体验事件、用户目标或问题判断。请结合原视频与当时的原话核对。</p></aside>
+  <div class="load-error" id="load-error" role="alert" hidden><h2>无法读取候选数据</h2><p>请打开预处理生成的检查页。模板文件本身不包含录像或候选结果。</p><pre id="load-error-detail"></pre></div>
+  <main class="workbench" id="workbench" hidden>
+    <section class="source-panel" aria-labelledby="source-title">
+      <div class="section-heading source-heading"><h2 id="source-title">原视频</h2><span class="muted mono" id="playback-time">尚未加载</span></div>
+      <div class="video-shell"><video id="source-video" controls preload="metadata" playsinline aria-label="原始体验录像"></video><div class="video-empty" id="video-empty" hidden><strong id="video-empty-title">原视频不可用</strong><p>提取图片与候选信息仍可检查。视频路径可能已变化，或当前浏览器无法播放该格式。</p></div></div>
+      <p class="video-status" id="video-status" role="status">正在载入原视频；点击候选或图片可定位时间。</p>
+    </section>
+    <section class="detail-panel" id="detail-panel" aria-label="当前候选证据">
+      <div class="detail-empty" id="detail-empty"><strong>选择一个候选</strong><p>检查变化前后的图片，并对照该时段的原话与操作记录。</p></div>
+      <div id="selected-detail" hidden>
+        <header class="detail-heading"><div class="detail-kicker"><span id="detail-index"></span><span class="kind-tag" id="detail-kind"></span><span id="detail-id"></span></div><div class="detail-title-line"><h2 class="mono" id="detail-time"></h2><div class="detail-navigation"><button class="icon-button" id="previous-node" type="button" title="上一个候选" aria-label="上一个候选"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg></button><button class="icon-button" id="next-node" type="button" title="下一个候选" aria-label="下一个候选"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 6 6 6-6 6"/></svg></button></div></div><p class="detail-reason" id="detail-reason"></p></header>
+        <div class="detail-body"><div class="frame-heading"><h3>提取画面</h3><p>点击图片定位原视频 · 时间为录像内位置</p></div><div class="no-images" id="no-images" hidden><strong>此候选没有可用配图</strong><p>仍保留候选时间与关联信息。未配图不表示该时段没有变化，可回到原视频核对。</p></div><div class="frames" id="frames"></div>
+          <details class="motion-observations" id="motion-observations" hidden><summary id="motion-observations-title">运动中的弱变化</summary><p class="observation-explanation">这些局部变化较弱，可能来自镜头运动或动画，未单独配图。可按时间回看，判断是否值得关注。</p><ol class="observation-list" id="motion-observation-list" aria-label="运动中的弱变化时间"></ol><p class="observation-omitted" id="motion-observations-omitted" hidden></p></details>
+          <section class="evidence-section" aria-labelledby="transcript-title"><div class="evidence-heading"><h3 id="transcript-title">该时段原话</h3><p>时间重叠仅用于关联，不构成因果判断</p></div><div class="transcript-list" id="transcript-list"></div></section>
+          <section class="evidence-section" aria-labelledby="input-title"><div class="evidence-heading"><h3 id="input-title">操作记录摘要</h3><p>用于回看定位，不推断操作意图</p></div><div id="input-summary"></div></section>
+          <details class="mechanics"><summary>查看机械指标与变化区域</summary><pre id="mechanics-data"></pre></details>
+        </div>
+      </div>
+    </section>
+    <aside class="candidate-panel" aria-labelledby="candidate-title">
+      <div class="candidate-tools"><div class="section-heading"><h2 id="candidate-title">候选时间线</h2><span class="muted" id="filtered-count"></span></div><div class="filter-row"><label for="kind-filter">类别</label><select id="kind-filter"><option value="all">全部候选</option><option value="change">画面变化</option><option value="transient">短暂变化</option><option value="motion">持续运动</option><option value="context">上下文锚点</option></select></div><p class="list-hint">按时间排序 · 点击条目检查证据</p></div>
+      <ol class="candidate-list" id="candidate-list" aria-label="按时间排序的视觉候选"></ol>
+      <div class="coverage"><p class="coverage-title" id="coverage-title">图片覆盖</p><p id="coverage-summary"></p><p class="coverage-line">图片预算只限制配图；未配图不表示该时段没有变化。</p><p class="coverage-line" id="coverage-weak-motion" hidden></p><p class="coverage-line" id="coverage-scan"></p><p class="gap-note" id="coverage-index" hidden></p><details id="coverage-details" hidden><summary>覆盖说明</summary><ul id="coverage-notes"></ul></details></div>
+    </aside>
+  </main>
+  <dialog class="image-dialog" id="image-dialog" aria-labelledby="image-dialog-title"><header class="image-dialog-header"><h2 id="image-dialog-title"></h2><button class="icon-button" id="image-dialog-close" type="button" aria-label="关闭大图"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></header><img id="large-image" alt=""></dialog>
+  <div class="sr-only" id="selection-status" role="status" aria-live="polite"></div>
+  <script type="application/json" id="visual-data">__VISUAL_DATA__</script>
+  <script>
+    (() => {
+      'use strict';
+      const $ = id => document.getElementById(id);
+      const labels = {change:'画面变化', transient:'短暂变化', motion:'持续运动', context:'上下文锚点'};
+      const roles = {before:'变化前', after:'变化后', peak:'变化峰值', start:'开始', end:'结束', context:'上下文', representative:'代表帧', first:'首帧', last:'末帧', pre:'变化前', post:'变化后'};
+      const reasons = {
+        locally_stable_pixels_changed_while_other_regions_keep_moving:'画面持续运动时，原本较稳定的局部区域发生了变化。',
+        brief_pixel_change_returned_near_its_prior_reference:'画面短暂变化后，回到了接近之前的样子。',
+        continuous_pixel_activity_aggregated_into_one_interval:'画面在这段时间持续变化，已合并为一个候选区间。',
+        adjacent_or_accumulated_reference_pixel_change:'与相邻画面或之前的参考画面相比，出现了可检测的变化。',
+        observed_context_below_change_threshold_or_stream_boundary:'保留此处画面作为回看上下文；它可能变化较小，或位于检查范围边缘。'
+      };
+      const inputStates = {disabled:'本场次未启用操作记录，或旧场次没有操作数据。',missing:'操作记录缺失，摘要不能视为完整记录。',failed:'操作记录读取或采集失败，以下摘要可能不完整。',interrupted:'操作记录尚未保存完整或曾中断，以下摘要可能不完整。',recording:'操作仍在采集中，以下摘要不是最终记录。',partial:'操作记录仅部分可用，以下摘要可能不完整。'};
+      const nodeList = $('candidate-list');
+      const video = $('source-video');
+      const dialog = $('image-dialog');
+      let data, nodes = [], filtered = [], selected = null, pendingSeek = null, videoFailed = false;
+      const number = value => typeof value === 'number' && Number.isFinite(value) ? value : null;
+      const asText = value => value == null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value);
+      const array = value => Array.isArray(value) ? value : [];
+      const make = (tag, className, text) => {const element = document.createElement(tag); if(className) element.className = className; if(text !== undefined) element.textContent = asText(text); return element;};
+      const timestamp = value => {
+        if(number(value) === null || value < 0) return '时间未知';
+        const ms = Math.round(value * 1000), hours = Math.floor(ms / 3600000), minutes = Math.floor(ms / 60000) % 60, seconds = Math.floor(ms / 1000) % 60;
+        return (hours ? String(hours).padStart(2,'0') + ':' : '') + String(minutes).padStart(2,'0') + ':' + String(seconds).padStart(2,'0') + '.' + String(ms % 1000).padStart(3,'0');
+      };
+      const interval = node => timestamp(node.start) + (number(node.end) !== null && node.end !== node.start ? ' – ' + timestamp(node.end) : '');
+      const count = value => number(value) === null ? '未知' : value.toLocaleString('zh-CN');
+      const pictures = node => array(node.frames).filter(frame => typeof frame.path === 'string' && frame.path.trim());
+      const reasonText = node => Object.prototype.hasOwnProperty.call(reasons,node.reason) ? reasons[node.reason] : '画面变化候选，需回看确认。';
+      const setTag = (element, kind) => {element.textContent = labels[kind] || asText(kind) || '未分类'; element.dataset.kind = asText(kind);};
+      function updateVideoStatus(message, isError = false){$('video-status').textContent = message; $('video-status').classList.toggle('is-error', isError);}
+      function unavailable(message){videoFailed = true; video.hidden = true; $('video-empty').hidden = false; $('playback-time').textContent = '原视频不可用'; updateVideoStatus(message, true);}
+      function applySeek(time){
+        const upper = Number.isFinite(video.duration) ? video.duration : time;
+        try{video.currentTime = Math.max(0, Math.min(time, upper)); pendingSeek = null; updateVideoStatus('已定位 ' + timestamp(time) + '，可使用播放器播放。');}
+        catch(error){pendingSeek = time; updateVideoStatus('正在等待视频就绪，目标位置 ' + timestamp(time) + '。');}
+      }
+      function seek(time){
+        if(number(time) === null || time < 0) return;
+        if(videoFailed){updateVideoStatus('原视频不可用，无法定位 ' + timestamp(time) + '；提取图片仍可查看。', true); return;}
+        pendingSeek = time;
+        if(video.readyState >= 1) applySeek(time);
+        else updateVideoStatus('等待原视频载入后定位 ' + timestamp(time) + '；也可直接检查下方提取图片。');
+      }
+      function openImage(frame){
+        $('image-dialog-title').textContent = timestamp(frame.time) + ' · ' + (roles[frame.role] || asText(frame.role) || '提取画面');
+        $('large-image').src = frame.path;
+        $('large-image').alt = '录像 ' + timestamp(frame.time) + ' 的提取画面';
+        dialog.showModal();
+      }
+      function renderFrames(node){
+        const container = $('frames'); container.replaceChildren();
+        const frames = array(node.frames);
+        let available = pictures(node).length;
+        $('no-images').hidden = available > 0;
+        container.classList.toggle('single', frames.length === 1);
+        frames.forEach(frame => {
+          const figure = make('figure', 'frame');
+          const button = make('button', 'frame-seek'); button.type = 'button'; button.setAttribute('aria-label','定位原视频到 ' + timestamp(frame.time)); button.setAttribute('aria-pressed','false');
+          button.addEventListener('click', () => {container.querySelectorAll('.frame').forEach(item => item.classList.remove('is-active')); container.querySelectorAll('.frame-seek').forEach(item => item.setAttribute('aria-pressed','false')); figure.classList.add('is-active'); button.setAttribute('aria-pressed','true'); seek(frame.time);});
+          const expand = make('button','expand-button','放大'); expand.type = 'button'; expand.setAttribute('aria-label','放大 ' + timestamp(frame.time) + ' 的图片'); expand.addEventListener('click', () => openImage(frame));
+          const placeholder = message => {const block = make('div','frame-placeholder'); block.append(make('strong','',message),make('span','','可按此时间回看原视频')); button.replaceChildren(block); expand.hidden = true;};
+          if(typeof frame.path === 'string' && frame.path.trim()){
+            const img = make('img'); img.loading = 'lazy'; img.decoding = 'async'; img.alt = timestamp(frame.time) + ' · ' + (roles[frame.role] || asText(frame.role) || '提取画面');
+            img.addEventListener('error', () => {placeholder('图片未能加载'); available -= 1; if(selected === node) $('no-images').hidden = available > 0;}, {once:true});
+            img.src = frame.path; button.append(img);
+          } else placeholder('此帧未配图');
+          const caption = make('figcaption','frame-caption'), label = make('span','frame-label');
+          label.append(make('time','',timestamp(frame.time)),make('span','frame-role',roles[frame.role] || asText(frame.role) || '提取画面'));
+          caption.append(label,expand); figure.append(button,caption); container.append(figure);
+        });
+      }
+      function renderMotionObservations(node){
+        const section = $('motion-observations'), list = $('motion-observation-list');
+        const observations = array(node.motion_observations).slice().sort((a,b) => (number(a.start) ?? Infinity) - (number(b.start) ?? Infinity));
+        section.hidden = observations.length === 0; section.open = false; list.replaceChildren();
+        $('motion-observations-title').textContent = '运动中的弱变化 ' + count(observations.length) + ' 处';
+        observations.slice(0,60).forEach((observation,index) => {
+          const row = make('li'), time = make('button','time-button',interval(observation));
+          time.type = 'button'; time.setAttribute('aria-label','定位弱变化 ' + interval(observation)); time.addEventListener('click', () => seek(observation.start));
+          row.append(make('span','observation-number',String(index + 1).padStart(2,'0')),time); list.append(row);
+        });
+        const omitted = Math.max(0,observations.length - 60);
+        $('motion-observations-omitted').hidden = omitted === 0;
+        $('motion-observations-omitted').textContent = '当前显示前 60 处，另有 ' + count(omitted) + ' 处弱变化未展开。';
+      }
+      function renderTranscript(node){
+        const container = $('transcript-list'); container.replaceChildren();
+        const utterances = array(node.transcript).slice().sort((a,b) => (number(a.start) ?? Infinity) - (number(b.start) ?? Infinity));
+        const omitted = number(node.transcript_omitted) ?? 0;
+        if(omitted > 0) container.append(make('p','gap-note','当前显示 ' + count(utterances.length) + ' 条原话，另有 ' + count(omitted) + ' 条关联原话未展开；请结合完整逐字稿核对。'));
+        if(!utterances.length){if(!omitted) container.append(make('p','quiet-empty','此候选没有关联到原话。这里不据此推断当时的感受或意图。')); return;}
+        utterances.forEach(utterance => {
+          const article = make('article','utterance'), meta = make('div','utterance-meta'), time = make('button','time-button',interval(utterance)); time.type = 'button'; time.setAttribute('aria-label','定位原话 ' + interval(utterance)); time.addEventListener('click', () => seek(utterance.start)); meta.append(time);
+          if(utterance.speaker_id != null) meta.append(make('span','','说话人 ' + asText(utterance.speaker_id)));
+          article.append(meta,make('p','utterance-text',utterance.text || '（该条原话无文本）')); container.append(article);
+        });
+      }
+      function renderInputs(node){
+        const container = $('input-summary'); container.replaceChildren();
+        const summary = node.input_summary;
+        if(!summary){container.append(make('p','quiet-empty','没有可用的操作记录摘要。')); return;}
+        if(summary.state !== 'complete') container.append(make('p','gap-note',Object.prototype.hasOwnProperty.call(inputStates,summary.state) ? inputStates[summary.state] : '操作记录完整性未确认；以下摘要可能不完整。'));
+        if(number(summary.refs_omitted) > 0) container.append(make('p','gap-note','候选数据另有 ' + count(summary.refs_omitted) + ' 条操作引用未展开；此处仅显示计数与常见按键摘要。'));
+        if(number(summary.count) === null){container.append(make('p','quiet-empty','没有可用的操作计数。')); return;}
+        const totals = make('div','input-summary'), events = make('span'), gaps = make('span'); events.append(make('strong','',count(summary.count)),document.createTextNode(' 条操作记录')); gaps.append(make('strong','',count(summary.gap_count)),document.createTextNode(' 处记录缺口')); totals.append(events,gaps); container.append(totals);
+        if(array(summary.keys).length){const keys = make('div','key-list'); array(summary.keys).forEach(key => keys.append(make('span','key',key))); container.append(keys);}
+        if(number(summary.gap_count) > 0) container.append(make('p','gap-note','该时段存在操作记录缺口；没有记录不能当作没有操作。'));
+        else if(summary.count === 0) container.append(make('p','quiet-empty','此摘要没有操作记录，不据此推断用户未操作。'));
+      }
+      function updateSelectionButtons(){
+        nodeList.querySelectorAll('.candidate-button').forEach(button => button.setAttribute('aria-pressed', String(nodes[Number(button.dataset.index)] === selected)));
+        const index = filtered.indexOf(selected); $('previous-node').disabled = index <= 0; $('next-node').disabled = index < 0 || index >= filtered.length - 1;
+      }
+      function selectNode(node, shouldSeek = true){
+        if(!node) return;
+        selected = node; $('detail-empty').hidden = true; $('selected-detail').hidden = false;
+        $('detail-index').textContent = '候选 ' + (nodes.indexOf(node) + 1) + ' / ' + nodes.length;
+        $('detail-id').textContent = asText(node.id); setTag($('detail-kind'),node.kind); $('detail-time').textContent = interval(node); $('detail-reason').textContent = reasonText(node);
+        renderFrames(node); renderMotionObservations(node); renderTranscript(node); renderInputs(node);
+        $('mechanics-data').textContent = JSON.stringify({metrics:node.metrics || {},changed_regions:array(node.changed_regions)},null,2);
+        $('detail-panel').scrollTop = 0; updateSelectionButtons();
+        $('selection-status').textContent = '已选择候选 ' + (nodes.indexOf(node) + 1) + '，' + interval(node) + '，' + (labels[node.kind] || '未分类');
+        if(shouldSeek) seek(node.start);
+      }
+      function renderList(){
+        const kind = $('kind-filter').value; filtered = nodes.filter(node => kind === 'all' || node.kind === kind); nodeList.replaceChildren(); nodeList.scrollTop = 0; $('filtered-count').textContent = filtered.length + ' / ' + nodes.length;
+        filtered.forEach(node => {
+          const index = nodes.indexOf(node), row = make('li','candidate-row'), button = make('button','candidate-button'); button.type = 'button'; button.dataset.index = String(index); button.setAttribute('aria-pressed','false'); button.setAttribute('aria-controls','selected-detail');
+          const top = make('div','candidate-top'); top.append(make('span','candidate-time',interval(node)),make('span','candidate-number',String(index + 1).padStart(2,'0')));
+          const bottom = make('div','candidate-bottom'), tag = make('span','kind-tag'); setTag(tag,node.kind); const available = pictures(node).length, total = array(node.frames).length;
+          bottom.append(tag,make('span',available ? '' : 'unpictured',available ? available + ' / ' + total + ' 帧配图' : '无配图'));
+          button.append(top,make('p','candidate-reason',reasonText(node)),bottom); button.addEventListener('click', () => selectNode(node)); row.append(button); nodeList.append(row);
+        });
+        if(!filtered.length){const empty = make('li','list-empty',nodes.length ? '当前类别没有候选。可切换到全部候选。' : '本次范围没有生成机械候选。这不证明该时段没有体验问题。'); nodeList.append(empty); $('selected-detail').hidden = true; $('detail-empty').hidden = false; $('detail-empty').querySelector('strong').textContent = nodes.length ? '当前类别没有候选' : '本次范围没有候选'; selected = null;}
+        else if(!filtered.includes(selected)) selectNode(filtered[0], false);
+        updateSelectionButtons();
+      }
+      function renderCoverage(){
+        const coverage = data.coverage || {}, actualImages = nodes.reduce((sum,node) => sum + pictures(node).length,0), unpictured = nodes.filter(node => !pictures(node).length).length;
+        const reportedImages = number(coverage.selected_images), selectedImages = reportedImages ?? actualImages, totalFrames = number(coverage.total_frame_candidates), missingNodes = number(coverage.unpictured_nodes) ?? unpictured;
+        const allPictured = reportedImages !== null && totalFrames !== null && reportedImages >= totalFrames && missingNodes === 0;
+        const partialPictures = missingNodes > 0 || (reportedImages !== null && totalFrames !== null && reportedImages < totalFrames);
+        $('coverage-title').textContent = allPictured ? (totalFrames === 0 ? '图片覆盖 · 无候选帧待配图' : '图片覆盖 · 所列候选帧均已配图') : partialPictures ? '图片覆盖 · 部分候选或帧未配图' : '图片覆盖 · 完整性未提供';
+        $('coverage-summary').textContent = count(selectedImages) + (totalFrames === null ? ' 张已提取图片' : ' / ' + count(totalFrames) + ' 帧已配图') + '；' + count(missingNodes) + ' 个候选无配图。';
+        const weakWithoutImages = number(coverage.weak_motion_observations_without_images) ?? 0;
+        $('coverage-weak-motion').hidden = weakWithoutImages <= 0;
+        $('coverage-weak-motion').textContent = '另有 ' + count(weakWithoutImages) + ' 处运动中的弱变化未单独配图，可在对应候选下展开查看时间。';
+        $('coverage-scan').textContent = coverage.complete === true ? '扫描完成：已检查所选范围内有时间戳的解码帧，不代表语义无遗漏。' : coverage.complete === false ? '扫描不完整：所选范围仍有未检查或缺少可靠时间戳的画面。' : '扫描完整性未提供，不能确认所选范围已检查完毕。';
+        $('coverage-scan').classList.toggle('gap-note',coverage.complete !== true);
+        $('coverage-index').hidden = coverage.node_index_complete !== false;
+        $('coverage-index').textContent = '候选索引不完整：仍有候选未列出，请分段重新处理后核对。';
+        const notes = array(coverage.notes).slice();
+        array(coverage.uncovered_ranges).forEach(range => notes.push('无画面证据范围：' + interval(range) + '。'));
+        if(number(data.stats?.decoded_frames) !== null) notes.push('已解码 ' + count(data.stats.decoded_frames) + ' 帧。解码帧数不代表图片数量或体验事件数量。');
+        $('coverage-details').hidden = notes.length === 0; $('coverage-notes').replaceChildren(); notes.forEach(note => $('coverage-notes').append(make('li','',note)));
+      }
+      $('kind-filter').addEventListener('change',renderList);
+      $('previous-node').addEventListener('click', () => selectNode(filtered[filtered.indexOf(selected) - 1]));
+      $('next-node').addEventListener('click', () => selectNode(filtered[filtered.indexOf(selected) + 1]));
+      $('image-dialog-close').addEventListener('click', () => dialog.close());
+      dialog.addEventListener('click', event => {if(event.target === dialog){const bounds = dialog.getBoundingClientRect(); if(event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();}});
+      video.addEventListener('loadedmetadata', () => {videoFailed = false; video.hidden = false; $('video-empty').hidden = true; $('playback-time').textContent = timestamp(video.currentTime); if(pendingSeek !== null) applySeek(pendingSeek); else updateVideoStatus('点击候选、图片或原话时间，可定位原视频。');});
+      video.addEventListener('timeupdate', () => {$('playback-time').textContent = timestamp(video.currentTime);});
+      video.addEventListener('error', () => unavailable('原视频加载失败。文件可能已移动，或浏览器不支持视频格式；提取图片仍可检查。'));
+      try{
+        data = JSON.parse($('visual-data').textContent);
+        if(!data || data.version !== 1 || !Array.isArray(data.nodes)) throw new Error('候选数据格式不受支持，需要 version: 1 和 nodes 数组。');
+        nodes = data.nodes.filter(node => node && typeof node === 'object').slice().sort((a,b) => (number(a.start) ?? Infinity) - (number(b.start) ?? Infinity));
+        const title = asText(data.title) || '未命名场次'; $('session-title').textContent = title; $('session-title').title = title; document.title = title + ' · 视觉候选检查';
+        $('session-id').textContent = data.session_id ? '场次 ' + asText(data.session_id) : '';
+        $('session-range').textContent = '检查范围 ' + timestamp(data.range?.start) + ' – ' + timestamp(data.range?.end);
+        $('candidate-stat').textContent = count(nodes.length); $('image-stat').textContent = count(number(data.coverage?.selected_images) ?? nodes.reduce((sum,node) => sum + pictures(node).length,0));
+        const elapsed = number(data.elapsed_seconds); $('elapsed-stat').textContent = elapsed === null ? '未知' : elapsed.toFixed(1); if(elapsed !== null) $('elapsed-stat').append(make('small','','秒'));
+        $('workbench').hidden = false; renderCoverage(); renderList();
+        if(typeof data.source?.video_uri === 'string' && data.source.video_uri.trim()){pendingSeek = number(data.range?.start) ?? 0; video.src = data.source.video_uri; video.load();} else unavailable('数据没有提供原视频位置；提取图片和候选信息仍可检查。');
+      } catch(error){$('session-title').textContent = '尚未载入候选数据'; $('load-error').hidden = false; $('workbench').hidden = true; $('load-error-detail').textContent = error.message;}
+    })();
+  </script>
+</body>
+</html>

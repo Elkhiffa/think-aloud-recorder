@@ -30,7 +30,8 @@ ROOT_FILES = (
     'model_manager.py', 'model-manifest.json', 'media_runtime.py', 'portable_check.py', 'portable_config.py',
     'portable_entry.py', 'processing_worker.py', 'processing.py', 'qwen_transcription.py',
     'recorder.py', 'window_manager.py', 'review_runtime.py', 'scel_to_text.py', 'secret_store.py',
-    'transcription_runtime.py', 'speaker_roles.py', 'agent_protocol.py', 'agent_cli.py', 'player.html', 'requirements-lock.txt',
+    'transcription_runtime.py', 'speaker_roles.py', 'agent_protocol.py', 'agent_cli.py',
+    'visual_nodes.py', 'visual_change.py', 'player.html', 'requirements-lock.txt',
     'input_capture.py', 'input_capture_windows.py', 'input_capture_devices.py', 'session_metadata.py',
     'updater.py', 'update_installer.py',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md', 'docs/updates.md',
@@ -38,7 +39,7 @@ ROOT_FILES = (
     'scripts/fetch_media_runtime.py',
     'scripts/verify_runtime_seed.py', 'scripts/migrate_layout.py', 'scripts/runtime-seed.json', 'docs/release-readiness.md',
     'vocabularies/uiux-terms.txt', 'docs/uiux-vocabulary.md', 'docs/input-capture-validation.md',
-    'docs/agent-integration.md',
+    'docs/agent-integration.md', 'docs/visual-nodes.md',
 )
 OPTIONAL_ROOT_FILES = ('README.md',)
 BLOCKED_PARTS = {'__pycache__', '.git', '.cache', 'cache', 'caches', 'logs', 'log',
@@ -122,7 +123,7 @@ def collect_files(root):
                 if local.as_posix() != 'portable_mode.txt' and local.parts[0] not in {'bin', 'data', 'obs-plugins'}:
                     continue
             add(relative.as_posix())
-    for required in ('ui/index.html', 'ui/review.js', 'ui/review.css',
+    for required in ('ui/index.html', 'ui/review.js', 'ui/review.css', 'ui/visual-nodes.html',
                      'ui/vendor/plyr/plyr.min.js', 'ui/vendor/plyr/plyr.css', 'ui/vendor/plyr/plyr.svg',
                      'licenses/Plyr-MIT.txt', 'runtime/python.exe', 'runtime/pythonw.exe',
                      'runtime/python312._pth', 'tools/obs/bin/64bit/obs64.exe',

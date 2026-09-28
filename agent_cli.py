@@ -82,6 +82,21 @@ def main(argv=None):
     discovery.add_argument('database')
     discovery.add_argument('--publish', action='store_true')
     discovery.add_argument('--include-test', action='store_true')
+    visual = commands.add_parser('visual-nodes', help='本地逐帧检测画面变化；不调用模型，不写入场次')
+    visual.add_argument('session')
+    visual.add_argument('--output', required=True, help='资料库之外的新输出目录')
+    visual.add_argument('--start', type=float, default=0)
+    visual.add_argument('--end', type=float)
+    visual.add_argument('--max-images', type=int, default=120)
+    visual_read = commands.add_parser('visual-read', help='分页读取候选索引和图片路径')
+    visual_read.add_argument('index')
+    visual_read.add_argument('--start', type=float)
+    visual_read.add_argument('--end', type=float)
+    visual_read.add_argument('--offset', type=int, default=0)
+    visual_read.add_argument('--limit', type=int, default=40)
+    visual_review = commands.add_parser('visual-review', help='仅在本机打开候选检查页；Ctrl+C 结束')
+    visual_review.add_argument('index')
+    visual_review.add_argument('--port', type=int, default=0)
     for name in ('publish', 'status', 'evidence', 'claim', 'renew', 'fail', 'validate', 'submit', 'frame'):
         command = commands.add_parser(name)
         command.add_argument('session')
@@ -106,6 +121,24 @@ def main(argv=None):
         name = args.command
         if name == 'scan':
             value = scan(args.database, args.publish, args.include_test)
+        elif name == 'visual-nodes':
+            from visual_nodes import extract
+            def progress(value):
+                print(json.dumps(dict(progress=value), ensure_ascii=False), file=sys.stderr, flush=True)
+            value = extract(args.session, args.output, start=args.start, end=args.end,
+                            max_images=args.max_images, progress=progress)
+        elif name == 'visual-read':
+            from visual_nodes import read_index
+            value = read_index(args.index, start=args.start, end=args.end, offset=args.offset, limit=args.limit)
+        elif name == 'visual-review':
+            from visual_nodes import review_server
+            with review_server(args.index, args.port) as server:
+                print(json.dumps(dict(ok=True, url=server.review_url)), flush=True)
+                try:
+                    server.serve_forever()
+                except KeyboardInterrupt:
+                    pass
+            return 0
         elif name == 'publish':
             value = protocol.publish_ready(args.session)
         elif name == 'status':
