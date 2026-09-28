@@ -2,6 +2,8 @@
 
 核查日期：2026-09-23。目标仓库：`Elkhiffa/think-aloud-recorder`。
 
+版本规则于 2026-09-28 更新：后续从 `0.6.1` 起使用统一版本序列，详见[更新说明](updates.md)。下方依赖材料和首次发布状态是 2026-09-23 的核查快照，不表示当前 GitHub 分支或 Release 状态；准备新版本时以目标提交和对应产物的验收报告为准。
+
 ## 当前可以发布什么
 
 原创源码已经采用 MIT，可以继续同步和维护。本轮固定来源的依赖材料已经收齐，正在准备正式命名的 Windows ZIP 三件套。它们尚未对外发布；最终归档、升级回滚和发布前预检以对应产物的报告为准。GitHub prerelease、改文件名或修改布尔标记不能补齐缺少的材料。
@@ -10,14 +12,14 @@ GitHub `main` 目前为 `208bee6489fd5ebb783e9f46745eb4a50b0ac447`，是最新�
 
 ## 首次发布流程
 
-1. 合入已验证的源码，确定版本和具体提交。预览版使用 `v0.6.0-preview.N`，版本号每次递增；标签对应的提交必须包含包中实际应用代码。
+1. 合入已验证的源码，确定 `portable.json.version` 和具体提交。新版本使用 `vX.Y.Z` 标签，目标提交、标签、包内版本必须一致；标签对应的提交必须包含包中实际应用代码。
 2. 补齐并审核以下依赖材料，生成新的 source manifest，不覆盖旧证据。公开构建继续要求 `redistribution_ready: true` 且没有未解决的 `gaps`。
 3. 用干净 staging 构建正式命名的三件套：`ExperienceRecorder-{version}-windows-x64.zip`、同前缀的 `-dependency-sources.zip`、`-SHA256SUMS.txt`。模型单独下载；个人数据不打包。
 4. 运行 `scripts/prepare_release.py`，核对版本、目标提交、三件套、包内外清单和应用更新协议。预检失败只生成报告，不能得到可误发布的上传清单。成功也仅表示协议检查通过，不能代替真实运行验收。
 5. 完成新目录原生启动、合成录制、独立麦克风音轨、回看及原目录更新回归。检查说明中的限制仍然准确后，准备 GitHub draft Release。
 6. 三件套全部上传后，再次核对远端尺寸和 SHA256；确认对外发布后再发布 draft。发布后以较旧版本执行真实更新，不用同版本的“已是最新版”代替附件验收。
 
-这一版采用手动准备和草稿流程，不引入 GitHub Actions 自动发布，不需要把个人 API Key 放进仓库或新增 CI 密钥。GitHub Release 的请求中固定 `draft: true`，预览标记由版本号推导，提交使用完整 SHA。[GitHub Release API](https://docs.github.com/en/rest/releases/releases#create-a-release)
+这一版采用手动准备和草稿流程，不引入 GitHub Actions 自动发布，不需要把个人 API Key 放进仓库或新增 CI 密钥。GitHub Release 的请求中固定 `draft: true`；新版本使用普通版本号和 `prerelease: false`，提交使用完整 SHA。[GitHub Release API](https://docs.github.com/en/rest/releases/releases#create-a-release)
 
 ## 已完成的依赖核对与剩余材料
 

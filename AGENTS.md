@@ -14,6 +14,13 @@ Windows desktop recording and transcription app. Preserve original recordings an
 - Validate with `runtime/python.exe -m unittest discover -s tests`, plus targeted real desktop and packaged-app smoke checks. Test recording with synthetic sources only unless the user requests actual capture.
 - All collaborating agents must respect assigned file ownership and preserve other agents' changes.
 
+## Versioning
+- `portable.json.version` is the single default delivery version, starting with `0.6.1` for this sequence. Use plain `X.Y.Z` for new packages and `vX.Y.Z` for new release tags; do not add preview, local, date, or machine suffixes.
+- The same deliverable uses the same version on both development computers, in local installations, and on GitHub. Increment the patch number for the next delivered revision; use a minor increment for a feature milestone. Do not bump for every commit or test build.
+- Keep build dates and source commit identities in separate metadata. Never replace the contents of an already released version or rewrite historical tags/packages. Preserve updater support for historical versions.
+- The builder defaults to the version in its own checkout, not the runtime seed. Release preflight requires the target commit, tag, and package versions to match. An explicit numeric build override is only for controlled fixtures/reconstruction and cannot bypass this release check.
+- A version bump or source push does not publish a Release, install an update, or establish runtime acceptance. Publication and local installation remain separate actions.
+
 ## Local development location
 - Continue iterations and build artifacts under `F:/CodexHome`; the current worktree is `F:/CodexHome/think-aloud-review`.
 - The user requested `F:/think-aloud-record` as this computer's initial library. Keep that machine-local choice in ignored runtime configuration, not portable archives.
