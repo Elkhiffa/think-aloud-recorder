@@ -26,7 +26,7 @@ async function main(){
  await check('shared track grid and actual interval durations; long holds never jump lanes',async()=>{
    const measure=()=>page.evaluate(()=>{const rect=el=>el.getBoundingClientRect().toJSON(),bar=id=>rect(document.querySelector(`[data-input-id="${id}"]`));return {heads:[...document.querySelectorAll('.timeline-column-headings span')].map(rect),w:bar('k-w-1'),q:bar('k-q-1'),mouse:bar('m-left-1')};});
    const before=await measure();assert.ok(Math.abs(before.w.x-before.heads[2].x-5)<1);assert.ok(before.w.width<40);assert.equal(await page.locator('[data-input-id="k-a-1"]').count(),0);assert.ok((await page.locator('[data-input-id="k-w-1"] .bar-glyph').textContent()).includes('↖'));assert.ok(before.q.x>=before.heads[5].x);assert.ok(before.mouse.x>before.q.right);
-   const scale=before.w.height/(8.2-1);assert.ok(Math.abs(before.q.height-(4.95-4.5)*scale)<1);
+   const scale=before.w.height/(8.2-1);assert.ok(Math.abs(before.q.height-Math.max(28,(4.95-4.5)*scale))<1);
    await seek(5.4);const after=await measure();assert.equal(after.w.x,before.w.x);await seek(4.8);
  });
  await check('content wheel browses without seeking; ruler wheel scales about pointer time',async()=>{const before=await playback(),offset=await page.locator('#timelineInputs').evaluate(el=>el.style.transform);const box=await page.locator('#inputTimeline').boundingBox();await page.mouse.move(box.x+box.width-20,box.y+180);await page.mouse.wheel(0,64);await page.waitForTimeout(100);const after=await playback();assert.equal(after.paused,true);assert.equal(after.time,before.time);assert.equal(after.rate,before.rate);assert.notEqual(await page.locator('#timelineInputs').evaluate(el=>el.style.transform),offset);const text=await page.locator('#timelineScale').textContent();await page.mouse.move(box.x+15,box.y+180);await page.mouse.wheel(0,-120);await page.waitForTimeout(100);assert.notEqual(await page.locator('#timelineScale').textContent(),text);assert.equal((await playback()).time,after.time);});
@@ -103,6 +103,8 @@ async function main(){
    for(const delta of [240,240,-240,-240,-240,-240]){
      const box=await page.locator('.timeline-horizontal-scroll').boundingBox(),timeline=await page.locator('#inputTimeline').boundingBox();
      await page.mouse.move(box.x+15,timeline.y+80);await page.mouse.wheel(0,delta);await page.waitForTimeout(90);
+     // Keep this sample in view: pointer-anchored zoom may legitimately pan it out.
+     if(await page.locator('#follow').getAttribute('aria-pressed')==='false')await page.locator('#follow').click();await seek(2.73);
      const rows=await visualRows(),taps=rows.filter(item=>item.id.startsWith('dense-tap-')&&item.channel==='other');assert.equal(taps.length,16);assertCollisions(rows);
      const w=rows.find(item=>item.id==='dense-w'),scale=w.rect.height/6.5;
      for(const tap of taps){const raw=denseTaps.find(item=>item.id===tap.id);assert.equal(tap.start,raw.start);assert.equal(tap.end,raw.end);assert.ok(tap.rect.height>=27.99);assert.equal(tap.font,'12px');assert.ok(Math.abs(tap.rect.y-w.rect.y-(tap.start-w.start)*scale)<.15);assert.ok(Math.abs(tap.duration-Math.max(1,(tap.end-tap.start)*scale))<.15);}

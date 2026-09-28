@@ -607,7 +607,8 @@
     returnToPlayhead.onclick=()=>{hideInputDetail();setFollow(true);};
     const inputDetail=document.createElement('div');inputDetail.id='inputDetail';inputDetail.className='input-detail';inputDetail.setAttribute('role','tooltip');inputDetail.hidden=true;document.body.append(inputDetail);
     const initialTab=(!data.inputs||['disabled','missing','unavailable'].includes(data.inputs.state))&&(data.transcription?.state||'ready')==='ready'?'transcript':'inputs';
-    const state={mode:'keys',device:'auto',scope:'all',tab:initialTab,scale:64,viewStart:0,follow:true,signature:'',revision:0,needsRender:false,quote:null,pinned:false,lastInput:'',renderKey:'',lastClock:-1,stopped:false};
+    // Start at 32 px/second: the ruler shows a 2-second interval per grid cell.
+    const state={mode:'keys',device:'auto',scope:'all',tab:initialTab,scale:32,viewStart:0,follow:true,signature:'',revision:0,needsRender:false,quote:null,pinned:false,lastInput:'',renderKey:'',lastClock:-1,stopped:false};
     let source=normalizeInputs(data.inputs,previewInputOffset),bands=inputVisualBands(source.intervals,source.gaps),packed=packInputIntervals(bands,{scale:state.scale}),index=intervalIndex(source.intervals),displayIndex=intervalIndex(packed.items,'displayEnd'),gapIndex=intervalIndex(source.gaps),quoteIndex=intervalIndex(segments.map((item,i)=>({...item,index:i}))),renderStart=0,raf=0;
     const packedById=()=>new Map(packed.items.map(item=>[item.id,item]));let displayed=packedById(),packedScale=state.scale;
     let windowIndex=intervalIndex(source.window_states||[]);
