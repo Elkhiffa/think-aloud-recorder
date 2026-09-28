@@ -30,15 +30,29 @@ class UpdaterTests(unittest.TestCase):
         self.assertEqual(select_release(releases,True)['tag_name'],'v2.0.0-beta.1')
         self.assertIsNone(select_release([],False))
 
-    def manager(self,handler, *, compact=False):
+    def manager(self,handler, *, compact=False, version='0.6.0-preview.1'):
         temp=TemporaryDirectory();self.addCleanup(temp.cleanup)
         root=Path(temp.name)/'app';root.mkdir()
         if compact:
-            compact_fixture(root,'0.6.0-preview.1');root=root/'app'
-        else:(root/'portable.json').write_text(json.dumps({'version':'0.6.0-preview.1'}))
+            compact_fixture(root,version);root=root/'app'
+        else:(root/'portable.json').write_text(json.dumps({'version':version}))
         manager=UpdateManager(root,client_factory=lambda:httpx.Client(transport=httpx.MockTransport(handler)))
         self.addCleanup(manager.cancel)
         return manager
+
+    def test_plain_release_updates_legacy_preview_and_local_versions(self):
+        version='0.6.1'
+        base=f'https://github.com/Elkhiffa/think-aloud-recorder/releases/download/v{version}/'
+        prefix=f'ExperienceRecorder-{version}-windows-x64'
+        release={'tag_name':'v'+version,'draft':False,'prerelease':False,'assets':[
+            {'name':prefix+suffix,'state':'uploaded','size':100,'browser_download_url':base+prefix+suffix}
+            for suffix in ('.zip','-SHA256SUMS.txt')]}
+        for current in ('0.6.0-preview.5+local.8','0.6.0-preview.6+local.20260928.1','0.6.0','0.6.1'):
+            with self.subTest(current=current):
+                manager=self.manager(lambda request:httpx.Response(200,json=[release]),version=current)
+                manager.check();self.assertTrue(manager.wait(2))
+                self.assertEqual(manager.snapshot()['state'],'current' if current==version else 'available')
+                self.assertEqual(manager.snapshot()['latest_version'],version)
 
     def test_no_releases_is_not_up_to_date(self):
         manager=self.manager(lambda request:httpx.Response(200,json=[]))

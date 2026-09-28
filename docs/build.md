@@ -46,6 +46,16 @@ documented in [updates.md](updates.md), not an overlay extraction.
 
 ## What is reproducible
 
+The canonical delivery version is `portable.json.version` in the source checkout.
+The builder reads that file beside its own source, even when `--root` points to
+an older prepared runtime seed. Omit `--version` for normal builds. New versions
+use only `X.Y.Z`, starting with `0.6.1`; there are no machine, date, preview or
+local suffixes. A controlled `--version X.Y.Z` override remains available for
+fixtures or reconstruction, but release preflight also checks the target
+commit's version, so an override cannot publish a differently numbered commit.
+The same deliverable has the same version on every computer. See
+[updates.md](updates.md) for increments and historical-version compatibility.
+
 `scripts/build_portable.py` deterministically packages an already prepared Windows
 x64 runtime/OBS seed: sorted paths, fixed ZIP timestamps/permissions, fixed native
 launcher ZIP metadata, explicit root-file allowlist, and SHA256 inventories. With

@@ -9,7 +9,7 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-from scripts.build_portable import launcher_bytes
+from scripts.build_portable import delivery_version, launcher_bytes
 from scripts.brand_launcher import icon_resources
 
 
@@ -56,7 +56,8 @@ class NativeLauncherTests(unittest.TestCase):
             return ctypes.string_at(pointer,size)
         with TemporaryDirectory() as tmp:
             file=Path(tmp)/'Think Aloud.exe'
-            file.write_bytes(launcher_bytes('0.6.0-preview.5+local.3'))
+            expected_version=delivery_version()
+            file.write_bytes(launcher_bytes(expected_version))
             module=kernel.LoadLibraryExW(str(file),None,2)
             self.assertTrue(module)
             try:
@@ -77,7 +78,7 @@ class NativeLauncherTests(unittest.TestCase):
             data=ctypes.create_string_buffer(size)
             self.assertTrue(version.GetFileVersionInfoW(str(file),0,size,data))
             for key,expected in [('ProductName','Think Aloud'),('FileDescription','Think Aloud'),
-                                 ('OriginalFilename','Think Aloud.exe'),('FileVersion','0.6.0-preview.5+local.3')]:
+                                 ('OriginalFilename','Think Aloud.exe'),('FileVersion',expected_version)]:
                 pointer,length=ctypes.c_void_p(),W.UINT()
                 self.assertTrue(version.VerQueryValueW(data,'\\StringFileInfo\\040904B0\\'+key,ctypes.byref(pointer),ctypes.byref(length)))
                 self.assertEqual(ctypes.wstring_at(pointer),expected)

@@ -33,7 +33,7 @@ class ReleasePreparationTests(unittest.TestCase):
             'baseline': {'version': 'synthetic', 'package_manifest_sha256': 'a' * 64},
             'files': [{'path': name, 'bytes': len(raw), 'sha256': digest(raw)}
                       for name in ('runtime/python.exe', 'runtime/pythonw.exe')]})
-        cls.code['portable.json'] = release.json_bytes({'version': '0.2.0', 'models': 'optional'})
+        cls.code['portable.json'] = release.json_bytes({'version': '1.2.3', 'models': 'optional'})
         for name, raw in cls.code.items():
             path = cls.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -150,6 +150,7 @@ class ReleasePreparationTests(unittest.TestCase):
         self.assertEqual(report['runtime_evidence'], {'status': 'pending', 'verified': False})
         self.assertTrue(report['pending'])
         self.assertEqual(len(report['commit_binding']['files']), len(release.KEY_APPLICATION_FILES))
+        self.assertEqual(report['version_binding']['version'], '1.2.3')
 
     def test_compact_package_keeps_commit_and_runtime_seed_binding(self):
         self.make()
@@ -170,11 +171,13 @@ class ReleasePreparationTests(unittest.TestCase):
         self.assertEqual(len(report['commit_binding']['files']), len(release.KEY_APPLICATION_FILES))
         self.assertGreater(report['runtime_seed_binding']['files'], 0)
 
-    def test_preview_flag_is_derived_from_the_explicit_tag(self):
+    def test_new_preview_releases_are_rejected(self):
         self.make(version='1.2.3-preview.4')
-        report = self.run_preflight()
-        self.assertEqual(report['status'], 'ready_for_draft_review')
-        self.assertTrue(json.loads((self.out / 'release-draft.json').read_bytes())['prerelease'])
+        self.assert_blocked(self.run_preflight(), 'tag')
+
+    def test_matching_tag_and_package_cannot_override_committed_version(self):
+        self.make(version='1.2.4')
+        self.assert_blocked(self.run_preflight(), 'committed_version')
 
     def test_missing_assets_report_expected_names_and_exit_nonzero(self):
         with patch.object(release, 'REPO_ROOT', self.repo), patch('sys.stdout', new_callable=io.StringIO):

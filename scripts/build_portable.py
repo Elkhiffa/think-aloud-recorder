@@ -48,6 +48,17 @@ UI_EXTENSIONS = {'.html', '.css', '.js', '.svg', '.png', '.ico', '.woff', '.woff
 STAMP = (1980, 1, 1, 0, 0, 0)
 
 
+def delivery_version(value=None):
+    """One delivery sequence for every machine; old suffixes remain readable by the updater."""
+    if value is None:
+        metadata = Path(__file__).resolve().parents[1] / 'portable.json'
+        value = json.loads(metadata.read_text(encoding='utf-8'))['version']
+    SemVer(value)
+    if not isinstance(value, str) or not re.fullmatch(r'\d+\.\d+\.\d+', value):
+        raise ValueError('New packages require an X.Y.Z version without preview/local/build suffixes.')
+    return value
+
+
 def json_bytes(value):
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode('utf-8')
 
@@ -233,10 +244,10 @@ def write_zip(path, entries):
     return {'filename': path.name, 'bytes': path.stat().st_size, 'sha256': sha256(path)}
 
 
-def build(root, outdir, source_dir=None, *, candidate=False, version='0.3.0', launcher=None):
+def build(root, outdir, source_dir=None, *, candidate=False, version=None, launcher=None):
     root, outdir = application_root(root), Path(outdir).resolve()
     source_dir = Path(source_dir or root / 'build/dependency-sources').resolve()
-    SemVer(version)
+    version = delivery_version(version)
     files = collect_files(root)
     sources, source_files = read_sources(source_dir, candidate)
     verify_media(root)
@@ -305,7 +316,7 @@ def main():
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--outdir', required=True, type=Path)
     parser.add_argument('--source-dir', type=Path)
-    parser.add_argument('--version', default='0.3.0')
+    parser.add_argument('--version', help='Explicit X.Y.Z override; defaults to this checkout\'s portable.json version.')
     parser.add_argument('--candidate', action='store_true')
     args = parser.parse_args()
     print(json.dumps(build(args.root, args.outdir, args.source_dir,

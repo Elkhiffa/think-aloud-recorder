@@ -10,7 +10,7 @@ from unittest.mock import patch
 import zipfile
 
 from scripts.build_portable import (ROOT_FILES, build, collect_files,
-                                    launcher_bytes, read_sources, sha256)
+                                    delivery_version, launcher_bytes, read_sources, sha256)
 from scripts.fetch_runtime import extract_webview_notices, supplement
 from scripts.verify_runtime_seed import seed_managed_path
 
@@ -155,21 +155,32 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Runtime seed content mismatch'):
             self.make()
 
-    def test_package_version_uses_the_update_protocol_semver(self):
-        for version in ('01.0.0', '1.0.0-01', '1.0.0-a..b', '1.0.0-', 'v1.0.0'):
+    def test_new_package_versions_use_one_plain_sequence(self):
+        for version in ('01.0.0', '1.0.0-01', '1.0.0-a..b', '1.0.0-', 'v1.0.0',
+                        '0.6.0-preview.6', '0.6.1+local.1', '0.6.1+build.2'):
             with self.subTest(version=version), self.assertRaises(ValueError):
                 build(self.root, self.base / 'invalid-version', candidate=True,
                       version=version, launcher=b'MZ synthetic launcher fixture')
         self.assertFalse((self.base / 'invalid-version').exists())
         results = build(self.root, self.base / 'valid-version', candidate=True,
-                        version='1.0.0-RC.1+build.2', launcher=b'MZ synthetic launcher fixture')
+                        version='1.2.3', launcher=b'MZ synthetic launcher fixture')
         with zipfile.ZipFile(self.base / 'valid-version' / results[1]['filename']) as archive:
-            self.assertEqual(json.loads(archive.read('app/portable.json'))['version'], '1.0.0-RC.1+build.2')
+            self.assertEqual(json.loads(archive.read('app/portable.json'))['version'], '1.2.3')
+
+    def test_default_version_comes_from_checkout_not_the_runtime_seed(self):
+        expected = json.loads((Path(__file__).resolve().parents[1]/'portable.json').read_text(encoding='utf-8'))['version']
+        self.write('portable.json', b'{"version":"0.0.1"}')
+        with patch('scripts.build_portable.launcher_bytes', return_value=b'MZ synthetic') as launcher:
+            results = build(self.root, self.base/'checkout-version', candidate=True)
+        launcher.assert_called_once_with(expected, self.root/'ui/brand.ico')
+        self.assertEqual(results[1]['filename'], f'ExperienceRecorder-{expected}-windows-x64-candidate.zip')
+        with zipfile.ZipFile(self.base/'checkout-version'/results[1]['filename']) as archive:
+            self.assertEqual(json.loads(archive.read('app/portable.json'))['version'], expected)
 
     def test_existing_checksum_prevents_partial_release_set(self):
         output = self.base / 'existing-sums'
         output.mkdir()
-        sums = output / 'ExperienceRecorder-0.3.0-windows-x64-candidate-SHA256SUMS.txt'
+        sums = output / f'ExperienceRecorder-{delivery_version()}-windows-x64-candidate-SHA256SUMS.txt'
         sums.write_bytes(b'previous release evidence')
         with self.assertRaises(FileExistsError):
             self.make('existing-sums')

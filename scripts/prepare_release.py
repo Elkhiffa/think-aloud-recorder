@@ -68,9 +68,8 @@ def candidate_names(version):
 
 def validate_tag(tag):
     if not isinstance(tag, str) or not re.fullmatch(
-            r'v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)'
-            r'(?:-preview\.(?:0|[1-9][0-9]*))?', tag):
-        raise ValueError('Tag must be vX.Y.Z or vX.Y.Z-preview.N, without leading zeroes.')
+            r'v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', tag):
+        raise ValueError('New release tags must be vX.Y.Z, without suffixes or leading zeroes.')
     version, semantic = tag_version(tag)
     # Keep release preparation and the client semantic-version implementation aligned.
     if semantic != SemVer(version):
@@ -201,9 +200,8 @@ def verify_commit_files(repo, commit, stage):
     for name in packaged_names:
         if application_root(stage) != Path(stage) and name.startswith('app/'):
             name = name[4:]
-        # The repository retains a historical portable.json template. The
-        # builder generates release metadata; protocol/version checks above
-        # validate it instead of comparing it to that development template.
+        # The builder adds layout and update metadata. Bind the version to the
+        # target commit separately, rather than comparing the whole JSON file.
         if name == 'portable.json':
             continue
         if (name in tracked or name.startswith(('ui/', 'scripts/'))
@@ -247,6 +245,19 @@ def verify_commit_files(repo, commit, stage):
                         'package_sha256': hashlib.sha256(packaged).hexdigest(),
                         'commit_blob_sha256': hashlib.sha256(committed).hexdigest()})
     return records
+
+
+def verify_commit_version(repo, commit, version):
+    ref = commit + ':portable.json'
+    size = int(git_output(repo, 'cat-file', '-s', ref).decode('ascii').strip())
+    if not 0 < size <= MAX_PORTABLE_METADATA:
+        raise ValueError('Committed portable.json is empty or oversized.')
+    raw = git_output(repo, 'cat-file', 'blob', ref)
+    metadata = parse_json(raw)
+    if not isinstance(metadata, dict) or metadata.get('version') != version:
+        raise ValueError('Release version differs from target commit portable.json.version.')
+    return {'path': 'portable.json', 'version': version,
+            'commit_blob_sha256': hashlib.sha256(raw).hexdigest()}
 
 
 def prepare_release(*, tag, commit, artifacts, notes, outdir, runtime_evidence=None, repo_root=None):
@@ -316,6 +327,10 @@ def prepare_release(*, tag, commit, artifacts, notes, outdir, runtime_evidence=N
     if parsed:
         version, semantic = parsed
         report['version'], report['prerelease'] = version, bool(semantic.pre)
+        if pinned_commit:
+            binding = check('committed_version', lambda: verify_commit_version(repo_root, pinned_commit, version))
+            if binding:
+                report['version_binding'] = binding
         names, candidates = public_names(version), candidate_names(version)
         report['required_assets'] = list(names)
         report['candidate_counterparts'] = [name for name in candidates if (artifacts / name).exists()]
