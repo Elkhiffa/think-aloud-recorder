@@ -7,6 +7,7 @@ from collections import Counter
 from contextlib import closing, contextmanager
 from fractions import Fraction
 import hashlib
+from io import BytesIO
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -545,7 +546,60 @@ def _candidate_rows(index,start,end):
                 yield dict(id=f"{node['id']}/w{i+1}",parent=node['id'],level='weak',row=row)
 
 
-def read_candidates(path, *, start, end, offset=0, limit=24, level='all', parent=None):
+def _existing_image_stats(path):
+    """Describe one existing JPEG; never classify its semantic usefulness."""
+    import av
+    with path.open('rb') as handle:
+        content = handle.read(16 * 1024 * 1024 + 1)
+    if len(content) > 16 * 1024 * 1024:
+        return dict(state='unknown', reason='image_size_limit')
+    digest = hashlib.sha256(content).hexdigest()
+    if path.name != digest + '.jpg':
+        return dict(state='unknown', reason='image_hash_mismatch')
+    try:
+        with av.open(BytesIO(content), format='mjpeg') as image:
+            stream = image.streams.video[0]
+            if stream.width * stream.height > 8_000_000:
+                return dict(state='unknown', reason='image_dimensions_limit')
+            frame = next(image.decode(stream))
+            rgb = frame.reformat(width=64, height=36, format='rgb24').to_ndarray()
+    except av.FFmpegError:
+        return dict(state='unknown', reason='image_read_failed')
+    return dict(state='measured', sha256=digest, rgb_min=int(rgb.min()), rgb_max=int(rgb.max()),
+                rgb_mean=round(float(rgb.mean()), 4), rgb_std=round(float(rgb.std()), 4),
+                pixels_all_channels_below_10=round(float((rgb.max(axis=2) < 10).mean()), 6))
+
+
+def _candidate_image_hints(index_path, records, start, end):
+    """At most 12 existing JPEG reads, with explicit unknowns for other frames."""
+    measured, identifiers, hints = {}, {}, []
+    for record in records:
+        references = []
+        for frame in record['row']['frames']:
+            relative = frame.get('path')
+            key = 'unpictured'
+            if relative:
+                path = (index_path.parent / relative).resolve()
+                if not path.is_relative_to(index_path.parent / 'images') or not path.is_file():
+                    raise ValueError('候选图片路径无效。')
+                if path in identifiers:
+                    key = identifiers[path]
+                elif len(measured) >= 12:
+                    key = 'inspection_limit'
+                else:
+                    key = f'p{len(measured)+1:02d}'
+                    identifiers[path] = key
+                    try:
+                        measured[key] = _existing_image_stats(path)
+                    except (OSError, ValueError, StopIteration):
+                        measured[key] = dict(state='unknown', reason='image_read_failed')
+            references.append([frame['time'], frame['role'], start <= frame['time'] <= end, key])
+        hints.append(references)
+    return hints, measured
+
+
+def read_candidates(path, *, start, end, offset=0, limit=24, level='all', parent=None,
+                    image_stats=False):
     """Compact interval navigation with a single bound across primary/weak rows."""
     timings=_Timings()
     path=Path(path).resolve()
@@ -591,6 +645,19 @@ def read_candidates(path, *, start, end, offset=0, limit=24, level='all', parent
                               overlaps_query=bool(omitted and omitted[1]>=start and omitted[0]<=end)),
                actual_image_inspection=False,
                note='仅像素候选导航；层级筛选不删除原始证据。matching_by_level 是 parent 筛选前的整个查询区间数量；weak 数仅计保留项。省略范围是全索引包络，不表示逐秒缺失。用同场 visual-packet 预算取图。')
+    if image_stats:
+        with timings.measure('existing_image_stats'):
+            hints, measured = _candidate_image_hints(path, records[offset:offset+limit], start, end)
+        value['columns'].append('frame_hints')
+        for row, references in zip(rows, hints):
+            row.append(references)
+        value['image_stats'] = dict(
+            representation='Existing JPEG resized to 64x36 RGB; channel values 0..255.',
+            frame_hint_columns=['actual_time','role','in_query_range','image_stats_key_or_unknown_reason'],
+            pictures=measured, max_image_reads=12, attempted_image_reads=len(measured),
+            seconds=round(timings.seconds['existing_image_stats'], 6),
+            note='unpictured/inspection_limit 为未知；统计只对应列出的原帧，不代表任意区间中点。'
+                 '均匀或暗画面仍可有意义，不能据此判定模糊、无用或自动跳过。未解码视频、未发图、未实际看图。')
     characters=len(json.dumps(value,ensure_ascii=False,allow_nan=False))
     value['read_metrics']=dict(index_bytes=index_bytes,returned_rows=len(rows),
                                data_characters_without_read_metrics=characters,returned_unique_image_paths=0)

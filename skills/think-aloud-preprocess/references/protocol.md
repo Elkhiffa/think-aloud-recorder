@@ -47,6 +47,8 @@
 
 0.6.7 先用 `visual-candidates INDEX --start 120 --end 180 --level primary --limit 24`，按需再用 `--level weak --parent v000123` 展开该主要节点的弱观察。`--parent` 只适用于 weak；不填 parent 则查范围内全部保留的弱观察。默认 all 兼容旧顺序。筛选先于分页，切换筛选后从 offset 0 开始。新增列为 parent_id、retained_weak_in_range；matching_by_level 是筛选前该区间保留的两类数量。omissions 是全索引遗漏数量／时间包络和 overlaps_query，不代表包络内每一秒均缺失。主要分页读完不改变 node_index_complete；筛选不能代替短暂状态的弱观察核对。
 
+0.6.8 按需添加 `--image-stats`（建议短窗口 limit 6）。仅读取返回候选已有 JPEG，最多 12 个文件，默认不读图；不解码视频、不自动生成替代图、不消耗或修改发图账本。新增 frame_hints 按 image_stats.frame_hint_columns 解释，含实际 PTS、帧角色、是否在查询范围以及像素统计编号。unpictured 和 inspection_limit 均是未知；前后帧可能位于查询外，不可误作区间内证据。image_stats.pictures 返回现有 JPEG 的 SHA 与 64×36 RGB 通道范围／均值／标准差、各通道均低于10的像素比例，附读取次数与耗时。数据只针对这一帧，不判断语义、模糊或可用性，不代表已看图。已有全暗筛选和自动排序未改，任意未配图中点仍未知；明确这些限制，不用统计或反复分页绕过图片预算。
+
 `visual-nodes ... --image-mode seek`（0.6.7）仅优化配图，仍逐帧检测并精确匹配所选原时间戳；默认 sequential。若定位错过帧，最多恢复一次原范围顺序配图，只收集未完成图片。成功响应和 metrics 的 image_sequential_recovery 明示恢复，恢复后仍缺帧则失败不发布索引。image_decoder_frames 包含前滚／边界帧，image_decode_requests 包含恢复；比较完整耗时，不能只看交付图片数。已有索引与取材计划均继续复用。
 
 0.6.5 新计划为 `version=2, selection_version=2`：首轮避免邻近动画重复占位，区间包按局部稳定程度与时间距离排序，选择变化中段而不是优先凑满一个末端三图组；回执 selection 记录来源候选与选择原因。`initial_already_issued` 表示首轮已发，若要取回原回执使用原请求编号。0.6.5 读取旧版计划时保持原始排序／回执／预算，不能自动改写旧计划。旧软件不支持新计划，不能混用。画面分组、稳定度、近黑筛选均是机械信号，不能替代 UI 文本核对或玩家目标判断。

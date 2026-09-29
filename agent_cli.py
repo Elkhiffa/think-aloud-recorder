@@ -107,6 +107,7 @@ def main(argv=None):
     candidates.add_argument('--limit',type=int,default=24)
     candidates.add_argument('--level',choices=('all','primary','weak'),default='all')
     candidates.add_argument('--parent',help='仅在 --level weak 时按主要候选 ID 展开')
+    candidates.add_argument('--image-stats',action='store_true',help='按需读取最多12张已有JPEG的像素统计，不解码视频')
     visual_plan = commands.add_parser('visual-plan', help='复用已有索引，分组并建立首轮、补图和复核共用的预算')
     visual_plan.add_argument('index')
     visual_plan.add_argument('--output', required=True)
@@ -170,7 +171,7 @@ def main(argv=None):
         elif name == 'visual-candidates':
             from visual_nodes import read_candidates
             value = read_candidates(args.index,start=args.start,end=args.end,offset=args.offset,limit=args.limit,
-                                    level=args.level,parent=args.parent)
+                                    level=args.level,parent=args.parent,image_stats=args.image_stats)
         elif name == 'visual-packet':
             from visual_evidence import packet
             value = packet(args.plan, args.request_id, phase=args.phase, question=args.question,

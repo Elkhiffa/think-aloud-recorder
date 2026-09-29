@@ -1,11 +1,12 @@
 """Budgeted packets over real synthetic VFR video. No real sessions or AI."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
+import hashlib
 import io
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import agent_cli
@@ -23,6 +24,99 @@ class EvidencePlanTests(unittest.TestCase):
         self.root=self.fixture.root
         self.value,self.index=self.fixture.extract()
         self.plan=Path(evidence.create_plan(self.value['index'],self.root/'plan',total=12,initial=4,review=2)['plan'])
+
+    def test_optional_image_stats_never_seek_or_spend_budget(self):
+        protected=[self.plan,self.plan.parent/'budget.json',Path(self.value['index'])]
+        before={str(p):evidence._hash(p) for p in protected}
+        with patch.object(visual,'_decode') as decode, patch.object(visual,'_existing_image_stats',wraps=visual._existing_image_stats) as stats:
+            plain=visual.read_candidates(self.value['index'],start=0,end=3)
+            self.assertNotIn('image_stats',plain)
+            stats.assert_not_called()
+            hinted=visual.read_candidates(self.value['index'],start=.58,end=1.5,image_stats=True)
+            self.assertFalse(hinted['actual_image_inspection'])
+            self.assertTrue(hinted['image_stats']['pictures'])
+            self.assertEqual(hinted['columns'][-1],'frame_hints')
+            self.assertLessEqual(stats.call_count,12)
+            decode.assert_not_called()
+        output=io.StringIO()
+        with redirect_stdout(output):
+            code=agent_cli.main(['visual-candidates',self.value['index'],'--start','0','--end','3','--image-stats'])
+        self.assertEqual(code,0)
+        self.assertIn('image_stats',json.loads(output.getvalue())['data'])
+        self.assertEqual(before,{str(p):evidence._hash(p) for p in protected})
+
+    def test_pixel_stats_describe_bright_corner_and_uniform_grey_without_classification(self):
+        import av
+        directory=Path(self.value['index']).parent/'images'
+        for grey in (0,23):
+            rgb=np.full((72,128,3),grey,np.uint8)
+            rgb[0:2,0:2]=255
+            content=visual._jpeg(av.VideoFrame.from_ndarray(rgb,format='rgb24'))
+            path=directory/(hashlib.sha256(content).hexdigest()+'.jpg')
+            path.write_bytes(content)
+            row=visual._existing_image_stats(path)
+            self.assertEqual(row['state'],'measured')
+            self.assertGreater(row['rgb_max'],10)
+            self.assertAlmostEqual(row['rgb_mean'],grey,delta=1)
+            if grey==0:self.assertGreater(row['pixels_all_channels_below_10'],.99)
+            else:self.assertLess(row['pixels_all_channels_below_10'],.01)
+            self.assertNotIn('low_information',row)
+            self.assertNotIn('usable',row)
+        changed=directory/('0'*64+'.jpg')
+        changed.write_bytes(content)
+        self.assertEqual(visual._existing_image_stats(changed)['reason'],'image_hash_mismatch')
+
+    def test_image_hints_bound_unique_reads_and_keep_unknowns_and_original_times(self):
+        index_path=Path(self.value['index'])
+        image_dir=index_path.parent/'images'
+        refs=[]
+        for i in range(14):
+            name=f'{i:064x}.jpg'
+            (image_dir/name).write_bytes(b'only mocked statistics read this')
+            refs.append(dict(time=i,role='representative',path='images/'+name))
+        refs += [dict(refs[0]),dict(time=14.3,role='after',path=None)]
+        records=[dict(row=dict(frames=refs))]
+        with patch.object(visual,'_existing_image_stats',return_value={'state':'measured'}) as stats:
+            hints,measured=visual._candidate_image_hints(index_path,records,1,12)
+        self.assertEqual(stats.call_count,12)
+        self.assertEqual(len(measured),12)
+        self.assertEqual(hints[0][12][-1],'inspection_limit')
+        self.assertEqual(hints[0][14][-1],hints[0][0][-1])
+        self.assertEqual(hints[0][-1],[14.3,'after',False,'unpictured'])
+
+    def test_decoder_eof_is_unknown_and_does_not_hide_following_candidates(self):
+        import av
+        index_path=Path(self.value['index'])
+        paths=list((index_path.parent/'images').glob('*.jpg'))[:2]
+        self.assertEqual(len(paths),2)
+        refs=[dict(time=i,role='representative',path='images/'+p.name) for i,p in enumerate(paths)]
+        original_open=av.open
+        calls=[]
+        def fail_once(*args,**kwargs):
+            calls.append(1)
+            if len(calls)==1:raise av.error.EOFError(541478725,'Synthetic image EOF')
+            return original_open(*args,**kwargs)
+        with patch('av.open',side_effect=fail_once):
+            hints,measured=visual._candidate_image_hints(index_path,[dict(row=dict(frames=refs))],0,2)
+        self.assertEqual(len(hints[0]),2)
+        self.assertEqual(measured['p01'],dict(state='unknown',reason='image_read_failed'))
+        self.assertEqual(measured['p02']['state'],'measured')
+
+    def test_pixel_stats_stop_before_oversize_file_open_or_explicit_frame_decode(self):
+        oversize=self.root/'oversize.jpg'
+        oversize.write_bytes(b'0'*(16*1024*1024+1))
+        with patch('av.open') as opened:
+            self.assertEqual(visual._existing_image_stats(oversize)['reason'],'image_size_limit')
+            opened.assert_not_called()
+        path=next((Path(self.value['index']).parent/'images').glob('*.jpg'))
+        container=MagicMock()
+        container.__enter__.return_value=container
+        container.streams.video[0].width=4000
+        container.streams.video[0].height=4000
+        with patch('av.open',return_value=container):
+            self.assertEqual(visual._existing_image_stats(path)['reason'],'image_dimensions_limit')
+        container.decode.assert_not_called()
+        container.__exit__.assert_called_once()
 
     def test_plan_does_not_count_generation_as_inspection_or_change_source(self):
         self.assertEqual(evidence.budget_status(self.plan)['issued'],0)
