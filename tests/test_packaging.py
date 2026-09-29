@@ -22,7 +22,7 @@ class PackagingTests(unittest.TestCase):
         self.root = self.base / 'fixture'
         for path in ROOT_FILES:
             self.write(path, b'fixture source\n')
-        for path in ('ui/index.html', 'ui/app.js', 'ui/review.js', 'ui/review.css',
+        for path in ('ui/index.html', 'ui/app.js', 'ui/review.js', 'ui/review.css', 'ui/visual-nodes.html',
                      'ui/vendor/plyr/plyr.min.js', 'ui/vendor/plyr/plyr.css', 'ui/vendor/plyr/plyr.svg', 'licenses/Plyr-MIT.txt', 'licenses/Python.txt',
                      'runtime/python.exe', 'runtime/pythonw.exe', 'runtime/python312._pth',
                      'runtime/Lib/site-packages/fixture-1.dist-info/licenses/LICENSE',

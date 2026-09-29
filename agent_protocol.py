@@ -12,7 +12,6 @@ import math
 import os
 from pathlib import Path
 import re
-import shutil
 import threading
 import time
 import uuid
@@ -363,28 +362,117 @@ def _lease_seconds(seconds):
     return seconds
 
 
+def _optional_object(folder, name, limit=65536):
+    try:
+        return _load(folder, name, limit)
+    except (OSError, ValueError):
+        return {}
+
+
+def _committed(job, result):
+    receipt = result.get('receipt')
+    token = job.get('token')
+    return (isinstance(token, str) and bool(token) and isinstance(receipt, dict)
+            and receipt.get('token') == token)
+
+
+def _active_lease(job, result):
+    # The result receipt is the commit marker; STATE may still say processing.
+    return (job.get('state') == 'processing' and _number(job.get('expires_at'))
+            and job['expires_at'] > time.time() and not _committed(job, result))
+
+
+def _file_hash(path):
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _backup_result(folder):
+    """Preserve exact bytes exclusively and verify them before changing a lease."""
+    previous = _path(folder, RESULT)
+    history = Path(folder).resolve() / 'agent-history'
+    if history.resolve().parent != Path(folder).resolve():
+        raise ValueError('结果历史目录不属于当前场次。')
+    history.mkdir(exist_ok=True)
+    backup = history / (uuid.uuid4().hex + '.json')
+    digest, size = hashlib.sha256(), 0
+    # Never replace a previous history entry, even if a filename collides.
+    with previous.open('rb') as source, backup.open('xb') as target:
+        for chunk in iter(lambda: source.read(1024 * 1024), b''):
+            target.write(chunk)
+            digest.update(chunk)
+            size += len(chunk)
+        target.flush()
+        os.fsync(target.fileno())
+    expected = digest.hexdigest()
+    if _file_hash(backup) != expected:
+        raise ValueError('旧结果备份校验失败；当前结果与领取状态未更改。')
+    return dict(path=str(backup), sha256=expected, bytes=size)
+
+
+def _baseline_preserved(folder, job):
+    baseline = job.get('baseline')
+    if not job.get('redo') or not isinstance(baseline, dict):
+        return False
+    try:
+        path = Path(baseline['path']).resolve()
+        history = Path(folder).resolve() / 'agent-history'
+        if path.parent != history or history.resolve() != history:
+            return False
+        digest = baseline.get('sha256')
+        return _file_hash(path) == digest == _file_hash(_path(folder, RESULT))
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+
+
 def claim(folder, worker, seconds=1800):
     from session_metadata import metadata_lock
     worker = _text(worker, 160, '处理者名称')
     seconds = _lease_seconds(seconds)
     with metadata_lock(folder):
         meta, material, revision, _ = _ready(folder)
+        result = _optional_object(folder, RESULT, MAX_RESULT)
+        old = _optional_object(folder, STATE)
+        if (_active_lease(old, result) and
+                (old.get('revision') == revision or old.get('redo'))):
+            return dict(claimed=False, reason='busy', revision=revision, expires_at=old['expires_at'])
         try:
-            result = _load(folder, RESULT, MAX_RESULT)
             if result.get('revision') == revision:
                 validate_result(folder, result, meta, material, revision)
                 return dict(claimed=False, reason='complete', revision=revision)
         except (OSError, ValueError, TypeError):
             pass
-        try:
-            old = _load(folder, STATE)
-        except (OSError, ValueError):
-            old = {}
-        if old.get('revision') == revision and old.get('state') == 'processing' and _number(old.get('expires_at')) and old['expires_at'] > time.time():
-            return dict(claimed=False, reason='busy', revision=revision, expires_at=old['expires_at'])
         job = dict(version=VERSION, session_id=meta['id'], revision=revision,
                    state='processing', worker=worker, token=uuid.uuid4().hex,
                    updated_at=time.time(), expires_at=time.time() + seconds)
+        _write(folder, STATE, job)
+        return dict(claimed=True, **job)
+
+
+def reprocess(folder, worker, reason, seconds=1800):
+    """Explicitly lease another analysis while the previous result stays readable."""
+    from session_metadata import metadata_lock
+    from review_runtime import _safe_error
+    worker = _text(worker, 160, '处理者名称')
+    reason = _safe_error(_text(reason, 2000, '重新分析原因'))
+    seconds = _lease_seconds(seconds)
+    with metadata_lock(folder):
+        meta, _, revision, _ = _ready(folder)
+        result = _optional_object(folder, RESULT, MAX_RESULT)
+        old = _optional_object(folder, STATE)
+        if _active_lease(old, result):
+            return dict(claimed=False, reason='busy', revision=revision, expires_at=old['expires_at'])
+        if not _path(folder, RESULT).is_file():
+            raise ValueError('尚无旧预处理结果，请使用 claim 领取首次分析。')
+        baseline = _backup_result(folder)
+        now = time.time()
+        job = dict(version=VERSION, session_id=meta['id'], revision=revision,
+                   state='processing', worker=worker, token=uuid.uuid4().hex,
+                   updated_at=now, expires_at=now + seconds, redo=True,
+                   redo_reason=reason, baseline=baseline)
         _write(folder, STATE, job)
         return dict(claimed=True, **job)
 
@@ -438,18 +526,25 @@ def submit(folder, token, value):
         # can overwrite a newer lease, even after a filesystem watcher restart.
         _owned(folder, token)
         previous = _path(folder, RESULT)
-        if previous.is_file():
-            history = Path(folder).resolve() / 'agent-history'
-            if history.resolve().parent != Path(folder).resolve():
-                raise ValueError('结果历史目录不属于当前场次。')
-            history.mkdir(exist_ok=True)
-            shutil.copyfile(previous, history / (uuid.uuid4().hex + '.json'))
+        if previous.is_file() and not _baseline_preserved(folder, job):
+            _backup_result(folder)
         result['receipt'] = dict(worker=job['worker'], completed_at=time.time(), token=token)
         if len(json.dumps(result, ensure_ascii=False).encode('utf-8')) > MAX_RESULT:
             raise ValueError('展开证据后的结果超过 2 MB，请减少重复引用。')
         _write(folder, RESULT, result)
         return dict(state='complete', revision=revision, events=len(result['events']),
                     questions=len(result['questions']), ideas=len(result['ideas']))
+
+
+def _reanalysis_status(job, raw):
+    if not job.get('redo') or _committed(job, raw):
+        return None
+    value = dict(reason=str(job.get('redo_reason') or '')[:2000])
+    if job.get('state') == 'processing':
+        if _active_lease(job, raw):
+            return dict(value, state='processing', expires_at=job['expires_at'])
+        return dict(value, state='interrupted')
+    return dict(value, state='failed', failure_reason=str(job.get('reason') or '')[:2000])
 
 
 def _status(folder, meta):
@@ -471,9 +566,15 @@ def _status(folder, meta):
         raw = _load(folder, RESULT, MAX_RESULT)
         if raw.get('revision') == revision:
             result = validate_result(folder, raw, meta, material, revision)
-            return dict(state='complete', label=f'已预处理 · {len(result["events"])} 个事件',
-                        events=len(result['events']), questions=len(result['questions']),
-                        ideas=len(result['ideas']), result=result)
+            value = dict(state='complete', label=f'已预处理 · {len(result["events"])} 个事件',
+                         events=len(result['events']), questions=len(result['questions']),
+                         ideas=len(result['ideas']), result=result)
+            redo = _reanalysis_status(job, raw)
+            if redo:
+                value['reanalysis'] = redo
+                label = '重新分析中' if redo['state'] == 'processing' else '重新分析未完成'
+                value['label'] += f' · {label}，旧结果仍可回看'
+            return value
     if job.get('revision') != revision:
         return dict(state='stale', label='需重新预处理', reason='素材已更新，旧整理结果已保留。')
     if job.get('state') == 'processing':
@@ -498,7 +599,7 @@ def preprocessing_status(folder, meta=None, include_result=False):
                 value = None
         if value is None:
             value = _status(folder, meta)
-            expiry = value.get('expires_at', time.time() + 86400)
+            expiry = value.get('expires_at', value.get('reanalysis', {}).get('expires_at', time.time() + 86400))
             with _CACHE_LOCK:
                 _CACHE[key] = (signature, expiry, value)
                 _CACHE.move_to_end(key)

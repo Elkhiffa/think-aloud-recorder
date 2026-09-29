@@ -1,6 +1,7 @@
 """Synthetic evidence exercises the actual local protocol, never an AI service."""
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -114,6 +115,174 @@ class AgentProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):agent.submit(self.folder,job['token'],self.candidate())
         for name,content in before.items():self.assertEqual((self.folder/name).read_bytes(),content)
         self.assertNotIn('token',json.dumps(state))
+
+    def test_completed_result_requires_explicit_reprocess(self):
+        self.complete()
+        before={name:(self.folder/name).read_bytes() for name in (agent.STATE,agent.RESULT)}
+        self.assertEqual(agent.claim(self.folder,'another-worker')['reason'],'complete')
+        self.assertFalse((self.folder/'agent-history').exists())
+        for name,content in before.items():self.assertEqual((self.folder/name).read_bytes(),content)
+
+    def test_reprocess_backs_up_exact_bytes_before_leasing_and_keeps_old_result_readable(self):
+        self.complete()
+        old=recorder.read(self.folder/agent.RESULT)
+        # A noncanonical serialized result must survive byte for byte, including BOM/newlines.
+        baseline=b'\xef\xbb\xbf'+json.dumps(old,ensure_ascii=False,indent=1).replace('\n','\r\n').encode('utf-8')
+        (self.folder/agent.RESULT).write_bytes(baseline)
+        write=agent._write
+        def checked_write(folder,name,value):
+            if name==agent.STATE:
+                backup=Path(value['baseline']['path'])
+                self.assertEqual(backup.read_bytes(),baseline)
+                self.assertEqual(value['baseline']['sha256'],hashlib.sha256(baseline).hexdigest())
+                self.assertEqual((self.folder/agent.RESULT).read_bytes(),baseline)
+            return write(folder,name,value)
+        with patch('agent_protocol._write',side_effect=checked_write):
+            job=agent.reprocess(self.folder,'visual-worker','  采用新画面候选逻辑  ',120)
+        self.assertTrue(job['claimed'])
+        self.assertTrue(job['redo'])
+        self.assertEqual(job['redo_reason'],'采用新画面候选逻辑')
+        self.assertEqual(job['baseline']['bytes'],len(baseline))
+        self.assertEqual(agent._load(self.folder,agent.STATE)['baseline'],job['baseline'])
+        state=agent.preprocessing_status(self.folder,include_result=True)
+        self.assertEqual((state['state'],state['reanalysis']['state']),('complete','processing'))
+        self.assertEqual(state['result']['summary'],old['summary'])
+        self.assertIn('旧结果仍可回看',state['label'])
+        self.assertNotIn('token',json.dumps(state))
+        self.assertEqual(agent.claim(self.folder,'ordinary-worker')['reason'],'busy')
+
+    def test_reprocess_validates_reason_worker_lease_ready_and_existing_result(self):
+        with self.assertRaisesRegex(ValueError,'claim'):
+            agent.reprocess(self.folder,'worker','第一次不能重做')
+        self.complete()
+        before={name:(self.folder/name).read_bytes() for name in (agent.STATE,agent.RESULT)}
+        for reason in (None,'','  ','x'*2001,'bad\x00reason',4):
+            with self.subTest(reason_type=type(reason).__name__):
+                with self.assertRaises(ValueError):agent.reprocess(self.folder,'worker',reason)
+        for worker in (None,'','w'*161):
+            with self.assertRaises(ValueError):agent.reprocess(self.folder,worker,'重新检查')
+        for seconds in (True,59,86401,60.0):
+            with self.assertRaises(ValueError):agent.reprocess(self.folder,'worker','重新检查',seconds)
+        update_metadata(self.folder,dict(input_offset_seconds=2))
+        with self.assertRaises(ValueError):agent.reprocess(self.folder,'worker','素材未重新发布')
+        self.assertFalse((self.folder/'agent-history').exists())
+        for name,content in before.items():self.assertEqual((self.folder/name).read_bytes(),content)
+
+    def test_reprocess_backup_errors_never_change_result_or_lease(self):
+        self.complete()
+        before={name:(self.folder/name).read_bytes() for name in (agent.STATE,agent.RESULT)}
+        original_open=Path.open
+        def fail_backup(path,mode='r',*args,**kwargs):
+            if path.parent.name=='agent-history' and mode=='xb':
+                raise OSError('synthetic backup failure')
+            return original_open(path,mode,*args,**kwargs)
+        with patch.object(Path,'open',fail_backup),patch('agent_protocol._write') as write:
+            with self.assertRaises(OSError):agent.reprocess(self.folder,'worker','备份失败测试')
+            write.assert_not_called()
+        with patch('agent_protocol._file_hash',return_value='wrong-readback-hash'),patch('agent_protocol._write') as write:
+            with self.assertRaisesRegex(ValueError,'备份校验失败'):
+                agent.reprocess(self.folder,'worker','备份读回失败测试')
+            write.assert_not_called()
+        for name,content in before.items():self.assertEqual((self.folder/name).read_bytes(),content)
+        self.assertEqual(agent.preprocessing_status(self.folder)['state'],'complete')
+
+    def test_reprocess_history_filename_collision_never_overwrites_history(self):
+        self.complete()
+        history=self.folder/'agent-history';history.mkdir()
+        existing=history/'collision.json';existing.write_bytes(b'previous preserved history')
+        before={name:(self.folder/name).read_bytes() for name in (agent.STATE,agent.RESULT)}
+        with patch('agent_protocol.uuid.uuid4') as ident:
+            ident.return_value.hex='collision'
+            with self.assertRaises(FileExistsError):agent.reprocess(self.folder,'worker','文件名碰撞测试')
+        self.assertEqual(existing.read_bytes(),b'previous preserved history')
+        for name,content in before.items():self.assertEqual((self.folder/name).read_bytes(),content)
+
+    def test_simultaneous_reprocess_calls_have_only_one_lease_and_backup(self):
+        self.complete()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            jobs=list(pool.map(lambda i:agent.reprocess(self.folder,f'worker-{i}','并发重做测试'),range(8)))
+        self.assertEqual(sum(job['claimed'] for job in jobs),1)
+        self.assertEqual([job['reason'] for job in jobs if not job['claimed']],['busy']*7)
+        self.assertEqual(len(list((self.folder/'agent-history').glob('*.json'))),1)
+        self.assertEqual(agent.preprocessing_status(self.folder)['reanalysis']['state'],'processing')
+
+    def test_reprocess_rejects_unfinished_lease_even_for_older_revision(self):
+        self.complete()
+        update_metadata(self.folder,dict(input_offset_seconds=2))
+        agent.publish_ready(self.folder)
+        agent.claim(self.folder,'pending-new-material')
+        state=(self.folder/agent.STATE).read_bytes()
+        update_metadata(self.folder,dict(input_offset_seconds=3))
+        agent.publish_ready(self.folder)
+        self.assertEqual(agent.reprocess(self.folder,'redo-worker','不能抢占旧租约')['reason'],'busy')
+        self.assertEqual((self.folder/agent.STATE).read_bytes(),state)
+        self.assertFalse((self.folder/'agent-history').exists())
+
+    def test_failed_or_expired_reprocess_keeps_baseline_and_requires_explicit_retry(self):
+        self.complete()
+        baseline=(self.folder/agent.RESULT).read_bytes()
+        first=agent.reprocess(self.folder,'first-redo','画面检查',60)
+        agent.fail(self.folder,first['token'],'未检查完整；sk-secretvalue')
+        state=agent.preprocessing_status(self.folder,include_result=True)
+        self.assertEqual((state['state'],state['reanalysis']['state']),('complete','failed'))
+        self.assertEqual(state['reanalysis']['reason'],'画面检查')
+        self.assertNotIn('sk-secretvalue',state['reanalysis']['failure_reason'])
+        self.assertEqual(agent.claim(self.folder,'ordinary-worker')['reason'],'complete')
+        second=agent.reprocess(self.folder,'second-redo','继续核对',60)
+        self.assertEqual(agent.preprocessing_status(self.folder)['reanalysis']['state'],'processing')
+        with patch('agent_protocol.time.time',return_value=second['expires_at']+1):
+            state=agent.preprocessing_status(self.folder,include_result=True)
+            self.assertEqual((state['state'],state['reanalysis']['state']),('complete','interrupted'))
+            self.assertEqual(state['result']['summary'],self.candidate()['summary'])
+            self.assertEqual(agent.claim(self.folder,'ordinary-worker')['reason'],'complete')
+            with self.assertRaises(ValueError):agent.submit(self.folder,second['token'],self.candidate())
+            third=agent.reprocess(self.folder,'third-redo','显式重试')
+        self.assertTrue(third['claimed'])
+        self.assertEqual((self.folder/agent.RESULT).read_bytes(),baseline)
+        self.assertIn('录像.mp4',session_review_payload(self.folder)['video'])
+        self.assertNotIn('token',json.dumps(state))
+
+    def test_reprocess_fences_old_workers_and_preserves_each_successful_version(self):
+        original=self.complete()
+        baseline=(self.folder/agent.RESULT).read_bytes()
+        redo=agent.reprocess(self.folder,'visual-worker','第二轮画面检查')
+        for operation in (
+            lambda:agent.submit(self.folder,original['token'],self.candidate()),
+            lambda:agent.renew(self.folder,original['token']),
+            lambda:agent.fail(self.folder,original['token'],'不能覆盖新租约'),
+        ):
+            with self.assertRaises(ValueError):operation()
+        invalid=self.candidate();invalid['events'][0]['end']=1
+        with self.assertRaises(ValueError):agent.submit(self.folder,redo['token'],invalid)
+        self.assertEqual((self.folder/agent.RESULT).read_bytes(),baseline)
+        updated=self.candidate();updated['summary']='新画面检查后的整理';updated['events'][0]['title']='新发现的按钮状态问题'
+        agent.submit(self.folder,redo['token'],updated)
+        state=agent.preprocessing_status(self.folder,include_result=True)
+        self.assertEqual(state['state'],'complete')
+        self.assertEqual(state['result']['summary'],updated['summary'])
+        self.assertNotIn('reanalysis',state)
+        self.assertEqual(Path(redo['baseline']['path']).read_bytes(),baseline)
+        self.assertEqual(len(list((self.folder/'agent-history').glob('*.json'))),1)
+        second_version=(self.folder/agent.RESULT).read_bytes()
+        next_job=agent.reprocess(self.folder,'third-worker','第三轮检查')
+        self.assertEqual(Path(next_job['baseline']['path']).read_bytes(),second_version)
+        updated['summary']='第三轮整理'
+        agent.submit(self.folder,next_job['token'],updated)
+        preserved=[path.read_bytes() for path in (self.folder/'agent-history').glob('*.json')]
+        self.assertCountEqual(preserved,[baseline,second_version])
+        self.assertEqual(agent.preprocessing_status(self.folder,include_result=True)['result']['summary'],'第三轮整理')
+
+    def test_reprocess_submission_preserves_baseline_again_if_backup_was_damaged(self):
+        self.complete()
+        baseline=(self.folder/agent.RESULT).read_bytes()
+        job=agent.reprocess(self.folder,'worker','合成损坏恢复测试')
+        Path(job['baseline']['path']).write_bytes(b'synthetic damaged backup')
+        updated=self.candidate();updated['summary']='重新整理'
+        agent.submit(self.folder,job['token'],updated)
+        preserved=[path.read_bytes() for path in (self.folder/'agent-history').glob('*.json')]
+        self.assertIn(baseline,preserved)
+        self.assertIn(b'synthetic damaged backup',preserved)
+        self.assertEqual(agent.preprocessing_status(self.folder,include_result=True)['result']['summary'],'重新整理')
 
     def test_rename_does_not_change_revision_but_new_material_does(self):
         self.complete()

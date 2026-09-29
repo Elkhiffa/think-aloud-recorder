@@ -30,7 +30,13 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 每个场次在录像、转写和独立回看文件完成后，最后原子发布 `agent-ready.json`。信号包含协议版本、场次 ID、素材 revision、相对源文件名及大小/修改时间、录像时长。没有安装路径、配置或密钥。
 
-`agent_cli.py` 是外部会话的本地接口，使用自带 Python。`scan` 读取就绪场次；`publish` 为指定旧场次补发或更新信号；`claim` 领取，`renew` 续期，`evidence` 读概览/区间，`frame` 提取图片，`validate` 校验候选，`submit` 提交，`fail` 记录原因，`status` 回读状态。完整参数见 `--help`。
+`agent_cli.py` 是外部会话的本地接口，使用自带 Python。`scan` 读取就绪场次；`publish` 为指定旧场次补发或更新信号；`claim` 领取，`reprocess` 备份后重新领取已有结果，`renew` 续期，`evidence` 读概览/区间，`frame` 提取图片，`validate` 校验候选，`submit` 提交，`fail` 记录原因，`status` 回读状态。完整参数见 `--help`。
+
+画面候选试验另提供 `visual-nodes`、`visual-overview`、`visual-read`、`visual-review`：先在本地逐帧压缩画面变化，先读全程紧凑概览，再按需展开带时间戳的图片与原话/操作引用。它不领取分析任务、不提交体验事件，也不自动运行，详见 [画面变化候选](visual-nodes.md)。概览不能替代实际看图或完整原话；不要将机械候选直接视为玩家目标或问题。分阶段机器统计与返回字符量可用于控制取材开销，不能换算为真实模型额度消耗。
+
+新增 `visual-plan INDEX --output NEW_DIR`、`visual-packet PLAN --request-id ID --phase initial|inspect|review --question TEXT` 和 `visual-budget PLAN`，将首轮、定向补图与复核纳入同一个发放预算。默认总额 24、首轮最多 12、复核预留 4，属于试验配置。补图用 `--at` 指定时间，或 `--start/--end/--limit` 请求短区间。每个调用者共享同场计划，不能以新计划或直接打开原图绕过额度；完整机械索引不是必须全部读完的任务清单。预算只计算入口发放次数，不能代替实际看图记录或模型计费统计。详见上述文档的“共用预算的取材计划”。
+
+0.6.5 增加 `visual-candidates INDEX --start SEC --end SEC [--limit 24]`：将短区间内主要及弱候选平铺成有上限的导航表，不携带整段运动树与原话。新的选图计划采用分散首轮和局部稳定程度排序，缓解近邻动画挤占名额；旧计划保留旧算法与原预算，新计划格式需 0.6.5。完整 `visual-read` 接口保持兼容。
 
 ```powershell
 & 'F:\ThinkAloud\app\runtime\python.exe' 'F:\ThinkAloud\app\agent_cli.py' scan 'F:\think-aloud-database'
@@ -43,6 +49,10 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 revision 是本地源文件大小/修改时间和相关语义设置的指纹，不是内容校验签名。手工替换素材后需正常更新文件修改时间并重新发布。目录移动而保持文件属性时不会无故重新处理。
 
 ## 一致性与独立性
+
+用户明确要求重做时，用 `reprocess SESSION --worker 会话标识 --reason 重做理由`，不用删除结果或修改素材 revision。接口先把旧结果原始字节保存到 `agent-history`，校验后才发放领取令牌；旧结果在新提交成功前继续可回看。备份失败不会建立领取，活跃任务不能抢占。重做失败或过期保留旧结果；`status.reanalysis` 提供重做状态。已有结果仍有效时顶层 `state=complete` 代表该结果可用，不代表这轮已完成。报告等非接口文件由执行会话在重做前另行备份。
+
+事件分析应先还原整场的主要目标与过程，允许目标未明，然后从事件中推导问题。机械画面节点辅助取材，不直接生成语义事件。前后对比应记录相同场次／revision、基线与新结果，新增场次和素材变化另列。
 
 - 领取采用短暂的跨进程场次锁和到期令牌；新领取后，旧 worker 不能提交。正在有效领取的场次不能被其他 worker 抢占。
 - 原始资料在录制时就已保存。预处理结果是附加层，没有“等待 agent 后才能正式存文件”的步骤。
