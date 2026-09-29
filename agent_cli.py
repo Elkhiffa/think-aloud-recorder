@@ -123,8 +123,15 @@ def main(argv=None):
     visual_packet.add_argument('--start', type=float)
     visual_packet.add_argument('--end', type=float)
     visual_packet.add_argument('--limit', type=int, default=6)
+    visual_packet.add_argument('--image-width',type=int,choices=(960,1920),default=960,
+                               help='图片最大宽度；1920仅用于需辨认小字的定向补图，不放大原片')
     visual_budget = commands.add_parser('visual-budget', help='查看本场取材计划的共用预算')
     visual_budget.add_argument('plan')
+    extend = commands.add_parser('visual-budget-extend',help='按关键证据需要显式追加额度，保留累计用量')
+    extend.add_argument('plan')
+    extend.add_argument('--request-id',required=True)
+    extend.add_argument('--additional',type=int,required=True)
+    extend.add_argument('--reason',required=True)
     visual_review = commands.add_parser('visual-review', help='仅在本机打开候选检查页；Ctrl+C 结束')
     visual_review.add_argument('index')
     visual_review.add_argument('--port', type=int, default=0)
@@ -175,10 +182,14 @@ def main(argv=None):
         elif name == 'visual-packet':
             from visual_evidence import packet
             value = packet(args.plan, args.request_id, phase=args.phase, question=args.question,
-                           times=args.at, start=args.start, end=args.end, limit=args.limit)
+                           times=args.at, start=args.start, end=args.end, limit=args.limit,
+                           image_width=args.image_width)
         elif name == 'visual-budget':
             from visual_evidence import budget_status
             value = budget_status(args.plan)
+        elif name == 'visual-budget-extend':
+            from visual_evidence import extend_budget
+            value = extend_budget(args.plan,args.request_id,additional=args.additional,reason=args.reason)
         elif name == 'visual-review':
             from visual_nodes import review_server
             with review_server(args.index, args.port) as server:

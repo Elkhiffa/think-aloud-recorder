@@ -361,5 +361,136 @@ class EvidencePlanTests(unittest.TestCase):
         self.assertEqual(code,0)
         self.assertEqual(json.loads(output.getvalue())['data']['issued'],0)
 
+    def test_extension_retains_history_and_allows_only_added_evidence(self):
+        p=Path(evidence.create_plan(self.value['index'],self.root/'extended',total=4,initial=1,review=1)['plan'])
+        first=evidence.packet(p,'first',phase='initial',question='Initial')
+        evidence.packet(p,'review',phase='review',question='Review',times=[.1,.23,.4])
+        protected=[p,Path(self.value['index']),*p.parent.joinpath('requests').glob('*.json')]
+        before={str(f):evidence._hash(f) for f in protected}
+        grant=evidence.extend_budget(p,'specific-gap',additional=2,reason='Two missing transition states')
+        self.assertEqual(grant['extension']['issued_before'],4)
+        self.assertEqual(grant['budget']['effective_total'],6)
+        self.assertEqual(grant['budget']['remaining'],2)
+        replay=evidence.extend_budget(p,'specific-gap',additional=2,reason='Two missing transition states')
+        self.assertTrue(replay['replayed'])
+        self.assertEqual(grant['extension'],replay['extension'])
+        self.assertEqual(evidence.packet(p,'first',phase='initial',question='Initial')['frames'],first['frames'])
+        self.assertEqual(evidence.packet(p,'new-initial',phase='initial',question='Again')['state'],'initial_already_issued')
+        result=evidence.packet(p,'extra',phase='inspect',question='The two states',times=[.62,.67])
+        self.assertEqual(result['budget']['issued'],6)
+        denied=evidence.packet(p,'over',phase='review',question='No allowance',times=[.85])
+        self.assertEqual(denied['state'],'budget_exceeded')
+        self.assertEqual(before,{str(f):evidence._hash(f) for f in protected})
+
+    def test_extension_concurrency_cap_and_immutable_id(self):
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results=list(pool.map(lambda _:evidence.extend_budget(self.plan,'gap',additional=6,reason='Evidence gap'),range(4)))
+        self.assertEqual(sum(not r['replayed'] for r in results),1)
+        self.assertEqual(evidence.budget_status(self.plan)['effective_total'],18)
+        before=evidence._hash(self.plan.parent/'budget.json')
+        for kwargs in (dict(additional=7,reason='Evidence gap'),dict(additional=6,reason='Different')):
+            with self.assertRaises(ValueError):evidence.extend_budget(self.plan,'gap',**kwargs)
+        for amount in (0,-1,True,1.5,201):
+            with self.assertRaises(ValueError):evidence.extend_budget(self.plan,'bad',additional=amount,reason='Invalid')
+        with self.assertRaises(ValueError):evidence.extend_budget(self.plan,'over',additional=183,reason='Over cap')
+        self.assertEqual(evidence._hash(self.plan.parent/'budget.json'),before)
+        cap=evidence.extend_budget(self.plan,'cap',additional=182,reason='Synthetic boundary')
+        self.assertEqual(cap['budget']['effective_total'],200)
+        self.assertTrue(evidence.extend_budget(self.plan,'cap',additional=182,reason='Synthetic boundary')['replayed'])
+
+    def test_extension_during_pending_packet_survives_completion(self):
+        from threading import Event
+        entered,release=Event(),Event()
+        original=evidence._frame
+        def delayed(*args,**kwargs):
+            entered.set()
+            if not release.wait(10):raise RuntimeError('Test release timed out')
+            return original(*args,**kwargs)
+        with ThreadPoolExecutor(max_workers=1) as pool,patch.object(evidence,'_frame',side_effect=delayed):
+            future=pool.submit(evidence.packet,self.plan,'pending',phase='inspect',question='Target',times=[.7])
+            try:
+                self.assertTrue(entered.wait(10))
+                grant=evidence.extend_budget(self.plan,'pending-gap',additional=2,reason='Pending remains charged')
+                self.assertEqual(grant['extension']['issued_before'],1)
+            finally:release.set()
+            result=future.result()
+        self.assertEqual(result['budget']['effective_total'],14)
+        self.assertEqual(result['budget']['issued'],1)
+        self.assertEqual(evidence._load(self.plan.parent/'budget.json')['requests']['pending']['state'],'ready')
+
+    def test_high_resolution_uses_source_and_width_is_part_of_request_identity(self):
+        at=self.index['nodes'][0]['frames'][0]['time']
+        normal=evidence.packet(self.plan,'normal',phase='inspect',question='Read',times=[at])
+        original=evidence._frame
+        with patch.object(evidence,'_frame',wraps=original) as frame:
+            high=evidence.packet(self.plan,'detail',phase='review',question='Small text',times=[at],image_width=1920)
+            frame.assert_called_once_with((self.folder/'录像.mp4').resolve(),at,image_width=1920)
+        self.assertEqual(high['frames'][0]['time'],at)
+        self.assertEqual(high['frames'][0]['origin'],'targeted_seek')
+        self.assertEqual((high['frames'][0]['width'],high['frames'][0]['height']),(160,90))
+        self.assertEqual(high['max_image_width'],1920)
+        self.assertTrue(evidence.packet(self.plan,'detail',phase='review',question='Small text',times=[at],image_width=1920)['replayed'])
+        with self.assertRaises(ValueError):evidence.packet(self.plan,'detail',phase='review',question='Small text',times=[at])
+        with self.assertRaises(ValueError):evidence.packet(self.plan,'normal',phase='inspect',question='Read',times=[at],image_width=1920)
+        self.assertEqual(normal['frames'],evidence.packet(self.plan,'normal',phase='inspect',question='Read',times=[at])['frames'])
+        for kwargs in (dict(phase='initial'),dict(phase='review',start=0,end=1),dict(phase='review',times=[0,.1,.23])):
+            with self.assertRaises(ValueError):evidence.packet(self.plan,'invalid',question='Invalid',image_width=1920,**kwargs)
+
+    def test_high_resolution_rejects_neighbour_frame_and_keeps_failed_charge(self):
+        with self.assertRaisesRegex(ValueError,'原始PTS'):
+            evidence.packet(self.plan,'between-vfr',phase='review',question='Exact frame only',times=[.7],image_width=1920)
+        ledger=evidence._load(self.plan.parent/'budget.json')
+        self.assertEqual(ledger['requests']['between-vfr']['state'],'failed')
+        self.assertEqual(evidence.budget_status(self.plan)['issued'],1)
+        self.assertFalse((self.plan.parent/'requests/between-vfr.json').exists())
+
+    def test_legacy_receipt_replay_preserves_bytes_and_issued_count(self):
+        at=self.index['nodes'][0]['frames'][0]['time']
+        evidence.packet(self.plan,'legacy',phase='inspect',question='Read',times=[at])
+        ledger_path=self.plan.parent/'budget.json'
+        receipt_path=self.plan.parent/'requests/legacy.json'
+        ledger=evidence._load(ledger_path)
+        ledger.pop('extensions',None)
+        ledger['requests']['legacy'].pop('image_width',None)
+        receipt=evidence._load(receipt_path)
+        receipt.pop('max_image_width',None)
+        receipt.pop('budget',None)  # On-disk legacy receipts do not embed usage.
+        evidence.write(ledger_path,ledger)
+        evidence.write(receipt_path,receipt)
+        before={str(p):evidence._hash(p) for p in (self.plan,ledger_path,receipt_path)}
+        issued=evidence.budget_status(self.plan)['issued']
+        with patch.object(evidence,'_frame',side_effect=AssertionError('Replay must not decode')):
+            result=evidence.packet(self.plan,'legacy',phase='inspect',question='Read',times=[at])
+        self.assertTrue(result['replayed'])
+        self.assertNotIn('max_image_width',result)
+        self.assertEqual(result['frames'],receipt['frames'])
+        self.assertEqual(evidence.budget_status(self.plan)['issued'],issued)
+        self.assertEqual(before,{str(p):evidence._hash(p) for p in (self.plan,ledger_path,receipt_path)})
+
+    def test_high_resolution_frame_keeps_native_1080p_dimensions(self):
+        import av
+        video=self.root/'native.mp4'
+        with av.open(str(video),'w') as output:
+            stream=output.add_stream('mpeg4',rate=30)
+            stream.width,stream.height=1920,1080
+            stream.pix_fmt='yuv420p'
+            frame=av.VideoFrame.from_ndarray(np.zeros((1080,1920,3),np.uint8),format='rgb24')
+            for packet in stream.encode(frame):output.mux(packet)
+            for packet in stream.encode(None):output.mux(packet)
+        for width,height in ((960,540),(1920,1080)):
+            actual,content=evidence._frame(video,0,image_width=width)
+            self.assertEqual(actual,0)
+            with av.open(io.BytesIO(content),format='mjpeg') as image:
+                self.assertEqual((image.streams.video[0].width,image.streams.video[0].height),(width,height))
+
+    def test_extension_cli_is_explicit_and_json(self):
+        output=io.StringIO()
+        with redirect_stdout(output):
+            code=agent_cli.main(['visual-budget-extend',str(self.plan),'--request-id','cli-gap','--additional','2','--reason','Key missing evidence'])
+        self.assertEqual(code,0)
+        value=json.loads(output.getvalue())['data']
+        self.assertEqual(value['budget']['additional_total'],2)
+        self.assertEqual(value['budget']['issued'],0)
+
 
 if __name__=='__main__': unittest.main()

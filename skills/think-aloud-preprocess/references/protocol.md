@@ -43,6 +43,10 @@
 
 `visual-budget` 是所有调用者共用的发放账本，不是实际看图或 token 统计。禁止通过另建计划、旧 `frame` 或直接打开完整图集绕过同场预算；超额时保留具体待查问题。不同阶段的图片联系表仍按原始时间点计次，未实际看的已发图也保守计入。源或索引变化需新版本计划，须连同已有用量报告交接，不得以素材变化静默重置整场预算。旧版本无这些命令时手工执行相同记录与限制，不能假装入口已经硬性拦截。
 
+0.6.9 在具体关键证据缺口与最小增量经过评估、当前任务授权覆盖后，用 `visual-budget-extend PLAN --request-id KEY --additional 6 --reason '具体缺口与范围'` 显式追加。它只在原budget.json追加记录，不改plan/index/旧receipt；同ID同参数重放、不同参数拒绝。字段base_total/additional_total/effective_total区分原额、新增与累计额度，issued不归零；原initial上限和review预留保持，pending/failed不退款，累计最多200。旧客户端仍只认原额度，也不能保证高清回放身份检查，扩容后用0.6.9及以后版本。预算是成本试验配置，不是效果门槛；重要判断未被支持时应报告方法缺口，不能仅标未知就判达标。
+
+`visual-packet ... --phase inspect/review --at 原始PTS [--at 原始PTS] --image-width 1920` 从原片定点取高清（0.6.9），仅1–2点、不用于区间自动包或initial。默认960兼容旧回执；1920为最大宽度，不放大更小的原片，回执附max_image_width及高清帧width/height。宽度参与请求身份，改宽度须新编号并计次；高清使用索引/旧回执实际PTS，精确定位失败则failed并保留计数，不替代邻帧或全片回扫。此入口不保证原始文字可辨，也不把画面清晰度等同关键证据充分。
+
 `visual-candidates`（0.6.5）要求 start/end，范围最长 120 秒，`limit` 1–60、默认 24。主要与弱候选共用分页数量上限，返回紧凑 columns/rows 与 next_offset，不展开原话、按键、图片或完整 motion 子树。它没有实际看图，也不是流程识别。`visual-read` 保留完整格式，但小 limit 不能保证小输出。
 
 0.6.7 先用 `visual-candidates INDEX --start 120 --end 180 --level primary --limit 24`，按需再用 `--level weak --parent v000123` 展开该主要节点的弱观察。`--parent` 只适用于 weak；不填 parent 则查范围内全部保留的弱观察。默认 all 兼容旧顺序。筛选先于分页，切换筛选后从 offset 0 开始。新增列为 parent_id、retained_weak_in_range；matching_by_level 是筛选前该区间保留的两类数量。omissions 是全索引遗漏数量／时间包络和 overlaps_query，不代表包络内每一秒均缺失。主要分页读完不改变 node_index_complete；筛选不能代替短暂状态的弱观察核对。

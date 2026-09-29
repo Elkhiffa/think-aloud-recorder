@@ -5,7 +5,9 @@ Packets reserve budget before extraction, including repeated review requests.
 """
 from bisect import bisect_right
 from contextlib import closing
+from datetime import datetime, timezone
 import hashlib
+from io import BytesIO
 import json
 from pathlib import Path
 import re
@@ -209,10 +211,26 @@ def _plan(path):
 
 
 def _usage(plan, ledger):
+    extensions=ledger.get('extensions',{})
+    if not isinstance(extensions,dict):
+        raise ValueError('追加额度记录无效。')
+    additional=0
+    for key,entry in extensions.items():
+        if (not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',key) or not isinstance(entry,dict)
+                or type(entry.get('additional')) is not int or entry['additional']<1
+                or entry.get('base_total')!=plan['budget']['total']
+                or entry.get('index_sha256')!=plan['index_sha256']):
+            raise ValueError('追加额度记录无效或不属于此计划。')
+        additional+=entry['additional']
+    total=plan['budget']['total']+additional
+    if total>200:
+        raise ValueError('单计划累计额度不能超过200。')
     phases = {phase:sum(len(r['times']) for r in ledger['requests'].values() if r['phase']==phase)
               for phase in ('initial','inspect','review')}
     used = sum(phases.values())
-    return dict(issued=used, remaining=plan['budget']['total']-used, by_phase=phases,
+    return dict(issued=used, remaining=total-used, by_phase=phases,
+                base_total=plan['budget']['total'],additional_total=additional,effective_total=total,
+                extension_ids=list(extensions),
                 review_reserved_remaining=max(0,plan['budget']['review_reserve']-phases['review']),
                 note='pending/failed 请求仍保守计入；重复获取同一回执不再计入，实际重新看图请发新请求。')
 
@@ -221,6 +239,33 @@ def budget_status(plan_path):
     root,plan,_ = _plan(plan_path)
     with metadata_lock(root):
         return _usage(plan,_load(root/'budget.json'))
+
+
+def extend_budget(plan_path, request_id, *, additional, reason):
+    """Append an explicit, idempotent allowance; retain plan and every receipt."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',request_id or ''):
+        raise ValueError('追加编号只能包含字母、数字、横线和下划线，最长64字。')
+    if type(additional) is not int or not 1<=additional<=200:
+        raise ValueError('新增额度应为1–200的整数。')
+    reason=protocol._text(reason,1000,'需要补足的关键证据与追加理由')
+    root,plan,_=_plan(plan_path)
+    with metadata_lock(root):
+        ledger=_load(root/'budget.json')
+        usage=_usage(plan,ledger)
+        extensions=ledger.setdefault('extensions',{})
+        old=extensions.get(request_id)
+        if old:
+            if old['additional']!=additional or old['reason']!=reason:
+                raise ValueError('追加编号已用于另一份额度或理由。')
+            return dict(extension=old,budget=usage,replayed=True)
+        entry=dict(id=request_id,additional=additional,reason=reason,
+                   created_at=datetime.now(timezone.utc).isoformat(),issued_before=usage['issued'],
+                   base_total=plan['budget']['total'],index_sha256=plan['index_sha256'],
+                   plan_sha256=_hash(root/'plan.json'))
+        extensions[request_id]=entry
+        usage=_usage(plan,ledger)  # Validate cumulative cap before the atomic write.
+        write(root/'budget.json',ledger)
+        return dict(extension=entry,budget=usage,replayed=False)
 
 
 def _window_times_legacy(index,start,end,limit):
@@ -312,17 +357,20 @@ def _window_times(index,start,end,limit):
     return times,deferred
 
 
-def _frame(video,at):
+def _frame(video,at,*,image_width=960):
     # Seek to the requested display time; preserve the actual PTS of its frame.
     with closing(visual._decode(video,at,at,{})) as decoded:
         try:
             actual,picture=next(decoded)
         except StopIteration:
             raise ValueError(f'{at:g} 秒没有可用画面。') from None
-        return actual,visual._jpeg(picture)
+        if image_width!=960 and actual!=at:
+            raise ValueError('高清取图未复现指定的原始PTS；请使用索引或旧回执的实际时间，不替换为邻帧。')
+        return actual,visual._jpeg(picture,width=image_width)
 
 
-def packet(plan_path, request_id, *, phase, question, times=None, start=None, end=None, limit=6):
+def packet(plan_path, request_id, *, phase, question, times=None, start=None, end=None, limit=6,
+           image_width=960):
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}',request_id or ''):
         raise ValueError('请求编号只能包含字母、数字、横线和下划线，最长 64 字。')
     if phase not in ('initial','inspect','review'):
@@ -330,6 +378,10 @@ def packet(plan_path, request_id, *, phase, question, times=None, start=None, en
     question=protocol._text(question,1000,'本次需要核对的问题')
     if type(limit) is not int or not 2<=limit<=12:
         raise ValueError('单次补图上限应为 2–12。')
+    if type(image_width) is not int or image_width not in (960,1920):
+        raise ValueError('图片最大宽度应为960或1920，不放大原片。')
+    if image_width!=960 and (phase=='initial' or times is None or not 1<=len(times)<=2):
+        raise ValueError('高清取图仅用于补图/复核的1–2个明确原始PTS，不用于自动区间包。')
     root,plan,index=_plan(plan_path)
     deferred=0
     decisions=[]
@@ -358,12 +410,14 @@ def packet(plan_path, request_id, *, phase, question, times=None, start=None, en
     spec=dict(phase=phase,question=question,times=wanted,deferred_bundles=deferred)
     if selection_version!=1:
         spec['selection_version']=selection_version
+    if image_width!=960:
+        spec['image_width']=image_width
     request_path=root/'requests'/(request_id+'.json')
     with metadata_lock(root):
         ledger=_load(root/'budget.json')
         old=ledger['requests'].get(request_id)
         if old:
-            if any(old.get(k)!=v for k,v in spec.items()):
+            if old.get('image_width',960)!=image_width or any(old.get(k)!=v for k,v in spec.items()):
                 raise ValueError('请求编号已用于另一组问题或画面。')
             if request_path.is_file():
                 receipt=_load(request_path)
@@ -390,14 +444,21 @@ def packet(plan_path, request_id, *, phase, question, times=None, start=None, en
         indexed={f['time']:f['path'] for n in index['nodes'] for f in n['frames'] if f.get('path')}
         frames=[]
         for at in wanted:
-            if at in indexed:
+            if at in indexed and image_width==960:
                 picture=_picture(Path(plan['index']),indexed[at])
                 content=picture.read_bytes(); actual=at
                 origin='existing_index'
             else:
-                actual,content=_frame(video,at)
+                actual,content=(_frame(video,at) if image_width==960
+                                else _frame(video,at,image_width=image_width))
                 origin='targeted_seek'
             digest=hashlib.sha256(content).hexdigest()
+            dimensions={}
+            if image_width!=960:
+                import av
+                with av.open(BytesIO(content),format='mjpeg') as image:
+                    stream=image.streams.video[0]
+                    dimensions=dict(width=stream.width,height=stream.height)
             picture=root/'images'/(digest+'.jpg')
             with metadata_lock(root):
                 try:
@@ -405,9 +466,11 @@ def packet(plan_path, request_id, *, phase, question, times=None, start=None, en
                 except FileExistsError:
                     if _hash(picture)!=digest:
                         raise ValueError('已保存画面校验失败。')
-            frames.append(dict(requested_time=at,time=actual,path=str(picture),sha256=digest,origin=origin))
+            frames.append(dict(requested_time=at,time=actual,path=str(picture),sha256=digest,origin=origin,
+                               **dimensions))
         _plan(plan_path)  # Revalidate after seeking, before publishing any image references.
         result=dict(state='ready',request_id=request_id,phase=phase,question=question,frames=frames,
+                    max_image_width=image_width,
                     deferred_bundles=deferred,actual_image_inspection=False,
                     selection_version=selection_version,selection=decisions,
                     deferred_initial_transitions=len(plan['deferred_transitions']) if phase=='initial' else None,
