@@ -127,7 +127,7 @@ class VisualChangeDetector:
                     active["quiet_since"] = timestamp
                     active["quiet_image"] = frame.copy()
                 elif timestamp - active["quiet_since"] >= self.config.settle_seconds:
-                    self._close_event(timestamp, frame)
+                    self._close_event(timestamp, frame, reference)
             else:
                 active["quiet_since"] = None
                 active["quiet_image"] = None
@@ -235,11 +235,17 @@ class VisualChangeDetector:
         self._idle_start = self._idle_frame = timestamp
         self._count = 1
 
-    def _difference(self, current, reference):
-        pixels = np.maximum(np.abs(current - reference).mean(axis=2)
-                            - self.config.pixel_noise, 0)
-        tiles = np.add.reduceat(np.add.reduceat(pixels, self._ys[:-1], axis=0),
+    def _pixel_difference(self, current, reference):
+        return np.maximum(np.abs(current - reference).mean(axis=2)
+                          - self.config.pixel_noise, 0)
+
+    def _tile_means(self, pixels):
+        return np.add.reduceat(np.add.reduceat(pixels, self._ys[:-1], axis=0),
                                self._xs[:-1], axis=1) / self._areas
+
+    def _difference(self, current, reference):
+        pixels = self._pixel_difference(current, reference)
+        tiles = self._tile_means(pixels)
         global_score, local_score = float(pixels.mean()), float(tiles.max())
         return {
             "global": global_score, "local": local_score, "tiles": tiles,
@@ -286,13 +292,13 @@ class VisualChangeDetector:
     def _track_cell_stability(self, timestamp, frame, adjacent):
         self._recent_jump = np.maximum(adjacent["tiles"],
                                        self._recent_jump * math.exp(-(timestamp - self._time) / 0.2))
-        difference = self._difference(frame, self._cell_quiet_image)
-        changed = difference["tiles"] >= self.config.local_threshold * self.config.quiet_factor
+        tiles = self._tile_means(self._pixel_difference(frame, self._cell_quiet_image))
+        changed = tiles >= self.config.local_threshold * self.config.quiet_factor
         self._cell_since[changed] = timestamp
         self._cell_before[changed] = self._time
         self._copy_tiles(self._cell_quiet_image, frame, changed)
-        strict = self._difference(frame, self._strict_image)
-        changed = strict["tiles"] >= self.config.local_quiet_threshold
+        strict_tiles = self._tile_means(self._pixel_difference(frame, self._strict_image))
+        changed = strict_tiles >= self.config.local_quiet_threshold
         self._strict_since[changed] = timestamp
         self._strict_before[changed] = self._time
         self._strict_onset_jump[changed] = self._recent_jump[changed]
@@ -315,30 +321,35 @@ class VisualChangeDetector:
             return
         # Preserve the original, more permissive observations in the motion
         # index. They do not each demand a screenshot or masquerade as a UI step.
-        weak_reference = self._difference(frame, self._weak_reference)
-        weak = ((timestamp - self._cell_since >= self.config.settle_seconds) &
-                (weak_reference["tiles"] >= self.config.local_threshold))
-        if moving_now and weak.any() and weak.mean() <= 0.65:
-            observation = self._local_node(timestamp, adjacent, weak_reference, weak,
-                                           self._cell_before, self._cell_since)
-            observation["reason"] = "weak_local_stability_during_motion"
-            observation["image_priority"] = "low"
-            self._weak_count += 1
-            if self._weak_retained < self.config.max_nodes:
-                self._active["motion_observations"].append(observation)
-                self._weak_retained += 1
-            else:
-                self._weak_omitted += 1
-                self._record_omitted_span(observation)
-            self._copy_tiles(self._weak_reference, frame, weak)
-        reference = self._difference(frame, self._local_reference)
+        if moving_now:
+            weak = timestamp - self._cell_since >= self.config.settle_seconds
+            if weak.any():
+                weak_reference = self._difference(frame, self._weak_reference)
+                weak &= weak_reference["tiles"] >= self.config.local_threshold
+                if weak.any() and weak.mean() <= 0.65:
+                    observation = self._local_node(timestamp, adjacent, weak_reference, weak,
+                                                   self._cell_before, self._cell_since)
+                    observation["reason"] = "weak_local_stability_during_motion"
+                    observation["image_priority"] = "low"
+                    self._weak_count += 1
+                    if self._weak_retained < self.config.max_nodes:
+                        self._active["motion_observations"].append(observation)
+                        self._weak_retained += 1
+                    else:
+                        self._weak_omitted += 1
+                        self._record_omitted_span(observation)
+                    self._copy_tiles(self._weak_reference, frame, weak)
         duration = timestamp - self._strict_since
         mature = duration >= self.config.local_stability_seconds
         # Only new stability qualifies. A quiet patch from several seconds ago
         # must not become a new local event when the camera starts moving again.
         newly_mature = self._time - self._strict_since < self.config.local_stability_seconds
-        changed = (mature & newly_mature & (reference["tiles"] >= self.config.local_threshold) &
+        changed = (mature & newly_mature &
                    (self._strict_onset_jump >= self.config.local_onset_threshold))
+        if not changed.any():
+            return
+        reference = self._difference(frame, self._local_reference)
+        changed &= reference["tiles"] >= self.config.local_threshold
         if not changed.any() or changed.mean() > 0.65:
             return
         node = self._local_node(timestamp, adjacent, reference, changed,
@@ -404,10 +415,12 @@ class VisualChangeDetector:
             "reason": "locally_stable_pixels_changed_while_other_regions_keep_moving",
         }
 
-    def _close_event(self, timestamp, frame):
+    def _close_event(self, timestamp, frame, reference=None):
         self._flush_local(timestamp, force=True)
         active = self._active
-        returned = self._difference(frame, self._reference)["score"] < 0.55
+        if reference is None:
+            reference = self._difference(frame, self._reference)
+        returned = reference["score"] < 0.55
         if returned and active["last_signal"] - active["before"] <= self.config.transient_seconds:
             kind, reason = "transient", "brief_pixel_change_returned_near_its_prior_reference"
         elif (active["signals"] >= 3 and active["last_signal"] - active["onset"] >=

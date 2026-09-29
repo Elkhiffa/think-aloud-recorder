@@ -87,6 +87,54 @@ class VisualChangeTests(unittest.TestCase):
                             for node in local for region in node["changed_regions"]))
         self.assert_observed_times(result, sequence)
 
+    def test_strict_local_candidate_does_not_require_current_motion_or_weak_maturity(self):
+        for stop_motion, settle_seconds in ((True, 0.25), (False, 0.8)):
+            with self.subTest(stop_motion=stop_motion, settle_seconds=settle_seconds):
+                sequence = []
+                for index in range(20):
+                    moving = not stop_motion or index < 7
+                    frame = plain(30 if moving and index % 2 else 90)
+                    if index >= 3:
+                        frame[24:60, 64:112] = 225
+                    sequence.append((index * 0.1, frame))
+                result = run(sequence, settle_seconds=settle_seconds)
+                local = [node for node in events(result) if "locally_stable" in node["reason"]]
+                self.assertEqual(len(local), 1)
+                self.assertEqual(local[0]["frames"], [
+                    {"time": sequence[2][0], "role": "before"},
+                    {"time": sequence[3][0], "role": "representative"},
+                    {"time": sequence[7][0], "role": "after"},
+                ])
+                self.assertEqual(local[0]["metrics"]["moving_tile_fraction"] == 0, stop_motion)
+                self.assertEqual(result["stats"]["weak_motion_observations"], 1)
+                self.assert_observed_times(result, sequence)
+
+    def test_repeated_local_changes_update_weak_and_strict_references_independently(self):
+        sequence = []
+        for index in range(20):
+            frame = plain(30 if index % 2 else 90)
+            if index >= 3:
+                frame[24:60, 64:112] = 225 if index < 10 else 10
+            sequence.append((index * 0.1, frame))
+        result = run(sequence)
+        local = [node for node in events(result) if "locally_stable" in node["reason"]]
+        weak = [observation for node in events(result)
+                for observation in node.get("motion_observations", [])]
+        self.assertEqual(len(local), 2)
+        self.assertEqual(len(weak), 2)
+        self.assertEqual([node["end"] for node in local], [sequence[7][0], sequence[14][0]])
+        self.assertEqual([node["end"] for node in weak], [sequence[6][0], sequence[13][0]])
+        for observations in (local, weak):
+            self.assertEqual([node["frames"][1]["time"] for node in observations],
+                             [sequence[3][0], sequence[10][0]])
+            self.assertAlmostEqual(observations[0]["metrics"]["reference_local"],
+                                   (225 - 90 - 3) / 255, places=6)
+            self.assertAlmostEqual(observations[1]["metrics"]["reference_local"],
+                                   (225 - 10 - 3) / 255, places=6)
+        self.assertEqual(result["stats"]["local_candidates_during_motion"], 2)
+        self.assertEqual(result["stats"]["weak_motion_observations"], 2)
+        self.assert_observed_times(result, sequence)
+
     def test_fresh_high_amplitude_noise_aggregates_instead_of_exploding_node_count(self):
         rng = np.random.default_rng(738)
         sequence = [(index / 29.97, rng.integers(0, 256, size=(96, 192, 3), dtype=np.uint8))
@@ -240,6 +288,23 @@ class VisualChangeTests(unittest.TestCase):
             detector.finish(2)
         with self.assertRaises(RuntimeError):
             detector.feed(2, plain())
+
+    def test_unsettled_event_uses_final_pixels_when_finished(self):
+        for returned, kind in ((True, "transient"), (False, "change")):
+            with self.subTest(returned=returned):
+                sequence = [(0.0, plain(20)), (0.1, plain(180)),
+                            (0.2, plain(20 if returned else 180))]
+                result = run(sequence, end=0.4)
+                self.assertEqual(len(events(result)), 1)
+                node = events(result)[0]
+                self.assertEqual(node["kind"], kind)
+                self.assertEqual(node["end"], 0.2)
+                self.assertEqual(node["frames"][1], {
+                    "time": 0.1, "role": "peak" if returned else "representative",
+                })
+                self.assertEqual(result["stats"]["frames_analyzed"], 3)
+                self.assertEqual(result["nodes"][-1]["end"], 0.4)
+                self.assert_observed_times(result, sequence)
 
     def test_node_cap_reports_omissions_but_continues_analyzing_and_retains_tail(self):
         sequence = [(0.0, plain(10))]
