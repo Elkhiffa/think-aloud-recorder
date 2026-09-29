@@ -8,6 +8,7 @@
 & "$app\runtime\python.exe" "$app\agent_cli.py" claim "$session" --worker "本次会话标识" --seconds 1800
 & "$app\runtime\python.exe" "$app\agent_cli.py" reprocess "$session" --worker "本次会话标识" --reason "用户要求用画面节点重新分析并比较" --seconds 1800
 & "$app\runtime\python.exe" "$app\agent_cli.py" evidence "$session"
+& "$app\runtime\python.exe" "$app\agent_cli.py" quote-words "$session" --ref t000040 --offset 0 --limit 80
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-nodes "$session" --output "$work\visual-pass-01" --max-images 120
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-overview "$work\visual-pass-01\index.json"
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-plan "$work\visual-pass-01\index.json" --output "$work\evidence-plan-01" --total-views 24 --initial-views 12 --review-views 4
@@ -32,6 +33,24 @@
 `visual-nodes` 默认检查整场，支持 `--start`／`--end` 和 1–500 的图片预算（默认 120）。输出必须为资料库以外的新目录，不覆盖已有索引。`visual-read` 按页（最多 100 节点）或时间段读取，校验源 revision 后返回实际图片路径、原话引用与有限操作摘要。须实际用看图工具检查图片才能计入 `video_ranges`；逐帧机械检测不等于模型检查。配图不足时按需缩短范围补取，详见安装目录的 `docs/visual-nodes.md`。`visual-review INDEX` 可启动仅本机的检查页。
 
 `evidence` 提供原话稳定引用 `t000001`、说话人信息、素材路径、缺口与窗口状态。带时间范围时还提供输入引用 `i0000001`、已对齐的 start/end，以及原始 source_start/source_end。若 `inputs.truncated=true`，按更短时间段重读；不能把截断部分当没有输入。
+
+### 原话节选（0.6.10）
+
+转写服务可能把相隔很久的话放在同一片段。`evidence` 的时间筛选只选择与区间相交的整段，不裁剪原话；整段起点不能代表后半句话的时间。怀疑这种情况时，用 `quote-words SESSION --ref t000040 [--offset 0 --limit 80]` 按需读取指定片段的原始词记录，每页最多 200 词。返回素材 revision、原片段范围、原始零基词序号及 start/end/text、total 和 next_offset；分页不重新编号。不默认展开全场字词，也不因这项修复重跑机械检测。
+
+确认具体原话范围后，可引用：
+
+```json
+{"kind": "quote_words", "ref": "t000040", "word_range": [3, 9]}
+```
+
+`word_range` 是原始词数组的半开区间：从索引 3 起，包含 3–8，不含 9。由程序拼接所选原词并使用其时间包络，保留说话人；候选不填写或猜测文字、时间。选区应保留表达含义及必要上下文，不能以节选改变原意。词间空档只说明转写时间记录不连续，不证明听过原声、实际静音或没有操作；跨空档选取仍会保留整个时间包络，不自动切段。
+
+源字词缺失、文字无法对应原段、时间无效时，节选明确失败；可继续使用整段 `quote` 并放入能容纳完整原段的事件，或标明定位限制。不得手工改原转写或填造子片段引用。原始 `t` ID、素材 revision 和旧整段引用保持不变。
+
+含 `quote_words` 的结果需要 **0.6.10 及以上记录器** 读取、提交和重新导出。旧版拒绝该证据类型，不会将节选静默扩大为整段；尚未升级的另一台设备无法显示含节选的整份事件结果，原视频／逐字稿仍可回看。新版兼容旧结果。节选在回看中显示为“原话节选”，点击定位到该节选的起点。
+
+### 画面素材读取
 
 `frame` 使用本机 FFmpeg，输出最大宽度 1920 的画面，并返回时间与源 revision。输出必须是场次之外工作目录中的新 `.jpg`/`.png`。调用成功并不等于已检查画面：用图像查看工具读取后才能记入检查范围。若需要判断状态变化，要检查前后帧或视频片段，不把一帧当成持续过程。原声路径由 evidence 提供。
 
@@ -94,7 +113,7 @@
 - basis：`explicit`（有原话引用的明确表达）、`observed`（可见现象）、`inferred`（推测）。这是事件依据类型，不是量化置信度。
 - kind：`friction`、`positive`、`routine`、`question`。用 summary 区分事实与假设，分类本身不代表设计结论。
 - 事件以目标与过程组织，沿用 v1 的 title/context/summary，正常过程可用 `routine`；不新增私有 schema。问题从事件中归纳，在 summary/ideas 或单独对比报告中记录，并引用事件和源证据。没有原话不等于没有目标；画面推测目标时用 `inferred`，不要因存在无关原话就标成 `explicit`。
-- 原话和输入只填引用，不手工复制文本或调整时间；发布时程序从当前素材展开，防止引用漂移。参考 quote.speaker_id 保留其他讲述者的身份。
+- 原话和输入只填引用；原话节选另带上述 `word_range`。不手工复制文本或调整时间；发布时程序从当前素材展开，防止引用漂移。参考原话的 speaker_id 保留其他讲述者的身份。
 - coverage.transcript / inputs 为 `full`、`partial` 或 `none`，只描述本轮实际检查范围。无有效操作时记 `none` 并写限制；缺口不等于没有操作。
 - events 最多 300，每事件证据最多 30；ideas 最多 100；questions 最多 30。多数场次应远少于上限，无充分依据可返回空列表。
 - idea/question 的 event_id 可为 null，表示整场线索。问题无需答案即可完成。

@@ -135,7 +135,7 @@ def main(argv=None):
     visual_review = commands.add_parser('visual-review', help='仅在本机打开候选检查页；Ctrl+C 结束')
     visual_review.add_argument('index')
     visual_review.add_argument('--port', type=int, default=0)
-    for name in ('publish', 'status', 'evidence', 'claim', 'reprocess', 'renew', 'fail', 'validate', 'submit', 'frame'):
+    for name in ('publish', 'status', 'evidence', 'quote-words', 'claim', 'reprocess', 'renew', 'fail', 'validate', 'submit', 'frame'):
         command = commands.add_parser(name)
         command.add_argument('session')
         if name in ('renew', 'fail', 'submit'):
@@ -151,6 +151,10 @@ def main(argv=None):
         if name == 'evidence':
             command.add_argument('--start', type=float)
             command.add_argument('--end', type=float)
+        if name == 'quote-words':
+            command.add_argument('--ref', required=True, help='指定一条原话引用，如 t000040；保留原始词序号')
+            command.add_argument('--offset', type=int, default=0)
+            command.add_argument('--limit', type=int, default=80, help='每页词数，1–200；默认 80')
         if name == 'frame':
             command.add_argument('--at', type=float, required=True)
             command.add_argument('--output', required=True)
@@ -205,6 +209,8 @@ def main(argv=None):
             value = protocol.preprocessing_status(args.session)
         elif name == 'evidence':
             value = protocol.evidence(args.session, args.start, args.end)
+        elif name == 'quote-words':
+            value = protocol.quote_words(args.session, args.ref, args.offset, args.limit)
         elif name == 'claim':
             value = protocol.claim(args.session, args.worker, args.seconds)
         elif name == 'reprocess':

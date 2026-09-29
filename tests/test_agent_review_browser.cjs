@@ -2,13 +2,16 @@
 // Production review assets, real Edge/media, synthetic external-agent results.
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),http=require('node:http');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
-const root=path.resolve(__dirname,'..'),read=name=>fs.readFileSync(path.join(root,name),'utf8'),out=path.join(root,'work','agent-integration');
+const root=path.resolve(process.env.REVIEW_ASSET_ROOT||path.join(__dirname,'..')),read=name=>fs.readFileSync(path.join(root,name),'utf8'),out=path.resolve(process.env.REVIEW_TEST_OUTPUT||path.join(__dirname,'..','work','agent-integration'));
 fs.mkdirSync(out,{recursive:true});
 const result={version:1,session_id:'synthetic-agent',revision:'fixture',summary:'仅检查了合成按钮的状态变化。',coverage:{video_ranges:[{start:2,end:4}],transcript:'full',inputs:'none',limitations:['合成数据，无真实游戏结论。']},events:[{id:'e1',start:2,end:4,title:'按钮状态难以判断',summary:'记录者说不知道是否成功。<img src=x onerror=alert(1)>',basis:'explicit',kind:'friction',context:'目标需核对。',evidence:[{kind:'quote',ref:'t000001',start:2,end:4,text:'我不知道这个按钮的状态。'},{kind:'video',start:3,end:3,text:'合成按钮保持在原处。'}]}],questions:[{id:'q1',event_id:'e1',question:'后来怎样确认？',reason:'片段尚未说明。'}],ideas:[{id:'h1',event_id:'e1',idea:'比较状态提示的辨识度。',reason:'以原话为线索，待进一步验证。'}]};
 const ready={state:'complete',label:'已预处理 · 1 个事件',events:1,questions:1,ideas:1,result};
+// A single raw segment with distant phrases; only the later words support this event.
+const excerptReady=structuredClone(ready);
+Object.assign(excerptReady.result.events[0],{start:8,end:9,evidence:[{kind:'quote_words',ref:'t000001',word_range:[3,6],start:8.2,end:8.8,text:'这是后半句。<img src=x>',speaker_id:0}]});
 const data={id:'synthetic-agent',game:'合成接口验证',title:'合成接口验证',test:true,desktop:true,video:'/demo.mp4',transcription:{state:'ready'},segments:[{start:2,end:4,text:'我不知道这个按钮的状态。'}],inputs:{state:'disabled',intervals:[],gaps:[],duration:12},preprocessing:{state:'none'}};
-function render(url){const d=structuredClone(data);if(url.includes('ready'))d.preprocessing=ready;if(url.includes('portable'))d.desktop=false;const vars={TITLE:d.title,DATA:JSON.stringify(d).replaceAll('<','\\u003c'),CSS:read('ui/review.css'),JS:read('ui/review.js'),PLYR_CSS:read('ui/vendor/plyr/plyr.css'),PLYR_JS:read('ui/vendor/plyr/plyr.min.js'),PLYR_SVG:read('ui/vendor/plyr/plyr.svg'),LICENSE:'Synthetic test'};return read('player.html').replace(/%%([A-Z_]+)%%/g,(_,k)=>vars[k]);}
-const media=fs.readFileSync(path.join(root,'docs/prototypes/input-review/demo.mp4'));
+function render(url){const d=structuredClone(data);if(url.includes('ready'))d.preprocessing=ready;if(url.includes('words'))d.preprocessing=excerptReady;if(url.includes('portable'))d.desktop=false;const vars={TITLE:d.title,DATA:JSON.stringify(d).replaceAll('<','\\u003c'),CSS:read('ui/review.css'),JS:read('ui/review.js'),PLYR_CSS:read('ui/vendor/plyr/plyr.css'),PLYR_JS:read('ui/vendor/plyr/plyr.min.js'),PLYR_SVG:read('ui/vendor/plyr/plyr.svg'),LICENSE:'Synthetic test'};return read('player.html').replace(/%%([A-Z_]+)%%/g,(_,k)=>vars[k]);}
+const media=fs.readFileSync(path.join(__dirname,'..','docs/prototypes/input-review/demo.mp4'));
 const server=http.createServer((req,res)=>{if(req.url==='/demo.mp4'){res.setHeader('Content-Type','video/mp4');res.setHeader('Accept-Ranges','bytes');const range=/^bytes=(\d+)-(\d*)$/.exec(req.headers.range||'');if(range){const start=+range[1],end=Math.min(range[2]?+range[2]:media.length-1,media.length-1);res.writeHead(206,{'Content-Range':`bytes ${start}-${end}/${media.length}`,'Content-Length':end-start+1});res.end(media.subarray(start,end+1));}else res.end(media);return;}res.setHeader('Content-Type','text/html; charset=utf-8');res.end(render(req.url));});
 let browser;const report={scope:'Synthetic local protocol UI; no real agent inference claim.',checks:[],errors:[]};
 async function main(){
@@ -27,6 +30,30 @@ async function main(){
  await check('failure leaves both original tabs available',async()=>{await page.evaluate(()=>window.__snapshot.preprocessing={state:'failed',label:'预处理未完成',reason:'合成失败'});await page.waitForFunction(()=>document.querySelector('#preprocessingNotice').textContent.includes('合成失败'));await page.locator('#inputTab').click();assert.equal(await page.locator('#inputTimelinePanel').isVisible(),true);await page.locator('#transcriptTab').click();assert.equal(await page.locator('#lines').isVisible(),true);});
  await check('narrow and dark view contains all content within the scrollable event panel',async()=>{await page.evaluate(value=>window.__snapshot.preprocessing=value,ready);await page.waitForFunction(()=>!document.querySelector('#eventsTab').hidden);await page.setViewportSize({width:560,height:700});await page.locator('#themeButton').click();await page.locator('#eventsTab').click();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);assert.ok(await page.locator('#experienceEvents').evaluate(el=>el.clientHeight>50&&el.scrollHeight>el.clientHeight));await page.locator('.event-evidence summary').click();await page.screenshot({path:path.join(out,'events-dark-560.png')});});
  await check('exported review shows results without a native bridge',async()=>{await page.setViewportSize({width:1440,height:900});await page.goto(origin+'/ready-portable');await page.locator('#eventsTab').click();assert.equal(await page.locator('.experience-event').count(),1);await page.locator('.event-title').click();});
+ await check('word quote arrival preserves original transcript and seeks only to excerpt start',async()=>{
+   await page.goto(origin);await page.waitForFunction(()=>document.querySelector('video').readyState>=2);
+   await page.locator('video').evaluate(v=>{v.currentTime=1;window.__video=v;});
+   await page.evaluate(value=>window.__snapshot.preprocessing=value,excerptReady);
+   await page.waitForFunction(()=>!document.querySelector('#eventsTab').hidden);
+   assert.equal(await page.evaluate(()=>window.__video===document.querySelector('video')),true);
+   assert.equal(await page.locator('video').evaluate(v=>v.currentTime),1);
+   await page.locator('#eventsTab').click();await page.locator('.event-evidence summary').click();
+   const quote=page.locator('.event-evidence-row .event-jump');assert.match(await quote.textContent(),/原话节选/);
+   assert.equal(await page.locator('.event-quote').textContent(),'这是后半句。<img src=x>');
+   assert.equal(await page.locator('.event-evidence-row img').count(),0);
+   await quote.click();assert.ok(Math.abs(await page.locator('video').evaluate(v=>v.currentTime)-8.2)<.00001);
+   assert.equal(await page.locator('video').evaluate(v=>v.paused),true);
+   await page.screenshot({path:path.join(out,'word-quote-1440.png')});
+   await page.locator('#transcriptTab').click();assert.equal(await page.locator('.line').count(),1);
+   assert.match(await page.locator('#lines').textContent(),/我不知道这个按钮的状态/);
+ });
+ await check('exported word quotes retain label and exact local seek',async()=>{
+   await page.goto(origin+'/words-portable');await page.waitForFunction(()=>document.querySelector('video').readyState>=2);
+   await page.locator('#eventsTab').click();await page.locator('.event-evidence summary').click();
+   const quote=page.locator('.event-evidence-row .event-jump');assert.match(await quote.textContent(),/原话节选/);
+   await quote.click();assert.ok(Math.abs(await page.locator('video').evaluate(v=>v.currentTime)-8.2)<.00001);
+   assert.equal(await page.locator('video').evaluate(v=>v.paused),true);
+ });
  assert.deepEqual(report.errors,[]);report.pass=true;
 }
 main().catch(error=>{report.error=String(error.stack||error);process.exitCode=1;}).finally(async()=>{fs.writeFileSync(path.join(out,'browser-acceptance.json'),JSON.stringify(report,null,2));if(browser)await browser.close();server.close();console.log(JSON.stringify(report));});
