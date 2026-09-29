@@ -389,7 +389,11 @@ class AgentProtocolTests(unittest.TestCase):
         self.assertEqual(len(value['sessions']),1)
 
     def test_cli_works_with_spaces_unicode_and_json_only_output(self):
-        run=subprocess.run([sys.executable,str(Path(agent_cli.__file__)),'evidence',str(self.folder),'--start','2','--end','4'],
+        cli=Path(agent_cli.__file__).resolve()
+        bootstrap=(f'import runpy,sys;sys.path.insert(0,{str(cli.parent)!r});'
+                   f'sys.argv=[{str(cli)!r},*sys.argv[1:]];'
+                   f'runpy.run_path({str(cli)!r},run_name="__main__")')
+        run=subprocess.run([sys.executable,'-I','-B','-c',bootstrap,'evidence',str(self.folder),'--start','2','--end','4'],
                            capture_output=True,encoding='utf-8',creationflags=recorder.HIDDEN)
         self.assertEqual(run.returncode,0,run.stderr+run.stdout)
         self.assertEqual(json.loads(run.stdout)['data']['session_id'],'fixture')

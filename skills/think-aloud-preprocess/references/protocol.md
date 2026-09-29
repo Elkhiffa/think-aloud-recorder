@@ -8,6 +8,7 @@
 & "$app\runtime\python.exe" "$app\agent_cli.py" claim "$session" --worker "本次会话标识" --seconds 1800
 & "$app\runtime\python.exe" "$app\agent_cli.py" reprocess "$session" --worker "本次会话标识" --reason "用户要求用画面节点重新分析并比较" --seconds 1800
 & "$app\runtime\python.exe" "$app\agent_cli.py" evidence "$session"
+& "$app\runtime\python.exe" "$app\agent_cli.py" quote-words "$session" --ref t000040 --offset 0 --limit 80
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-nodes "$session" --output "$work\visual-pass-01" --max-images 120
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-overview "$work\visual-pass-01\index.json"
 & "$app\runtime\python.exe" "$app\agent_cli.py" visual-plan "$work\visual-pass-01\index.json" --output "$work\evidence-plan-01" --total-views 24 --initial-views 12 --review-views 4
@@ -32,6 +33,34 @@
 `visual-nodes` 默认检查整场，支持 `--start`／`--end` 和 1–500 的图片预算（默认 120）。输出必须为资料库以外的新目录，不覆盖已有索引。`visual-read` 按页（最多 100 节点）或时间段读取，校验源 revision 后返回实际图片路径、原话引用与有限操作摘要。须实际用看图工具检查图片才能计入 `video_ranges`；逐帧机械检测不等于模型检查。配图不足时按需缩短范围补取，详见安装目录的 `docs/visual-nodes.md`。`visual-review INDEX` 可启动仅本机的检查页。
 
 `evidence` 提供原话稳定引用 `t000001`、说话人信息、素材路径、缺口与窗口状态。带时间范围时还提供输入引用 `i0000001`、已对齐的 start/end，以及原始 source_start/source_end。若 `inputs.truncated=true`，按更短时间段重读；不能把截断部分当没有输入。
+
+### 操作与画面的时间余量
+
+从 `inputs.alignment` 读取有效偏移的 `source`、`offset_seconds` 和 `uncertainty_seconds`。接口已对输入的 start/end 应用一次有效偏移，勿再次相加；视频取点使用回执的实际 `time`，不能以请求的 `requested_time` 或显示的小数位代替时间精度。
+
+`source=measured` 时，`uncertainty_seconds` 是自动对齐中时钟查询与帧时序的工程误差估计，不是统计置信区间或端到端最坏误差上界。它不证明设备传输、采样、游戏处理、画面采集及长录制漂移的总误差已经被覆盖。`source=manual` 时有效偏移由手动值完整覆盖，但接口可能仍返回旧 measured 的 uncertainty；该值不代表手动校准的准确度。手动、未校准、缺少或无效 uncertainty 时，不套用 measured 的数值作判断，也不把未知当成零误差。
+
+记录实际帧时间 `f`、相关输入引用及其已对齐边界 `b`、差值 `f-b`、alignment 来源和估计值 `U`。对于有效的 measured 估计，`abs(f-b) <= U` 时标记“处于当前同步估计范围内，严格先后未确认”；`abs(f-b) > U` 只说明名义时间余量超过该估计，仍须结合相邻画面、输入采样限制和可见状态。若需要判断某帧在一个动作结束之后、下个动作开始之前，分别核对两个边界。严格的物理先后需要额外验证输入与画面的总误差范围；即使时序成立，也不单独证明游戏收到操作或该操作导致了画面变化。
+
+优先复用落在待核对状态内部、远离相关输入边界的已有候选。没有合适候选时，保留可见事实和时序限制，或为具体缺口按同一取材账本补证；不要为制造安全余量统一移动所有取点或修改原始同步偏移。这项检查只针对输入与视频，不把输入时钟估计套用到语音转写时间。
+
+### 原话节选（0.6.10）
+
+转写服务可能把相隔很久的话放在同一片段。`evidence` 的时间筛选只选择与区间相交的整段，不裁剪原话；整段起点不能代表后半句话的时间。怀疑这种情况时，用 `quote-words SESSION --ref t000040 [--offset 0 --limit 80]` 按需读取指定片段的原始词记录，每页最多 200 词。返回素材 revision、原片段范围、原始零基词序号及 start/end/text、total 和 next_offset；分页不重新编号。不默认展开全场字词，也不因这项修复重跑机械检测。
+
+确认具体原话范围后，可引用：
+
+```json
+{"kind": "quote_words", "ref": "t000040", "word_range": [3, 9]}
+```
+
+`word_range` 是原始词数组的半开区间：从索引 3 起，包含 3–8，不含 9。由程序拼接所选原词并使用其时间包络，保留说话人；候选不填写或猜测文字、时间。选区应保留表达含义及必要上下文，不能以节选改变原意。词间空档只说明转写时间记录不连续，不证明听过原声、实际静音或没有操作；跨空档选取仍会保留整个时间包络，不自动切段。
+
+源字词缺失、文字无法对应原段、时间无效时，节选明确失败；可继续使用整段 `quote` 并放入能容纳完整原段的事件，或标明定位限制。不得手工改原转写或填造子片段引用。原始 `t` ID、素材 revision 和旧整段引用保持不变。
+
+含 `quote_words` 的结果需要 **0.6.10 及以上记录器** 读取、提交和重新导出。旧版拒绝该证据类型，不会将节选静默扩大为整段；尚未升级的另一台设备无法显示含节选的整份事件结果，原视频／逐字稿仍可回看。新版兼容旧结果。节选在回看中显示为“原话节选”，点击定位到该节选的起点。
+
+### 画面素材读取
 
 `frame` 使用本机 FFmpeg，输出最大宽度 1920 的画面，并返回时间与源 revision。输出必须是场次之外工作目录中的新 `.jpg`/`.png`。调用成功并不等于已检查画面：用图像查看工具读取后才能记入检查范围。若需要判断状态变化，要检查前后帧或视频片段，不把一帧当成持续过程。原声路径由 evidence 提供。
 
@@ -94,7 +123,7 @@
 - basis：`explicit`（有原话引用的明确表达）、`observed`（可见现象）、`inferred`（推测）。这是事件依据类型，不是量化置信度。
 - kind：`friction`、`positive`、`routine`、`question`。用 summary 区分事实与假设，分类本身不代表设计结论。
 - 事件以目标与过程组织，沿用 v1 的 title/context/summary，正常过程可用 `routine`；不新增私有 schema。问题从事件中归纳，在 summary/ideas 或单独对比报告中记录，并引用事件和源证据。没有原话不等于没有目标；画面推测目标时用 `inferred`，不要因存在无关原话就标成 `explicit`。
-- 原话和输入只填引用，不手工复制文本或调整时间；发布时程序从当前素材展开，防止引用漂移。参考 quote.speaker_id 保留其他讲述者的身份。
+- 原话和输入只填引用；原话节选另带上述 `word_range`。不手工复制文本或调整时间；发布时程序从当前素材展开，防止引用漂移。参考原话的 speaker_id 保留其他讲述者的身份。
 - coverage.transcript / inputs 为 `full`、`partial` 或 `none`，只描述本轮实际检查范围。无有效操作时记 `none` 并写限制；缺口不等于没有操作。
 - events 最多 300，每事件证据最多 30；ideas 最多 100；questions 最多 30。多数场次应远少于上限，无充分依据可返回空列表。
 - idea/question 的 event_id 可为 null，表示整场线索。问题无需答案即可完成。

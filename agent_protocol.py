@@ -129,9 +129,13 @@ def _identity(folder, meta=None):
     return meta, material, revision, complete
 
 
-def _transcript(folder, duration):
+def _transcript_rows(folder):
     raw = _load(folder, '录像.whisper.json', 32 * 1024 * 1024)
-    rows = _rows(raw.get('segments'), 100000, '逐字稿')
+    return _rows(raw.get('segments'), 100000, '逐字稿')
+
+
+def _transcript(folder, duration):
+    rows = _transcript_rows(folder)
     from speaker_roles import valid_speaker
     result = []
     for i, row in enumerate(rows):
@@ -142,6 +146,61 @@ def _transcript(folder, duration):
             item['speaker_id'] = row['speaker_id']
         result.append(item)
     return result
+
+
+def _quote_word_source(rows, ref, duration):
+    """Validate one original segment without filtering or renumbering its words."""
+    if not isinstance(ref, str) or not re.fullmatch(r't[0-9]{6}', ref):
+        raise ValueError('原话引用不存在。')
+    index = int(ref[1:]) - 1
+    if not 0 <= index < len(rows):
+        raise ValueError('原话引用不存在。')
+    row = rows[index]
+    parent = dict(**_span(row, duration), text=row.get('text'))
+    _text(parent['text'], 20000, '原话', empty=True)
+    from speaker_roles import valid_speaker
+    if valid_speaker(row.get('speaker_id')):
+        parent['speaker_id'] = row['speaker_id']
+    raw_words = _rows(row.get('words'), 20000, '原话词级时间戳')
+    if not raw_words:
+        raise ValueError('原话没有可用的词级时间戳，请引用整段原话。')
+    words = []
+    for i, word in enumerate(raw_words):
+        if not isinstance(word, dict):
+            raise ValueError('原话词级时间戳格式无效，请引用整段原话。')
+        start, end = word.get('start'), word.get('end')
+        # Qwen accepts a word at most 50 ms outside its parent sentence. Keep
+        # those source times exactly, but never manufacture or clip a timestamp.
+        if not (_number(start) and _number(end) and 0 <= start <= end <= duration
+                and start >= parent['start'] - .05 - 1e-9
+                and end <= parent['end'] + .05 + 1e-9
+                and (not words or start >= words[-1]['start'])):
+            raise ValueError('原话词级时间戳无效或超出范围，请引用整段原话。')
+        token = word.get('word')
+        _text(token, 20000, '原话词文本')
+        words.append(dict(index=i, start=start, end=end, text=token))
+    normalize = lambda text: ''.join(text.split())
+    if normalize(''.join(word['text'] for word in words)) != normalize(parent['text']):
+        raise ValueError('原话词文本与整段原话不一致，不能确定节选，请引用整段原话。')
+    return parent, words
+
+
+def quote_words(folder, ref, offset=0, limit=80):
+    """Read bounded original words for one ref; default evidence stays compact."""
+    if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 200:
+        raise ValueError('词级读取 offset 必须为非负整数，limit 必须为 1–200 的整数。')
+    meta, material, revision, _ = _ready(folder)
+    parent, words = _quote_word_source(_transcript_rows(folder), ref, material['duration'])
+    if offset > len(words):
+        raise ValueError('词级读取 offset 超出当前原话的词数。')
+    stop = min(offset + limit, len(words))
+    value = dict(version=VERSION, session_id=meta['id'], revision=revision,
+                 ref=ref, timebase='video_seconds', parent=parent, total=len(words),
+                 offset=offset, next_offset=stop if stop < len(words) else None,
+                 words=words[offset:stop])
+    if _ready(folder)[2] != revision:
+        raise ValueError('读取期间素材已更新，请重试。')
+    return value
 
 
 def publish_ready(folder):
@@ -279,6 +338,7 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
             raise ValueError('请说明逐字稿和操作记录的检查范围。')
     limitations = [_text(s, 1000, '资料限制') for s in _rows(coverage.get('limitations'), 30, '资料限制')]
     transcript = {s['id']: s for s in _transcript(folder, duration)}
+    word_rows, word_sources = None, {}
     input_rows = None
     events, identifiers, expanded_bytes = [], set(), 0
     for row in _rows(value.get('events'), 300, '体验事件'):
@@ -296,13 +356,30 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
             if not isinstance(item, dict):
                 raise ValueError('证据格式无效。')
             kind = item.get('kind')
-            if kind == 'quote':
+            if kind in ('quote', 'quote_words'):
                 quote = transcript.get(item.get('ref')) if isinstance(item.get('ref'), str) else None
                 if quote is None or coverage['transcript'] == 'none':
                     raise ValueError('原话引用不存在或未检查逐字稿。')
                 ref = dict(kind=kind, ref=quote['id'], start=quote['start'], end=quote['end'], text=quote['text'])
                 if 'speaker_id' in quote:
                     ref['speaker_id'] = quote['speaker_id']
+                if kind == 'quote_words':
+                    selected = item.get('word_range')
+                    if (not isinstance(selected, list) or len(selected) != 2 or
+                            any(type(index) is not int for index in selected)):
+                        raise ValueError('原话节选 word_range 必须是两个原始词序号组成的列表。')
+                    if quote['id'] not in word_sources:
+                        if word_rows is None:
+                            word_rows = _transcript_rows(folder)
+                        word_sources[quote['id']] = _quote_word_source(word_rows, quote['id'], duration)[1]
+                    words = word_sources[quote['id']]
+                    first, stop = selected
+                    if not 0 <= first < stop <= len(words):
+                        raise ValueError('原话节选 word_range 超出原始词范围或为空。')
+                    selection = words[first:stop]
+                    ref.update(word_range=[first, stop], start=min(word['start'] for word in selection),
+                               end=max(word['end'] for word in selection),
+                               text=''.join(word['text'] for word in selection))
             elif kind == 'video':
                 ref = dict(kind=kind, **_span(item, duration),
                            text=_text(item.get('observation', item.get('text')), 2000, '画面事实'))
@@ -329,7 +406,7 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
             refs.append(ref)
         if not refs:
             raise ValueError('每个体验事件至少需要一条可回溯证据。')
-        if row['basis'] == 'explicit' and not any(ref['kind'] == 'quote' for ref in refs):
+        if row['basis'] == 'explicit' and not any(ref['kind'] in ('quote', 'quote_words') for ref in refs):
             raise ValueError('明确表达的事件必须引用原话。')
         events.append(dict(id=ident, **span, title=_text(row.get('title'), 160, '事件标题'),
                            summary=_text(row.get('summary'), 3000, '事件描述'),
