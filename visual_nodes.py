@@ -1,7 +1,7 @@
 """Local, read-only visual evidence preparation. No model, upload, or session writes.
 
 The index describes pixel changes, not UI states, player intent or problems.
-Two sequential decode passes bound memory: detection, then budgeted screenshots.
+A full detection pass followed by sequential or targeted screenshot decoding.
 """
 from collections import Counter
 from contextlib import closing, contextmanager
@@ -105,6 +105,9 @@ def _decode(path, start, end, stats):
             stats['decoded_frames'] = stats.get('decoded_frames', 0) + 1
             return at, frame
         for frame in container.decode(stream):
+            # Includes preroll and lookahead discarded before yielding a frame.
+            # Output-frame counts alone understate the cost of targeted seeks.
+            stats['decoder_frames'] = stats.get('decoder_frames', 0) + 1
             if frame.pts is None or frame.time_base is None:
                 stats['missing_timestamps'] = stats.get('missing_timestamps', 0) + 1
                 continue
@@ -222,7 +225,59 @@ def _context(folder, meta, duration, nodes):
                 inputs={k: inputs[k] for k in ('state', 'error', 'alignment', 'timebase') if k in inputs})
 
 
-def extract(folder, output, *, start=0, end=None, max_images=120, config=None, progress=None):
+def _image_frames(video, start, end, chosen, stats, mode):
+    """Provide image candidates without changing their detection-pass timestamps."""
+    if not chosen:
+        return
+    if mode == 'sequential':
+        stats['decode_requests'] = 1
+        yield from _decode(video, start, end, stats)
+        return
+    pending = set(chosen)
+    for wanted in sorted(chosen):
+        local = {}
+        stats['decode_requests'] = stats.get('decode_requests', 0) + 1
+        try:
+            with closing(_decode(video, wanted, wanted, local)) as frames:
+                result = next(frames, None)
+                if result is None or result[0] != wanted:
+                    # Container seeking is approximate (including B-frame
+                    # reordering). Recover once from the original range, never
+                    # retry each target or substitute a neighbouring frame.
+                    stats['sequential_recovery'] = dict(
+                        reason='exact_timestamp_unavailable', requested_time=wanted,
+                        returned_time=result[0] if result is not None else None)
+                    break
+                pending.remove(wanted)
+                yield result
+        finally:
+            for key in ('decoded_frames', 'decoder_frames', 'missing_timestamps'):
+                stats[key] = stats.get(key, 0) + local.get(key, 0)
+            if 'last_frame' in local:
+                stats['last_frame'] = local['last_frame']
+    if not pending:
+        return
+    local = {}
+    stats['decode_requests'] += 1
+    try:
+        with closing(_decode(video, start, end, local)) as frames:
+            for at, picture in frames:
+                if at not in pending:
+                    continue
+                pending.remove(at)
+                yield at, picture
+                if not pending:
+                    break
+    finally:
+        for key in ('decoded_frames', 'decoder_frames', 'missing_timestamps'):
+            stats[key] = stats.get(key, 0) + local.get(key, 0)
+        if 'last_frame' in local:
+            stats['last_frame'] = local['last_frame']
+        stats['sequential_recovery']['remaining_targets'] = len(pending)
+
+
+def extract(folder, output, *, start=0, end=None, max_images=120, config=None, progress=None,
+            image_mode='sequential'):
     """Create a fresh evidence directory outside the source library, or fail.
 
     Partial files remain diagnostic artifacts after a failure, with status.json
@@ -244,6 +299,8 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
         raise ValueError('提取结束时间必须晚于开始时间。')
     if type(max_images) is not int or not 1 <= max_images <= 500:
         raise ValueError('图片预算应为 1–500。')
+    if image_mode not in ('sequential', 'seek'):
+        raise ValueError('配图模式应为 sequential 或 seek。')
     library = folder.parent.parent if folder.parent.name == '场次' else folder
     if output.is_relative_to(library):
         raise ValueError('候选证据请保存到资料库以外的新工作目录。')
@@ -291,7 +348,8 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
         if progress:
             with timings.measure('progress_callback'):
                 progress(dict(phase='images', selected=len(chosen), nodes=len(nodes)))
-        with closing(_timed_frames(_decode(video, start, end, image_stats), timings, 'image_decode')) as frames:
+        with closing(_timed_frames(_image_frames(video, start, end, chosen, image_stats, image_mode),
+                                   timings, 'image_decode')) as frames:
             for at, picture in frames:
                 if at not in chosen:
                     continue
@@ -379,9 +437,13 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
                        timing=timings.snapshot(),
                        timing_scope='extract entry through saved index/review; excludes metrics/status writes and CLI response',
                        timing_basis='single-task caller wall time; not CPU time; parallel task times must not be added as wall time',
-                       detector_config=index['detector_config'], max_images=max_images,
+                       detector_config=index['detector_config'], max_images=max_images, image_mode=image_mode,
+                       image_sequential_recovery=image_stats.get('sequential_recovery'),
                        counts=dict(detect_frames=stats.get('decoded_frames', 0),
+                                   detect_decoder_frames=stats.get('decoder_frames', 0),
                                    image_pass_frames=image_stats.get('decoded_frames', 0),
+                                   image_decoder_frames=image_stats.get('decoder_frames', 0),
+                                   image_decode_requests=image_stats.get('decode_requests', 0),
                                    image_pass_last_frame=image_stats.get('last_frame'),
                                    candidate_nodes=len(nodes),
                                    weak_observations=index['coverage']['weak_motion_observations_without_images'],
@@ -399,13 +461,19 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
         _dump(output / 'status.json', dict(state='complete', session_id=meta['id'], revision=revision))
         return dict(index=str(output / 'index.json'), review=str(output / 'review.html'),
                     metrics=str(output / 'metrics.json'),
+                    image_mode=image_mode, image_sequential_recovery=image_stats.get('sequential_recovery'),
                     coverage=index['coverage'], elapsed_seconds=index['elapsed_seconds'])
     except Exception as error:
         try:
             if not (output / 'metrics.json').exists():
                 _dump(output / 'metrics.json', dict(version=1, kind='visual-preprocess-metrics', state='failed',
-                      timing=timings.snapshot(), counts=dict(detect_frames=stats.get('decoded_frames', 0),
-                      image_pass_frames=image_stats.get('decoded_frames', 0)),
+                      timing=timings.snapshot(), image_mode=image_mode,
+                      image_sequential_recovery=image_stats.get('sequential_recovery'),
+                      counts=dict(detect_frames=stats.get('decoded_frames', 0),
+                      detect_decoder_frames=stats.get('decoder_frames', 0),
+                      image_pass_frames=image_stats.get('decoded_frames', 0),
+                      image_decoder_frames=image_stats.get('decoder_frames', 0),
+                      image_decode_requests=image_stats.get('decode_requests', 0)),
                       timing_scope='partial attempt through failure; incomplete counts are not final coverage'))
         except Exception:
             pass  # Optional diagnostics must not mask the original failure.
@@ -477,7 +545,7 @@ def _candidate_rows(index,start,end):
                 yield dict(id=f"{node['id']}/w{i+1}",parent=node['id'],level='weak',row=row)
 
 
-def read_candidates(path, *, start, end, offset=0, limit=24):
+def read_candidates(path, *, start, end, offset=0, limit=24, level='all', parent=None):
     """Compact interval navigation with a single bound across primary/weak rows."""
     timings=_Timings()
     path=Path(path).resolve()
@@ -489,21 +557,40 @@ def read_candidates(path, *, start, end, offset=0, limit=24):
         raise ValueError('候选区间须位于索引范围内。')
     if type(offset) is not int or offset<0 or type(limit) is not int or not 1<=limit<=60:
         raise ValueError('offset 需非负，limit 应为 1–60。')
-    records=sorted(_candidate_rows(index,start,end),key=lambda r:(r['row']['start'],r['row']['end'],r['id']))
+    if level not in ('all','primary','weak'):
+        raise ValueError('level 应为 all、primary 或 weak。')
+    if parent is not None and (level!='weak' or not isinstance(parent,str)
+                               or not any(n['id']==parent for n in index['nodes'])):
+        raise ValueError('parent 需为索引内的主要候选 ID，且仅用于 level=weak。')
+    records=list(_candidate_rows(index,start,end))
+    matching_by_level={kind:sum(r['level']==kind for r in records) for kind in ('primary','weak')}
+    weak_counts=Counter(r['parent'] for r in records if r['level']=='weak')
+    records=sorted((r for r in records if (level=='all' or r['level']==level)
+                    and (parent is None or r['parent']==parent)),
+                   key=lambda r:(r['row']['start'],r['row']['end'],r['id']))
     rows=[]
     for record in records[offset:offset+limit]:
         row=record['row']
         rows.append([record['id'],record['level'],row['kind'],row['start'],row['end'],
                      [f['time'] for f in row['frames'] if start<=f['time']<=end],
-                     sum(bool(f.get('path')) for f in row['frames'] if start<=f['time']<=end)])
+                     sum(bool(f.get('path')) for f in row['frames'] if start<=f['time']<=end),
+                     record['parent'],weak_counts.get(record['id'],0)])
+    detector=index['stats'].get('detector',{})
+    omitted=detector.get('omitted_time_range')
     value=dict(version=1,kind='visual-interval-candidates',index=str(path),
                session_id=index['session_id'],revision=index['revision'],range=dict(start=start,end=end),
-               total_matching=len(records),offset=offset,
+               total_matching=len(records),offset=offset,level=level,parent=parent,
+               matching_by_level=matching_by_level,
                next_offset=offset+limit if offset+limit<len(records) else None,
-               columns=['id','level','kind','start','end','frame_times_in_range','pictured_in_range'],rows=rows,
+               columns=['id','level','kind','start','end','frame_times_in_range','pictured_in_range',
+                        'parent_id','retained_weak_in_range'],rows=rows,
                node_index_complete=index['coverage'].get('node_index_complete',False),
+               omissions=dict(major_nodes=detector.get('omitted_nodes',0),
+                              weak_observations=detector.get('omitted_weak_motion_observations',0),
+                              time_range=omitted,
+                              overlaps_query=bool(omitted and omitted[1]>=start and omitted[0]<=end)),
                actual_image_inspection=False,
-               note='仅像素候选导航；未展开原话、输入、图片或整段弱变化。用同场 visual-packet 预算取图。')
+               note='仅像素候选导航；层级筛选不删除原始证据。matching_by_level 是 parent 筛选前的整个查询区间数量；weak 数仅计保留项。省略范围是全索引包络，不表示逐秒缺失。用同场 visual-packet 预算取图。')
     characters=len(json.dumps(value,ensure_ascii=False,allow_nan=False))
     value['read_metrics']=dict(index_bytes=index_bytes,returned_rows=len(rows),
                                data_characters_without_read_metrics=characters,returned_unique_image_paths=0)

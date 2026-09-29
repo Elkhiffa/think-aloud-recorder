@@ -42,19 +42,21 @@ class VisualNodesTests(unittest.TestCase):
     def write(self, name, value):
         (self.folder / name).write_text(json.dumps(value, ensure_ascii=False), encoding='utf-8')
 
-    def video(self):
+    def video(self, *, b_frames=0, pts_offset=0, gop_size=None):
         with av.open(str(self.folder / '录像.mp4'), 'w') as output:
             stream = output.add_stream('mpeg4', rate=30)
             stream.width, stream.height = 160, 90
             stream.pix_fmt = 'yuv420p'
-            stream.codec_context.max_b_frames = 0
+            stream.codec_context.max_b_frames = b_frames
+            if gop_size is not None:
+                stream.codec_context.gop_size = gop_size
             stream.codec_context.time_base = Fraction(1, 1000)
             for t in self.pts:
                 rgb = np.zeros((90, 160, 3), np.uint8)
                 if 600 <= t < 800:
                     rgb[25:65, 50:110] = 245
                 frame = av.VideoFrame.from_ndarray(rgb, format='rgb24')
-                frame.pts, frame.time_base = t, Fraction(1, 1000)
+                frame.pts, frame.time_base = t + pts_offset, Fraction(1, 1000)
                 for packet in stream.encode(frame): output.mux(packet)
             for packet in stream.encode(None): output.mux(packet)
 
@@ -136,6 +138,95 @@ class VisualNodesTests(unittest.TestCase):
             expected = frame.reformat(**options).to_ndarray()
             actual = reused.reformat(frame, **options).to_ndarray()
             np.testing.assert_array_equal(expected, actual)
+
+    def test_seek_images_match_sequential_for_vfr_b_frames_offset_and_boundaries(self):
+        self.video(b_frames=2, pts_offset=2000, gop_size=4)
+        with av.open(str(self.folder / '录像.mp4')) as video:
+            self.assertTrue(video.streams.video[0].codec_context.has_b_frames)
+            self.assertGreater(video.start_time, 0)
+        before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in self.folder.iterdir()}
+        # Full range exercises the final frame and GOP boundaries; a range
+        # between VFR frames must preserve the frame displayed across its start.
+        for start, end in ((0, 3), (.70, .80)):
+            indexes, metrics, images = {}, {}, {}
+            for mode in ('sequential', 'seek'):
+                output = self.root / f'{mode}-{start}'
+                result = visual.extract(self.folder, output, start=start, end=end,
+                                        image_mode=mode, max_images=120)
+                indexes[mode] = json.loads(Path(result['index']).read_text(encoding='utf-8'))
+                metrics[mode] = json.loads(Path(result['metrics']).read_text(encoding='utf-8'))
+                images[mode] = {p.name: p.read_bytes() for p in (output / 'images').iterdir()}
+            for field in ('nodes', 'stats', 'coverage', 'context', 'range', 'source', 'detector_config'):
+                self.assertEqual(indexes['sequential'][field], indexes['seek'][field], field)
+            self.assertEqual(images['sequential'], images['seek'])
+            counts = metrics['seek']['counts']
+            self.assertGreaterEqual(counts['image_decoder_frames'], counts['image_pass_frames'])
+            if start == 0:
+                self.assertGreater(counts['image_decoder_frames'], counts['image_pass_frames'])
+                recovery = metrics['seek']['image_sequential_recovery']
+                self.assertEqual(recovery['reason'], 'exact_timestamp_unavailable')
+                self.assertEqual(recovery['remaining_targets'], 0)
+            else:
+                self.assertIsNone(metrics['seek']['image_sequential_recovery'])
+                self.assertEqual(counts['image_decode_requests'], counts['selected_image_times'])
+        self.assertEqual(before, {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                                  for p in self.folder.iterdir()})
+
+    def test_seek_mismatch_recovers_once_and_never_approximates(self):
+        original_decode = visual._decode
+        calls = []
+        def mismatched(path, start, end, stats):
+            calls.append((start, end))
+            if start == end:
+                picture = av.VideoFrame.from_ndarray(np.zeros((90, 160, 3), np.uint8), format='rgb24')
+                yield start + .01, picture
+            else:
+                yield from original_decode(path, start, end, stats)
+        expected = visual.extract(self.folder, self.root / 'expected')
+        with patch.object(visual, '_decode', mismatched):
+            actual, index = self.extract(image_mode='seek')
+        self.assertEqual(index['nodes'], json.loads(Path(expected['index']).read_text(encoding='utf-8'))['nodes'])
+        self.assertEqual(actual['image_sequential_recovery']['remaining_targets'], 0)
+        self.assertEqual(sum(start != end for start, end in calls), 2)  # Detect + one recovery.
+        self.assertEqual(sum(start == end for start, end in calls), 1)
+
+    def test_seek_recovery_missing_target_fails_without_publishing(self):
+        original_decode = visual._decode
+        calls = []
+        def missing(path, start, end, stats):
+            calls.append((start, end))
+            if len(calls) == 1:
+                yield from original_decode(path, start, end, stats)
+        with patch.object(visual, '_decode', missing), patch.object(visual, '_jpeg') as jpeg:
+            with self.assertRaisesRegex(ValueError, '未能复现选中的时间戳'):
+                self.extract(image_mode='seek')
+        jpeg.assert_not_called()
+        self.assertFalse((self.out / 'index.json').exists())
+        self.assertEqual(json.loads((self.out / 'status.json').read_text(encoding='utf-8'))['state'], 'failed')
+        self.assertEqual(json.loads((self.out / 'metrics.json').read_text(encoding='utf-8'))['image_mode'], 'seek')
+        with self.assertRaisesRegex(ValueError, '配图模式'):
+            visual.extract(self.folder, self.root / 'invalid', image_mode='approximate')
+        self.assertFalse((self.root / 'invalid').exists())
+
+    def test_seek_early_close_finalizes_decoder_statistics(self):
+        closed = []
+        def decode(path, start, end, stats):
+            try:
+                stats['decoded_frames'] = 1
+                stats['decoder_frames'] = 2
+                yield start, object()
+            finally:
+                closed.append((start, end))
+                stats['decoder_frames'] += 1
+        stats = {}
+        with patch.object(visual, '_decode', decode):
+            frames = visual._image_frames('unused', 0, 10, {2.0}, stats, 'seek')
+            self.assertEqual(next(frames)[0], 2.0)
+            frames.close()
+        self.assertEqual(closed, [(2.0, 2.0)])
+        self.assertEqual(stats['decode_requests'], 1)
+        self.assertEqual(stats['decoded_frames'], 1)
+        self.assertEqual(stats['decoder_frames'], 3)
 
     def test_metrics_are_local_wall_times_and_machine_counts_not_semantic_coverage(self):
         value, index = self.extract(max_images=1, config=dict(max_nodes=2))

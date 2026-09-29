@@ -88,6 +88,8 @@ def main(argv=None):
     visual.add_argument('--start', type=float, default=0)
     visual.add_argument('--end', type=float)
     visual.add_argument('--max-images', type=int, default=120)
+    visual.add_argument('--image-mode', choices=('sequential','seek'), default='sequential',
+                        help='配图解码方式；seek 严格复现已选帧，检测仍逐帧进行')
     visual_read = commands.add_parser('visual-read', help='分页读取候选索引和图片路径')
     visual_read.add_argument('index')
     visual_read.add_argument('--start', type=float)
@@ -103,6 +105,8 @@ def main(argv=None):
     candidates.add_argument('--end',type=float,required=True)
     candidates.add_argument('--offset',type=int,default=0)
     candidates.add_argument('--limit',type=int,default=24)
+    candidates.add_argument('--level',choices=('all','primary','weak'),default='all')
+    candidates.add_argument('--parent',help='仅在 --level weak 时按主要候选 ID 展开')
     visual_plan = commands.add_parser('visual-plan', help='复用已有索引，分组并建立首轮、补图和复核共用的预算')
     visual_plan.add_argument('index')
     visual_plan.add_argument('--output', required=True)
@@ -152,7 +156,7 @@ def main(argv=None):
             def progress(value):
                 print(json.dumps(dict(progress=value), ensure_ascii=False), file=sys.stderr, flush=True)
             value = extract(args.session, args.output, start=args.start, end=args.end,
-                            max_images=args.max_images, progress=progress)
+                            max_images=args.max_images, progress=progress, image_mode=args.image_mode)
         elif name == 'visual-read':
             from visual_nodes import read_index
             value = read_index(args.index, start=args.start, end=args.end, offset=args.offset, limit=args.limit)
@@ -165,7 +169,8 @@ def main(argv=None):
                                 initial=args.initial_views, review=args.review_views)
         elif name == 'visual-candidates':
             from visual_nodes import read_candidates
-            value = read_candidates(args.index,start=args.start,end=args.end,offset=args.offset,limit=args.limit)
+            value = read_candidates(args.index,start=args.start,end=args.end,offset=args.offset,limit=args.limit,
+                                    level=args.level,parent=args.parent)
         elif name == 'visual-packet':
             from visual_evidence import packet
             value = packet(args.plan, args.request_id, phase=args.phase, question=args.question,

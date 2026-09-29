@@ -45,6 +45,10 @@
 
 `visual-candidates`（0.6.5）要求 start/end，范围最长 120 秒，`limit` 1–60、默认 24。主要与弱候选共用分页数量上限，返回紧凑 columns/rows 与 next_offset，不展开原话、按键、图片或完整 motion 子树。它没有实际看图，也不是流程识别。`visual-read` 保留完整格式，但小 limit 不能保证小输出。
 
+0.6.7 先用 `visual-candidates INDEX --start 120 --end 180 --level primary --limit 24`，按需再用 `--level weak --parent v000123` 展开该主要节点的弱观察。`--parent` 只适用于 weak；不填 parent 则查范围内全部保留的弱观察。默认 all 兼容旧顺序。筛选先于分页，切换筛选后从 offset 0 开始。新增列为 parent_id、retained_weak_in_range；matching_by_level 是筛选前该区间保留的两类数量。omissions 是全索引遗漏数量／时间包络和 overlaps_query，不代表包络内每一秒均缺失。主要分页读完不改变 node_index_complete；筛选不能代替短暂状态的弱观察核对。
+
+`visual-nodes ... --image-mode seek`（0.6.7）仅优化配图，仍逐帧检测并精确匹配所选原时间戳；默认 sequential。若定位错过帧，最多恢复一次原范围顺序配图，只收集未完成图片。成功响应和 metrics 的 image_sequential_recovery 明示恢复，恢复后仍缺帧则失败不发布索引。image_decoder_frames 包含前滚／边界帧，image_decode_requests 包含恢复；比较完整耗时，不能只看交付图片数。已有索引与取材计划均继续复用。
+
 0.6.5 新计划为 `version=2, selection_version=2`：首轮避免邻近动画重复占位，区间包按局部稳定程度与时间距离排序，选择变化中段而不是优先凑满一个末端三图组；回执 selection 记录来源候选与选择原因。`initial_already_issued` 表示首轮已发，若要取回原回执使用原请求编号。0.6.5 读取旧版计划时保持原始排序／回执／预算，不能自动改写旧计划。旧软件不支持新计划，不能混用。画面分组、稳定度、近黑筛选均是机械信号，不能替代 UI 文本核对或玩家目标判断。
 
 ## 候选结果

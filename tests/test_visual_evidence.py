@@ -213,6 +213,45 @@ class EvidencePlanTests(unittest.TestCase):
             self.assertGreaterEqual(row[4],.6);self.assertLessEqual(row[3],.8)
         self.assertTrue(any(row[1]=='weak' for row in page['rows']))
 
+    def test_primary_navigation_is_bounded_and_weak_evidence_is_expandable(self):
+        path=Path(self.value['index'])
+        index=evidence._load(path)
+        motion=dict(id='motion',kind='motion',start=0,end=3,frames=[],
+                    motion_observations=[dict(kind='change',start=i/100,end=i/100+.01,frames=[])
+                                         for i in range(250)])
+        later=dict(id='later',kind='context',start=2.6,end=3,frames=[])
+        index['nodes']=[motion,later]
+        index['coverage']['node_index_complete']=False
+        index['stats']['detector'].update(omitted_nodes=0,omitted_weak_motion_observations=12,
+                                        omitted_time_range=[2.7,3])
+        path.write_text(json.dumps(index),encoding='utf-8')
+        digest=evidence._hash(path)
+        all_rows=visual.read_candidates(path,start=0,end=3,limit=24)
+        self.assertNotIn('later',[r[0] for r in all_rows['rows']])
+        primary=visual.read_candidates(path,start=0,end=3,level='primary',limit=24)
+        self.assertEqual([r[0] for r in primary['rows']],['motion','later'])
+        self.assertEqual(primary['matching_by_level'],dict(primary=2,weak=250))
+        self.assertIsNone(primary['next_offset'])
+        self.assertFalse(primary['node_index_complete'])
+        self.assertEqual(primary['omissions']['weak_observations'],12)
+        self.assertTrue(primary['omissions']['overlaps_query'])
+        counts=primary['columns'].index('retained_weak_in_range')
+        self.assertEqual(primary['rows'][0][counts],250)
+        weak=visual.read_candidates(path,start=0,end=.2,level='weak',parent='motion',limit=5)
+        self.assertEqual(len(weak['rows']),5)
+        self.assertEqual(weak['next_offset'],5)
+        self.assertEqual([r[0] for r in weak['rows']], [f'motion/w{i}' for i in range(1,6)])
+        self.assertFalse(weak['omissions']['overlaps_query'])
+        for kwargs in (dict(level='invalid'),dict(level='primary',parent='motion'),
+                       dict(level='weak',parent='missing')):
+            with self.assertRaises(ValueError):visual.read_candidates(path,start=0,end=3,**kwargs)
+        output=io.StringIO()
+        with redirect_stdout(output):
+            code=agent_cli.main(['visual-candidates',str(path),'--start','0','--end','3','--level','primary'])
+        self.assertEqual(code,0)
+        self.assertEqual(json.loads(output.getvalue())['data']['total_matching'],2)
+        self.assertEqual(evidence._hash(path),digest)
+
     def test_compact_candidates_cli_and_limits(self):
         output=io.StringIO()
         with redirect_stdout(output):
