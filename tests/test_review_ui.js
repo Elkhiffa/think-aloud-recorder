@@ -249,3 +249,30 @@ assert.equal(input.windowStateAt(input.intervalIndex(completeScope.window_states
 assert.equal(input.windowStateAt(input.intervalIndex(completeScope.window_states),10),'unknown');
 assert.deepEqual(input.filterInputScope({...completeScope,window_states:[]},'foreground').intervals,[]);
 console.log('Background input is preserved; display filters clip holds without editing source facts.');
+const stateIndex=input.intervalIndex(completeScope.window_states);
+assert.deepEqual(input.windowStateBands(stateIndex,1,9),[{start:1,end:3,state:'foreground'},{start:3,end:7,state:'background'},{start:7,end:9,state:'foreground'}]);
+assert.deepEqual(input.windowStateBands(input.intervalIndex([{start:1,end:3,state:'background'},{start:4,end:5,state:'unknown'}]),0,6),[{start:0,end:1,state:'unknown'},{start:1,end:3,state:'background'},{start:3,end:6,state:'unknown'}]);
+const crossing={id:'one-fact',start:1,end:9,displayEnd:9};
+assert.equal(input.inputBackgroundMask(crossing,stateIndex),'linear-gradient(to bottom,#000 0%,#000 25%,rgba(0,0,0,.75) 25%,rgba(0,0,0,.75) 75%,#000 75%,#000 100%)');
+assert.equal(crossing.id,'one-fact');assert.equal(crossing.end-crossing.start,8);
+assert.equal(input.inputBackgroundMask({start:2,end:2.1,displayEnd:4},stateIndex),'');
+assert.equal(input.inputBackgroundMask({start:6.9,end:6.95,displayEnd:8},stateIndex),'linear-gradient(to bottom,rgba(0,0,0,.75) 0%,rgba(0,0,0,.75) 100%)');
+assert.equal(input.inputBackgroundMask({start:7,end:7},stateIndex),'');
+assert.ok(input.inputBackgroundMask({start:3,end:3},stateIndex).includes('.75'));
+assert.equal(input.inputBackgroundMask(crossing,input.intervalIndex([{start:0,end:10,state:'unknown'}])),'');
+console.log('Window-state regions are separate from gaps; only physical background intersections fade, including readable tap padding.');
+const conflictingStates=[{start:1,end:4,state:'background'},{start:2,end:5,state:'foreground'}];
+const conflictExpected=[{start:1,end:2,state:'background'},{start:2,end:4,state:'unknown'},{start:4,end:5,state:'foreground'}];
+for(const rows of [conflictingStates,[...conflictingStates].reverse()]){
+  const snapshot=JSON.stringify(rows),index=input.intervalIndex(rows);
+  assert.deepEqual(input.windowStateBands(index,1,5),conflictExpected);
+  assert.equal(input.windowStateAt(index,2),'unknown');assert.equal(input.windowStateAt(index,4),'foreground');
+  assert.equal(input.inputBackgroundMask({start:2,end:2,displayEnd:3},index),'');
+  const source={recording_scope:'all',duration:6,window_states:rows,intervals:[{id:'hold',start:1,end:5}]};
+  assert.deepEqual(input.normalizeInputs(source).window_states,conflictExpected);
+  assert.deepEqual(input.filterInputScope(source,'foreground').intervals.map(row=>[row.start,row.end]),[[4,5]]);
+  assert.equal(JSON.stringify(rows),snapshot);
+}
+assert.deepEqual(input.windowStateBands(input.intervalIndex([{start:1,end:4,state:'background'},{start:2,end:5,state:'background'}]),1,5),[{start:1,end:5,state:'background'}]);
+assert.deepEqual(input.windowStateBands(input.intervalIndex([{start:1,end:5,state:'foreground'},{start:2,end:4,state:'unknown'}]),1,5),[{start:1,end:2,state:'foreground'},{start:2,end:4,state:'unknown'},{start:4,end:5,state:'foreground'}]);
+console.log('Conflicting window ownership is unknown regardless of order; filtering, tap opacity and labels agree without modifying evidence.');

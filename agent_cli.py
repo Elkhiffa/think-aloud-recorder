@@ -125,6 +125,17 @@ def main(argv=None):
     visual_packet.add_argument('--limit', type=int, default=6)
     visual_packet.add_argument('--image-width',type=int,choices=(960,1920),default=960,
                                help='图片最大宽度；1920仅用于需辨认小字的定向补图，不放大原片')
+    compare = commands.add_parser('visual-compare', help='短窗内比较局部像素状态，仅输出候选 PTS，不发放图片')
+    compare.add_argument('plan')
+    compare.add_argument('--request-id', required=True)
+    compare.add_argument('--question', required=True)
+    compare.add_argument('--start', type=float, required=True)
+    compare.add_argument('--end', type=float, required=True)
+    compare.add_argument('--region', type=float, nargs=4, metavar=('X','Y','WIDTH','HEIGHT'),
+                         help='归一化局部区域，默认全画面；先按原片裁切再比较')
+    compare.add_argument('--mode', choices=('candidates','scan'), default='candidates',
+                         help='candidates 比较已有候选（最多120秒），scan 明确逐帧细扫（最多30秒）')
+    compare.add_argument('--limit', type=int, default=8, help='最多返回1–24个有序像素发生段，截断明确披露')
     visual_budget = commands.add_parser('visual-budget', help='查看本场取材计划的共用预算')
     visual_budget.add_argument('plan')
     extend = commands.add_parser('visual-budget-extend',help='按关键证据需要显式追加额度，保留累计用量')
@@ -191,6 +202,11 @@ def main(argv=None):
         elif name == 'visual-budget':
             from visual_evidence import budget_status
             value = budget_status(args.plan)
+        elif name == 'visual-compare':
+            from visual_compare import compare
+            value = compare(args.plan, args.request_id, question=args.question,
+                            start=args.start, end=args.end, region=args.region,
+                            mode=args.mode, limit=args.limit)
         elif name == 'visual-budget-extend':
             from visual_evidence import extend_budget
             value = extend_budget(args.plan,args.request_id,additional=args.additional,reason=args.reason)

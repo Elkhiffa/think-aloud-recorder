@@ -261,3 +261,18 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 .quote-popover p{min-height:0;overflow:auto;overscroll-behavior:contain;user-select:text}
 
 #inputScopeLabel{flex:none}#inputScope{font:12px/1.4 'Segoe UI','Microsoft YaHei UI',sans-serif;max-width:130px;padding:2px 4px;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:4px}#inputFocusState{margin-left:auto;color:var(--muted);white-space:nowrap}.timeline-footer{align-items:center}#timelineState{flex:1}
+/* Window ownership is independent of capture gaps. Keep its wash below
+   controls, with labels confined to the ruler so they cannot cover evidence. */
+:root{--background-area:#e9e3da;--background-edge:#a3937f;--background-label:#6c5d4c;--unknown-area:#eeedf0;--unknown-edge:#b7b3bd;--unknown-label:#706c76}
+:root[data-theme=dark]{--background-area:#312c25;--background-edge:#a49276;--background-label:#d2bfa3;--unknown-area:#2b2b31;--unknown-edge:#797783;--unknown-label:#c3bfcc}
+.timeline-window-states,.timeline-window-labels{position:absolute;left:0;right:0;top:0;will-change:transform;pointer-events:none}
+.timeline-window-states{z-index:0}.timeline-ticks{z-index:1}.timeline-inputs,.timeline-speech{z-index:2}.timeline-gaps{z-index:1}
+.timeline-window-band{position:absolute;right:0;border-top:1px solid var(--background-edge);border-bottom:1px solid var(--background-edge);background:var(--background-area);opacity:.55;box-sizing:border-box}
+.timeline-window-band.unknown{border-color:var(--unknown-edge);border-top-style:dotted;border-bottom-style:dotted;background:var(--unknown-area);opacity:.48}
+.timeline-window-labels{z-index:4}
+.timeline-window-label{position:absolute;left:var(--timeline-scroll-x);width:calc(var(--time-width) - 1px);overflow:hidden;border-left:3px solid var(--background-edge);color:var(--background-label);box-sizing:border-box}
+.timeline-window-label.unknown{border-left:2px dotted var(--unknown-edge);color:var(--unknown-label)}
+.timeline-window-label>span{display:block;position:absolute;left:0;right:0;top:0;text-align:center;font:10px/16px 'Segoe UI','Microsoft YaHei UI',sans-serif;white-space:nowrap;background:var(--surface)}
+.timeline-window-label.unknown>span{font-size:9px}
+.input-window-note{color:var(--muted)}
+@media(max-width:1050px){.timeline-window-label>span{font-size:9px}.timeline-window-label.unknown>span{font-size:8px}}

@@ -53,6 +53,10 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 0.6.5 增加 `visual-candidates INDEX --start SEC --end SEC [--limit 24]`：将短区间内主要及弱候选平铺成有上限的导航表，不携带整段运动树与原话。新的选图计划采用分散首轮和局部稳定程度排序，缓解近邻动画挤占名额；旧计划保留旧算法与原预算，新计划格式需 0.6.5。完整 `visual-read` 接口保持兼容。
 
+0.6.12 增加 `visual-compare PLAN --request-id ID --question TEXT --start SEC --end SEC [--region X Y WIDTH HEIGHT] [--mode candidates|scan] [--limit 8]`。针对一个具体疑问，比较已有候选或显式短窗内的局部像素变化，保留出现顺序与 A→B→A 返回过程。它只返回原始 PTS、机械分组和覆盖限制，不发图、不理解交互语义；实际看图仍走原计划的 `visual-packet` 与同场累计账本。候选模式最多 120 秒，逐帧模式最多 30 秒；动画、关注区域不准和原始素材缺口仍可能影响结果。详见 [Skill 的局部状态比较规约](../skills/think-aloud-preprocess/references/protocol.md#局部状态比较)。旧索引、旧预算及正式结果格式不需迁移，不因升级重做已完成场次。
+
+同版回看在操作时间轴上标出“游戏在后台”区间，并只弱化相交的输入部分。跨前后台的长按仍是一个输入事实；未知或矛盾的窗口状态单独标记，不视为后台，也不计作采集缺口。后台输入不代表游戏必然未接收；展示不改变源时间和校准。
+
 ```powershell
 & 'F:\ThinkAloud\app\runtime\python.exe' 'F:\ThinkAloud\app\agent_cli.py' scan 'F:\think-aloud-database'
 ```
