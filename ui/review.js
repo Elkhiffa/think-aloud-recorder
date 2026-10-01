@@ -82,12 +82,12 @@
     const inside=item=>valid(item)&&item.end+offset>=0&&item.start+offset<limit;
     return {...source,state:String(source.state||'ready'),duration:Number.isFinite(limit)?limit:Math.max(0,(Number(source.duration)||0)+offset),
       intervals:(Array.isArray(source.intervals)?source.intervals:[]).filter(inside).map((item,i)=>({...shift(item),id:String(item.id??i),direction:item.direction||axisDirection(item.x,item.y)})).sort((a,b)=>a.start-b.start||b.end-a.end||a.id.localeCompare(b.id)),
-      window_states:(Array.isArray(source.window_states)?source.window_states:[]).filter(inside).map(item=>shift(item,true)).sort((a,b)=>a.start-b.start),
+      window_states:normalizeWindowStates((Array.isArray(source.window_states)?source.window_states:[]).filter(inside).map(item=>shift(item,true))),
       gaps:compactGaps((Array.isArray(source.gaps)?source.gaps:[]).filter(inside).map(item=>({...shift(item,true),preparation:startupPreparation(source,item)})))};
   }
   function filterInputScope(source,scope){
     if(scope!=='foreground'||source.recording_scope!=='all')return source;
-    const states=intervalIndex((source.window_states||[]).filter(row=>row.state==='foreground')),items=[];
+    const states=intervalIndex(normalizeWindowStates(source.window_states||[]).filter(row=>row.state==='foreground')),items=[];
     for(const item of source.intervals){
       for(const [i,window] of intervalsInRange(states,item.start,item.end+1e-9).entries()){
         const start=Math.max(item.start,window.start),end=Math.min(item.end,window.end);
@@ -96,7 +96,49 @@
     }
     return {...source,intervals:items.sort((a,b)=>a.start-b.start||b.end-a.end||a.id.localeCompare(b.id))};
   }
-  function windowStateAt(index,time){return intervalsInRange(index,time,time+1e-9).find(row=>row.start<=time&&time<row.end)?.state||'unknown';}
+  function windowStateAt(index,time){
+    const states=new Set(intervalsInRange(index,time,time+1e-9).filter(row=>row.start<=time&&time<row.end).map(row=>['foreground','background'].includes(row.state)?row.state:'unknown'));
+    return states.size===1?[...states][0]:'unknown';
+  }
+  function normalizeWindowStates(rows){
+    const valid=rows.filter(row=>Number.isFinite(row.start)&&Number.isFinite(row.end)&&row.end>row.start);
+    if(!valid.length)return [];
+    const start=valid.reduce((value,row)=>Math.min(value,row.start),Infinity),end=valid.reduce((value,row)=>Math.max(value,row.end),-Infinity);
+    return windowStateBands(intervalIndex(valid),start,end);
+  }
+  function windowStateBands(index,start,end){
+    // Resolve each boundary together. Overlapping agreement stays usable;
+    // contradictory ownership is unknown, never an arbitrary first row.
+    if(!(end>start))return [];
+    const result=[],events=new Map([[start,[]],[end,[]]]),counts={foreground:0,background:0,unknown:0};
+    const append=(from,to,state)=>{if(to<=from)return;const previous=result.at(-1);if(previous&&previous.state===state&&previous.end===from)previous.end=to;else result.push({start:from,end:to,state});};
+    for(const row of intervalsInRange(index,start,end)){
+      const from=Math.max(start,row.start),to=Math.min(end,row.end),state=['foreground','background'].includes(row.state)?row.state:'unknown';
+      if(to<=from)continue;
+      for(const [time,delta] of [[from,1],[to,-1]]){if(!events.has(time))events.set(time,[]);events.get(time).push([state,delta]);}
+    }
+    const times=[...events.keys()].sort((a,b)=>a-b);
+    for(let i=0;i<times.length-1;i++){
+      for(const [state,delta] of events.get(times[i]))counts[state]+=delta;
+      const state=counts.unknown||Boolean(counts.foreground)===Boolean(counts.background)?'unknown':counts.foreground?'foreground':'background';
+      append(times[i],times[i+1],state);
+    }
+    return result;
+  }
+  function inputBackgroundMask(item,index){
+    // The display can pad a tap for legibility. Its padding inherits the last
+    // real state, never the state at a later time that the press did not span.
+    const end=Math.max(item.start,item.end),displayEnd=Math.max(end,item.displayEnd??end);
+    if(end===item.start)return windowStateAt(index,item.start)==='background'?'linear-gradient(rgba(0,0,0,.75),rgba(0,0,0,.75))':'';
+    const ranges=windowStateBands(index,item.start,end);
+    if(!ranges.some(row=>row.state==='background'))return '';
+    const height=displayEnd-item.start,stops=[];
+    for(const [i,row] of ranges.entries()){
+      const color=row.state==='background'?'rgba(0,0,0,.75)':'#000',to=i===ranges.length-1?displayEnd:row.end;
+      stops.push(`${color} ${(row.start-item.start)/height*100}%`,`${color} ${(to-item.start)/height*100}%`);
+    }
+    return `linear-gradient(to bottom,${stops.join(',')})`;
+  }
   function initialReviewTime(source,videoDuration){
     const alignment=source?.alignment;
     if(!['measured','manual'].includes(alignment?.source)||!Number.isFinite(alignment.offset_seconds)||Math.abs(alignment.offset_seconds)>30||!(videoDuration>0))return null;
@@ -204,7 +246,7 @@
   function playheadDirection(time,viewStart,span){return time<viewStart-1e-6?-1:time>viewStart+span+1e-6?1:0;}
   function visibleLabelTop(start,end,viewStart,scale,height=28){return Math.max(0,Math.min((viewStart-start)*scale,Math.max(0,(end-start)*scale-height)));}
   function inputHighlight(item,time){if(!item||time<item.start)return 0;return time<item.end?1:Math.max(0,1-(time-item.end)/2)*.7;}
-  if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds,sourceFit,videoFrame,videoPlacement,inputChannel,axisDirection,compactGaps,gapVisualBands,normalizeInputs,filterInputScope,windowStateAt,startupPreparation,initialReviewTime,inputLabel,inputVisualBands,inputSampleAt,packInputIntervals,intervalIndex,intervalsInRange,meaningfulDevice,recentInputs,anchoredZoom,timelinePointerTime,timelineGesture,isLongPress,playheadDirection,visibleLabelTop,inputHighlight};return;}
+  if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds,sourceFit,videoFrame,videoPlacement,inputChannel,axisDirection,compactGaps,gapVisualBands,normalizeInputs,filterInputScope,windowStateAt,windowStateBands,inputBackgroundMask,startupPreparation,initialReviewTime,inputLabel,inputVisualBands,inputSampleAt,packInputIntervals,intervalIndex,intervalsInRange,meaningfulDevice,recentInputs,anchoredZoom,timelinePointerTime,timelineGesture,isLongPress,playheadDirection,visibleLabelTop,inputHighlight};return;}
   const data=JSON.parse(document.getElementById('review-data').textContent);
   const $=id=>document.getElementById(id),video=$('video'),lines=$('lines');
   let segments=Array.isArray(data.segments)?data.segments:[],nodes=[],inputUI=null;
@@ -596,7 +638,9 @@
     const clock=t=>{const safe=Math.max(0,t);return `${formatTime(safe)}.${Math.floor(safe%1*10)}`;};
     const preciseClock=t=>{const milliseconds=Math.max(0,Math.round(t*1000));return `${formatTime(Math.floor(milliseconds/1000))}.${String(milliseconds%1000).padStart(3,'0')}`;};
     const timeline=$('inputTimeline'),ruler=document.createElement('div');ruler.className='timeline-ruler';timeline.append(ruler);
-    const layers=[$('timelineTicks'),ruler,$('timelineSpeech'),$('timelineInputs'),$('timelineGaps')];
+    const windowBands=document.createElement('div'),windowLabels=document.createElement('div');
+    windowBands.id='timelineWindowStates';windowBands.className='timeline-window-states';windowLabels.className='timeline-window-labels';timeline.append(windowBands,windowLabels);
+    const layers=[$('timelineTicks'),ruler,$('timelineSpeech'),$('timelineInputs'),$('timelineGaps'),windowBands,windowLabels];
     const headings=document.querySelector('.timeline-column-headings'),horizontal=document.createElement('div'),grid=document.createElement('div');
     const dpadHeading=document.createElement('span');dpadHeading.textContent='十字键';headings.lastElementChild.before(dpadHeading);
     horizontal.className='timeline-horizontal-scroll';horizontal.setAttribute('aria-label','横向浏览操作轨道');grid.className='timeline-grid';
@@ -717,7 +761,9 @@
       const value=sample?.value!=null?` · ${Math.round(sample.value*100)}%`:'';
       const detail=sample?`${sample.direction||inputLabel(sample)}${item.activity&&time>=sample.end?' · 上次输入（已松开）':''}${value}${sample.x!=null?` · X ${sample.x} / Y ${sample.y}`:''}`:item.end===item.start?'瞬时操作':'此刻已松开';
       const press=sample||item,hold=isLongPress(press)?` · 长按 ${(press.end-press.start).toFixed(2)} 秒`:'';
-      inputDetail.innerHTML=`<time>${preciseClock(item.start)} — ${preciseClock(item.end)}</time><strong>${escape(deviceName(group(sample?.device||item.device))+' · '+label+hold)}</strong><span>${preciseClock(Math.max(item.start,time))} · ${escape(detail.trim()||'持续中')}</span>`;
+      const windowState=source.recording_scope==='all'?windowStateAt(windowIndex,Math.max(item.start,Math.min(time,Math.max(item.start,item.end-1e-9)))):null;
+      const windowNote=windowState==='background'?'游戏在后台 · 此操作不代表游戏已接收':windowState==='unknown'?'窗口状态未知':'';
+      inputDetail.innerHTML=`<time>${preciseClock(item.start)} — ${preciseClock(item.end)}</time><strong>${escape(deviceName(group(sample?.device||item.device))+' · '+label+hold)}</strong><span>${preciseClock(Math.max(item.start,time))} · ${escape(detail.trim()||'持续中')}</span>${windowNote?`<span class="input-window-note">${windowNote}</span>`:''}`;
       inputDetail.hidden=false;const rect=event?.currentTarget?.getBoundingClientRect()||timeline.getBoundingClientRect();
       inputDetail.style.left=Math.max(12,Math.min(root.innerWidth-inputDetail.offsetWidth-12,(event?.clientX??rect.right)+14))+'px';
       inputDetail.style.top=Math.max(12,Math.min(root.innerHeight-inputDetail.offsetHeight-12,(event?.clientY??rect.top)+14))+'px';
@@ -754,7 +800,11 @@
       $('timelineInputs').innerHTML=visible.map(item=>{const c=column(item,g);return `<button class="key-bar${isLongPress(item)?' long-press':''}${item.activity?' activity-band':''}${item.fixed?' fixed-band':''}${item.end===item.start?' instant':''}" data-input-id="${escape(item.id)}" data-start="${item.start}" data-end="${item.end}" data-lane="${item.lane}" data-channel="${item.channel}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.displayEnd-item.start)*state.scale}px;left:${c.left}px;width:${c.width}px" aria-label="${escape(`${deviceName(group(item.device))} ${item.label||item.code}，${isLongPress(item)?'长按，':''}${clock(item.start)} 至 ${clock(item.end)}，点击定位`)}" aria-describedby="inputDetail"><span class="bar-glyph">${glyph(item)}</span><span class="bar-duration" style="height:${Math.max(1,(item.end-item.start)*state.scale)}px" aria-hidden="true"></span>${heldSections(item)}${inputMarks(item)}${holdLabels(item)}</button>`;}).join('');
       $('timelineSpeech').innerHTML=quotes.map(item=>`<button class="quote-bar${state.pinned&&state.quote===item.index?' pinned':''}" data-quote="${item.index}" style="top:${(item.start-renderStart)*state.scale}px;height:${(item.end-item.start)*state.scale}px;left:${g.time+7}px;width:${g.speech-14}px" aria-label="原话 ${item.index+1}，${clock(item.start)}，点击固定全文">${quoteIcon}<span>${String(item.index+1).padStart(2,'0')}</span></button>`).join('');
       $('timelineGaps').innerHTML=gaps.map(gap=>`<div class="timeline-gap${gap.preparation?' preparation':''}" style="top:${(gap.start-renderStart)*state.scale}px;height:${(gap.end-gap.start)*state.scale}px;left:${g.time+g.speech}px" title="${escape(gap.reason||gapName(gap))}"><span>${escape(gapName(gap))}</span></div>`).join('');
+      const windowRanges=source.recording_scope==='all'?windowStateBands(windowIndex,renderStart,end).filter(row=>row.state!=='foreground'):[];
+      windowBands.innerHTML=windowRanges.map(row=>`<div class="timeline-window-band ${row.state}" data-window-state="${row.state}" data-start="${row.start}" data-end="${row.end}" style="top:${(row.start-renderStart)*state.scale}px;height:${(row.end-row.start)*state.scale}px;left:${g.time+g.speech}px" aria-label="${row.state==='background'?'游戏在后台':'窗口状态未知'}，${clock(row.start)} 至 ${clock(row.end)}"></div>`).join('');
+      windowLabels.innerHTML=windowRanges.map(row=>`<div class="timeline-window-label ${row.state}" data-start="${row.start}" data-end="${row.end}" style="top:${(row.start-renderStart)*state.scale}px;height:${(row.end-row.start)*state.scale}px" aria-hidden="true"><span>${row.state==='background'?'游戏在后台':'窗口状态未知'}</span></div>`).join('');
       $('timelineInputs').querySelectorAll('button').forEach(button=>{const item=displayed.get(button.dataset.inputId);
+        const mask=source.recording_scope==='all'&&state.scope==='all'?inputBackgroundMask(item,windowIndex):'';button.style.maskImage=mask;
         button.onclick=event=>{if(event.detail&&event.clientX<horizontal.getBoundingClientRect().left+g.time)return;hideInputDetail();seekKeep(item.samples&&event.detail?Math.max(item.start,Math.min(item.end,pointerTime(event,item))):item.start);};
         button.onpointermove=event=>{if(!gesture||gesture.kind==='pending')showInputDetail(item,event);};button.onfocus=()=>showInputDetail(item,{currentTarget:button});button.onmouseleave=hideInputDetail;button.onblur=hideInputDetail;
       });
@@ -823,6 +873,7 @@
       const key=[Math.floor(state.viewStart/(Math.max(span*.45,.1))),state.scale,timeline.clientWidth,height,state.revision].join('/');
       if(force||key!==state.renderKey){state.renderKey=key;rebuild();}
       const offset=(renderStart-state.viewStart)*state.scale;layers.forEach(layer=>layer.style.transform=`translateY(${offset}px)`);
+      windowLabels.querySelectorAll('.timeline-window-label').forEach(label=>{const start=Number(label.dataset.start),end=Number(label.dataset.end);label.firstElementChild.style.transform=`translateY(${Math.max(0,Math.min((end-start)*state.scale-16,(state.viewStart-start)*state.scale+10))}px)`;});
       const direction=playheadDirection(time,state.viewStart,span);
       returnToPlayhead.hidden=direction===0;returnToPlayhead.dataset.direction=direction<0?'above':'below';returnToPlayhead.setAttribute('aria-label',`返回当前播放位置（${direction<0?'上方':'下方'}），恢复跟随`);
       $('timelinePlayhead').hidden=direction!==0;$('timelinePlayhead').style.top=Math.max(0,Math.min(height-1,(time-state.viewStart)*state.scale))+'px';$('timelinePlayhead').querySelector('time').textContent=clock(time);

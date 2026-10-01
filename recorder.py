@@ -710,6 +710,19 @@ class Session:
         self._input_clock_events=None
         self._input_stop_boundary=None
         self._input_clock_continuous=False
+        self._microphone_monitor=None
+    def ensure_microphone_monitor(self,request):
+        from microphone_monitor import MicrophoneMonitor
+        if self._microphone_monitor is not None and self._microphone_monitor.healthy():return
+        self.close_microphone_monitor()
+        try:self._microphone_monitor=MicrophoneMonitor(request,'测试素材' if self.meta.get('test') else '口述')
+        except Exception:pass  # Optional feedback must never stop or fail a recording.
+    def microphone_state(self):
+        monitor=self._microphone_monitor
+        return monitor.snapshot() if monitor is not None else dict(state='unavailable',level=0,db=None)
+    def close_microphone_monitor(self):
+        monitor,self._microphone_monitor=self._microphone_monitor,None
+        if monitor is not None:monitor.close()
     def update(self,**kw):
         from session_metadata import update_metadata
         self.meta=update_metadata(self.path,kw)
@@ -786,6 +799,11 @@ class Session:
             self.finish_inputs(cutoff,interrupted=True,trim_to=cutoff,error='录像时钟暂不可确认，操作采集已停止。')
             return False
         self._video_seconds=seconds
+        health=getattr(self._input_capture,'health',None)
+        capture_state=health() if callable(health) else None
+        if isinstance(capture_state,dict) and capture_state.get('state')=='failed':
+            self.finish_inputs(seconds,error=capture_state.get('error') or '操作采集已中断，录像仍在继续。')
+            return False
         if getattr(status,'output_paused',False) is True:
             self.finish_inputs(seconds,interrupted=True,trim_to=seconds,error='OBS 已暂停录像，操作采集已停止；恢复录像后不补写未知操作。')
             self.update(warning='OBS 暂停导致操作采集中断，后续录像区间将标记为缺口。')
@@ -827,7 +845,7 @@ class Session:
                         result.setdefault('gaps',[]).append(dict(start=result['duration'],end=endpoint,type='capture',reason=error or '操作时钟无法继续确认'))
                         result['duration']=endpoint
                         write(self.path/'input-events.json',result)
-                self.update(input_state=result.get('state','failed'))
+                self.update(input_state=result.get('state','failed'), input_error=result.get('error'))
             except Exception:
                 self.update(input_state='failed',input_error='操作记录未能完整保存，原始录像不受影响。')
         elif self.meta.get('settings',{}).get('record_inputs'):
@@ -927,13 +945,16 @@ class Session:
                         state,before,after=s.await_input_clock(r,state,before,after)
                         s._video_seconds=s.output_seconds(state)
                         if not s.observe_input_clock(state,before,after):
+                            s.ensure_microphone_monitor(r)
                             return s
                         s._input_capture.start(origin=(before+after)/2,video_offset=s._video_seconds)
                         s.update(input_state='recording',input_clock={'basis':'OBS output_duration','initial_seconds':s._video_seconds,'last_verified_seconds':s._video_seconds,'uncertainty_seconds':(after-before)/2})
                     except Exception:
                         s.finish_inputs(s._video_seconds,error='操作采集启动失败或无法取得录像时钟；录像仍在继续。')
                         s.update(warning='操作采集未能启动，录像仍在继续。')
+                s.ensure_microphone_monitor(r)
             except Exception as e:
+                s.close_microphone_monitor()
                 s.finish_inputs(s._video_seconds,interrupted=True,error='录制启动未确认，操作采集已停止。')
                 s.update(state='失败',error=str(e));raise
             return s
@@ -941,6 +962,7 @@ class Session:
         with obs_connection(False) as r:
             directory=Path(r.send('GetRecordDirectory').record_directory)
             if directory.resolve()!=self.path.resolve():raise RuntimeError('OBS 录制目录不属于本场次，已拒绝停止其他录制。')
+            self.close_microphone_monitor()
             before=time.perf_counter()
             status=r.get_record_status()
             after=time.perf_counter()

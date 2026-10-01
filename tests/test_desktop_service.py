@@ -316,6 +316,31 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertEqual(activity['detail'], session.meta['input_error'])
         client.stop_record.assert_not_called()
 
+    def test_live_capture_failure_reaches_recording_warning_without_stopping_obs(self):
+        session = self.session(test=False, input_state='recording',
+            settings={**self.config, 'record_inputs': True}, input_clock={'initial_seconds': .3})
+        capture = MagicMock()
+        capture.health.return_value = dict(state='failed', error='操作日志写入失败，录像仍在继续。')
+        capture.stop.return_value = dict(version=1, state='failed', duration=5,
+                                         error=capture.health.return_value['error'])
+        session._input_capture = capture
+        self.service._active = session
+        client = MagicMock()
+        client.get_record_status.return_value = SimpleNamespace(output_active=True, output_duration=5000)
+        client.send.return_value = SimpleNamespace(record_directory=str(session.path))
+        with patch.object(bridge.recorder, 'client', return_value=client), \
+             patch.object(bridge.shutil, 'disk_usage', return_value=SimpleNamespace(free=10*1024**3)):
+            self.service._inspect_recording()
+            first = self.service.get_state()['data']['activity']
+            self.service._inspect_recording()
+        second = self.service.get_state()['data']['activity']
+        self.assertEqual(first['status'], '录制中 · 操作记录已中断')
+        self.assertEqual(first['detail'], capture.health.return_value['error'])
+        self.assertEqual(second['detail'], first['detail'])
+        self.assertIs(self.service._active, session)
+        capture.stop.assert_called_once()
+        client.stop_record.assert_not_called()
+
     def test_finished_startup_recovery_reports_ready_and_keeps_existing_errors(self):
         activity = self.service.get_state()['data']['activity']
         self.assertFalse(activity['busy'])
@@ -2109,7 +2134,7 @@ class DesktopServiceTests(unittest.TestCase):
         with patch.object(bridge.webbrowser, 'open', side_effect=OSError('synthetic failure')):
             self.assertFalse(self.service.open_bailian_console()['ok'])
 
-    def test_update_polling_is_read_only_and_startup_never_checks_network(self):
+    def test_update_polling_is_read_only_and_never_checks_network(self):
         self.service.set_update_lifecycle(lambda:2,MagicMock())
         self.updates.snapshot.return_value['state']='ready'
         before=deepcopy(self.service._readiness)
@@ -2119,11 +2144,29 @@ class DesktopServiceTests(unittest.TestCase):
                 self.assertTrue(state['can_install'])
                 self.assertEqual(state['review_count'],2)
         self.updates.check.assert_not_called()
+        self.updates.check_on_startup.assert_not_called()
         self.updates.download.assert_not_called()
         self.model.pause_download.assert_not_called()
         self.assertEqual(before,self.service._readiness)
         self.assertFalse(self.service._closed.is_set())
         self.assertFalse(self.service._exit_pending)
+
+    def test_window_loaded_update_check_does_not_claim_recording_activity(self):
+        active=self.session();self.service._active=active
+        before=deepcopy(self.service._activity)
+        readiness=deepcopy(self.service._readiness)
+        self.service.check_startup_update()
+        self.updates.check_on_startup.assert_called_once_with()
+        self.updates.check_on_startup.side_effect=RuntimeError('synthetic startup failure')
+        self.service.check_startup_update()
+        self.assertEqual(self.service._activity,before)
+        self.assertEqual(self.service._readiness,readiness)
+        self.assertIs(self.service._active,active)
+        self.model.pause_download.assert_not_called()
+        self.updates.download.assert_not_called()
+        self.service._exit_pending=True
+        self.service.check_startup_update()
+        self.assertEqual(self.updates.check_on_startup.call_count,2)
 
     def test_update_check_download_and_cancel_do_not_claim_recording_activity(self):
         session=self.session(state='录制中')

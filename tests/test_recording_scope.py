@@ -52,6 +52,63 @@ class RecordingScopeTests(unittest.TestCase):
         self.assertEqual(recovered['intervals'],value['intervals'])
         self.assertEqual(recovered['window_states'],value['window_states'])
 
+    def test_window_failure_is_diagnosed_separately_while_all_devices_continue(self):
+        from input_capture import failure_event
+        self.send('focus', .1, foreground=True)
+        self.key('keyboard', 'W', 1)
+        diagnostic = failure_event('foreground_observer', OSError(5, 'synthetic token=private-sentinel'))['diagnostic']
+        self.send('focus_error', 2, diagnostic=diagnostic)
+        path = Path(self.temp.name, 'window-state-diagnostic.json')
+        first = path.read_bytes()
+        self.send('focus_error', 3, diagnostic={'component': 'later-context-error'})
+        self.assertEqual(path.read_bytes(), first)
+        self.assertNotIn('private-sentinel', first.decode('utf-8'))
+        self.assertEqual(json.loads(first)['errno'], 5)
+        self.key('keyboard', 'W', 4, False)
+        self.key('mouse', 'MouseLeft', 5); self.key('mouse', 'MouseLeft', 6, False)
+        self.key('xbox', 'A', 6); self.key('xbox', 'A', 7, False)
+        self.assertEqual(self.capture.health()['state'], 'recording')
+        self.assertIsNone(self.capture.health()['error'])
+        value = self.capture.stop(duration=8)
+        self.assertEqual(value['state'], 'complete')
+        self.assertNotIn('error', value)
+        self.assertEqual(value['gaps'], [])
+        self.assertEqual([row['code'] for row in value['intervals']], ['W', 'MouseLeft', 'A'])
+        self.assertEqual(value['window_states'][-1], dict(start=2, end=8, state='unknown'))
+        self.assertEqual(value['window_state_failure']['component'], 'foreground_observer')
+        self.assertFalse(Path(self.temp.name, 'input-capture-diagnostic.json').exists())
+        public = input_payload(self.temp.name, dict(media=dict(duration=8)))
+        self.assertNotIn('window_state_failure', public)
+        self.assertEqual(len(public['intervals']), 3)
+
+    def test_native_window_failure_forwarding_preserves_cause_without_stopping_all_scope(self):
+        source = WindowsInputSource(TargetWindow(1, 2, 3, 'test'), 'unused', capture_all=True)
+        diagnostic = dict(component='foreground_observer', exception_type='OSError', winerror=5)
+        source._observer = SimpleNamespace(diagnostic=diagnostic)
+        events = []; source.callback = events.append
+        source._invalidate(101)
+        self.assertEqual(events, [dict(type='focus_error', timestamp=101, diagnostic=diagnostic)])
+        self.assertFalse(source._stop.is_set())
+        source.capture_all = False
+        source._invalidate(100)
+        self.assertEqual(events[-1]['type'], 'invalidate')
+        self.assertEqual(events[-1]['diagnostic'], diagnostic)
+        self.assertTrue(source._stop.is_set())
+
+    def test_observer_start_failure_preserves_sanitized_exception(self):
+        from input_capture import InputCaptureError
+        from input_capture_windows import ForegroundObserver
+        observer = ForegroundObserver(TargetWindow(1, 2, 3, 'test'), clock=lambda: self.now)
+        with patch('input_capture_windows.winapi', side_effect=OSError(5, 'synthetic token=private-sentinel')):
+            with self.assertRaises(InputCaptureError):
+                observer.start()
+        self.assertFalse(observer.thread.is_alive())
+        self.assertEqual(observer.diagnostic['component'], 'foreground_observer')
+        self.assertEqual(observer.diagnostic['errno'], 5)
+        self.assertEqual(observer.diagnostic['exception_type'], 'OSError')
+        self.assertTrue(observer.diagnostic['frames'])
+        self.assertNotIn('private-sentinel', json.dumps(observer.diagnostic))
+
     def test_checkpoint_recovery_retains_window_context_and_real_gaps_separately(self):
         self.send('focus',1,foreground=False);self.key('xbox','A',2)
         self.send('watermark',3);self.capture._flush()

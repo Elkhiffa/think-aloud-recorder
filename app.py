@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 from contextlib import contextmanager
 
-BRIDGE_METHODS = ('get_state', 'refresh_devices', 'save_settings', 'save_preset', 'select_preset', 'choose_directory',
+BRIDGE_METHODS = ('get_state', 'get_microphone_state', 'refresh_devices', 'save_settings', 'save_preset', 'select_preset', 'choose_directory',
                   'import_hotwords', 'choose_hotword_files', 'open_dictionary_site', 'open_bailian_console',
                   'start_recording', 'stop_recording',
                   'process_session', 'open_review', 'rename_session', 'package_session', 'open_folder',
@@ -61,6 +61,7 @@ def run_window(root):
     service.set_update_lifecycle(windows.review_count, windows.close_for_update)
     from update_installer import acknowledge_start
     window.events.loaded += lambda: acknowledge_start(root)
+    window.events.loaded += service.check_startup_update
     # Explicit renderer prevents silent fallback to the obsolete MSHTML engine.
     webview.settings['ALLOW_FILE_URLS'] = True
     try:

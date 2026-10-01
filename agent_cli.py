@@ -7,6 +7,9 @@ import subprocess
 import sys
 import uuid
 
+# Embedded portable Python can put its own app before the invoked script's
+# directory. Keep this CLI and its protocol from the same checkout/install.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_protocol as protocol
 
 
@@ -125,6 +128,17 @@ def main(argv=None):
     visual_packet.add_argument('--limit', type=int, default=6)
     visual_packet.add_argument('--image-width',type=int,choices=(960,1920),default=960,
                                help='图片最大宽度；1920仅用于需辨认小字的定向补图，不放大原片')
+    compare = commands.add_parser('visual-compare', help='短窗内比较局部像素状态，仅输出候选 PTS，不发放图片')
+    compare.add_argument('plan')
+    compare.add_argument('--request-id', required=True)
+    compare.add_argument('--question', required=True)
+    compare.add_argument('--start', type=float, required=True)
+    compare.add_argument('--end', type=float, required=True)
+    compare.add_argument('--region', type=float, nargs=4, metavar=('X','Y','WIDTH','HEIGHT'),
+                         help='归一化局部区域，默认全画面；先按原片裁切再比较')
+    compare.add_argument('--mode', choices=('candidates','scan'), default='candidates',
+                         help='candidates 比较已有候选（最多120秒），scan 明确逐帧细扫（最多30秒）')
+    compare.add_argument('--limit', type=int, default=8, help='最多返回1–24个有序像素发生段，截断明确披露')
     visual_budget = commands.add_parser('visual-budget', help='查看本场取材计划的共用预算')
     visual_budget.add_argument('plan')
     extend = commands.add_parser('visual-budget-extend',help='按关键证据需要显式追加额度，保留累计用量')
@@ -135,6 +149,10 @@ def main(argv=None):
     visual_review = commands.add_parser('visual-review', help='仅在本机打开候选检查页；Ctrl+C 结束')
     visual_review.add_argument('index')
     visual_review.add_argument('--port', type=int, default=0)
+    naming = commands.add_parser('name-activities', help='按已完成事件概括内容，为未命名场次命名或在手动名后追加摘要')
+    naming.add_argument('session')
+    naming.add_argument('--file', help='工作目录中的活动命名候选 JSON；省略则读取当前命名上下文')
+    naming.add_argument('--apply', action='store_true', help='原子保存具体内容标签与名称，保留手动前缀并更新自动摘要；默认仅预览')
     for name in ('publish', 'status', 'evidence', 'quote-words', 'claim', 'reprocess', 'renew', 'fail', 'validate', 'submit', 'frame'):
         command = commands.add_parser(name)
         command.add_argument('session')
@@ -191,6 +209,11 @@ def main(argv=None):
         elif name == 'visual-budget':
             from visual_evidence import budget_status
             value = budget_status(args.plan)
+        elif name == 'visual-compare':
+            from visual_compare import compare
+            value = compare(args.plan, args.request_id, question=args.question,
+                            start=args.start, end=args.end, region=args.region,
+                            mode=args.mode, limit=args.limit)
         elif name == 'visual-budget-extend':
             from visual_evidence import extend_budget
             value = extend_budget(args.plan,args.request_id,additional=args.additional,reason=args.reason)
@@ -221,6 +244,14 @@ def main(argv=None):
             value = protocol.fail(args.session, args.token, args.reason)
         elif name == 'frame':
             value = frame(args.session, args.at, args.output)
+        elif name == 'name-activities':
+            candidate = None
+            if args.file:
+                path = Path(args.file)
+                if path.stat().st_size > 65536:
+                    raise ValueError('活动命名候选超过64 KB。')
+                candidate = json.loads(path.read_text(encoding='utf-8-sig'))
+            value = protocol.name_activities(args.session, candidate, apply=args.apply)
         else:
             path = Path(args.file)
             if path.stat().st_size > protocol.MAX_RESULT:

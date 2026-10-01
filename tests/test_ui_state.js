@@ -155,7 +155,7 @@ function fakeDOM() {
   const html=fs.readFileSync(path.join(__dirname,'../ui/index.html'),'utf8');
   const elements=new Map();let document;
   class Element {
-    constructor(id='') {this.id=id;this.value='';this.textContent='';this.innerHTML='';this.disabled=false;this.open=false;this.scrollTop=0;this.dataset={};this.attributes={};this.listeners={};this.children=[];const classes=new Set();this.classList={add:x=>classes.add(x),remove:x=>classes.delete(x),toggle:(x,on)=>{if(on===undefined)on=!classes.has(x);on?classes.add(x):classes.delete(x);return on;},contains:x=>classes.has(x)};}
+    constructor(id='') {this.id=id;this.value='';this.textContent='';this.innerHTML='';this.disabled=false;this.open=false;this.scrollTop=0;this.style={};this.dataset={};this.attributes={};this.listeners={};this.children=[];const classes=new Set();this.classList={add:x=>classes.add(x),remove:x=>classes.delete(x),toggle:(x,on)=>{if(on===undefined)on=!classes.has(x);on?classes.add(x):classes.delete(x);return on;},contains:x=>classes.has(x)};}
     addEventListener(name,fn){this.listeners[name]=fn;}
     setAttribute(name,value){this.attributes[name]=String(value);}
     removeAttribute(name){delete this.attributes[name];}
@@ -185,7 +185,7 @@ async function settle(){for(let i=0;i<5;i++)await new Promise(resolve=>setImmedi
 async function fixture(initial=snapshot()) {
   const {document,elements}=fakeDOM();const calls=[];const data={snapshot:initial};
   const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='refresh_devices')return data.refreshResult||{ok:true,data:{started:true,refresh_id:'refresh-1'}};if(name==='choose_directory')return {ok:true,data:{path:data.chosenDirectory||null}};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_preset'){if(data.vaultRace){data.vaultRace=false;data.snapshot.default_vault={...data.snapshot.default_vault,exists:true,is_directory:true,requires_confirmation:true};return {ok:false,code:'VAULT_REUSE_REQUIRED',error:'请确认使用已有资料库。'};}data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
-  const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(){return 1;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},console});
+  const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(){return 1;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},performance,console});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/state.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/app.js'),'utf8'),context);
   await settle();return {context,elements,calls,data,run:source=>vm.runInContext(source,context)};
@@ -537,6 +537,23 @@ test('update channel is local until explicit check and never enters a preset',as
   await f.elements.get('updateCheck').onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(f.calls.find(c=>c.name==='update_action').args)),[{action:'check',include_prerelease:true}]);
   f.run("store.openDraft('edit')");assert.equal(f.run('store.presetPayload().include_prerelease'),undefined);
+});
+
+test('startup discovery advertises updates without opening a dialog or blocking recording',async()=>{
+  const f=await fixture(snapshot({updates:{current_version:'0.7.0',latest_version:'0.7.1',state:'available'}}));
+  assert.equal(f.elements.get('versionButton').textContent,'v0.7.0 · 有更新');
+  assert.equal(f.elements.get('versionButton').classList.contains('has-update'),true);
+  assert.equal(!!f.elements.get('updateDialog').open,false);
+  assert.equal(f.elements.get('recordButton').disabled,false);
+  assert.equal(f.calls.some(c=>c.name==='update_action'),false);
+  f.data.snapshot.updates={current_version:'0.7.0',state:'error',error:'网络不可用'};await f.run('poll()');
+  assert.equal(f.elements.get('versionButton').textContent,'v0.7.0');
+  assert.equal(f.elements.get('recordButton').disabled,false);
+  assert.equal(!!f.elements.get('updateDialog').open,false);
+  f.elements.get('versionButton').onclick();
+  assert.equal(f.elements.get('updateCheck').disabled,false);
+  await f.elements.get('updateCheck').onclick();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.calls.find(c=>c.name==='update_action').args)),[{action:'check',include_prerelease:false}]);
 });
 
 test('update progress and channel changes cannot enable installation or disable recording',async()=>{

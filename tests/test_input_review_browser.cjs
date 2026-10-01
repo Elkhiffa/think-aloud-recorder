@@ -41,6 +41,12 @@ async function main(){
    await page.evaluate(inputs=>window.__snapshot.inputs=inputs,structuredClone(data.inputs));await page.waitForFunction(()=>!document.querySelector('[data-input-id="synthetic-overlap"]'));
  });
  await check('clip rename persists through bridge and retains preset',async()=>{await page.locator('#renameSession').click();await page.locator('#sessionName').fill('入口反复尝试');await page.locator('#renameForm button[type=submit]').click();assert.equal(await page.locator('#title').textContent(),'入口反复尝试');assert.ok((await page.locator('#sessionInfo').textContent()).includes('合成示例游戏'));assert.deepEqual(await page.evaluate(()=>window.__calls.find(item=>item[0]==='rename')),['rename','入口反复尝试']);});
+ await check('long manual title and content summary remain intact when editing',async()=>{
+   const name='合成手动名【自己的备注】 '+Array.from({length:16},(_,i)=>`内容${i}任务与探索`).join('+');
+   assert.ok(name.length>100);await page.locator('#renameSession').click();await page.locator('#sessionName').fill(name);
+   assert.equal(await page.locator('#sessionName').inputValue(),name);await page.locator('#renameForm button[type=submit]').click();
+   assert.equal(await page.locator('#title').textContent(),name);assert.equal(await page.evaluate(()=>window.__calls.filter(item=>item[0]==='rename').at(-1)[1]),name);
+ });
  await check('empty and whitespace rename restore the game title and remain restored after polling',async()=>{
    for(const name of ['', '   ']){
      await page.locator('#renameSession').click();assert.equal(await page.locator('#sessionName').getAttribute('placeholder'),'留空使用游戏／项目名');await page.locator('#sessionName').fill(name);await page.locator('#renameForm button[type=submit]').click();

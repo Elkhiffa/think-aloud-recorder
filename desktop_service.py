@@ -417,6 +417,18 @@ class DesktopService:
     def _has_key(self):
         return secret_store.has_key(directory=self.root / 'state/secrets')
 
+    def get_microphone_state(self):
+        """Fast cached read; no device access, session scanning or OBS requests."""
+        with self._lock:
+            session = self._active
+            if session is None:
+                return ok(dict(state='idle', level=0, session_id=None))
+            mic = session.meta.get('settings', {}).get('mic', '')
+            label = self._device_labels['mic'].get(mic) or next(
+                (item.get('itemName') for item in self._devices['mic'] if item.get('itemValue') == mic), None)
+            return ok(dict(session.microphone_state(), session_id=session.meta['id'],
+                           name=label or '当前预设的麦克风'))
+
     def _startup(self):
         self._recover()
         with self._lock:
@@ -1089,6 +1101,7 @@ class DesktopService:
                 try:
                     with recorder.obs_connection(False) as client:
                         if not client.get_record_status().output_active:
+                            session.close_microphone_monitor()
                             with self._lock:
                                 self._active = None
                             session.update(state='失败', error='录制已停止，但保存校验尚未完成。原文件已保留，请恢复整理。')
@@ -1419,6 +1432,20 @@ class DesktopService:
             self._update_review_count = review_count
             self._update_close_windows = close_windows
 
+    def check_startup_update(self):
+        """Called by the native window-loaded event, never by state polling."""
+        with self._lock:
+            if self._closed.is_set() or self._exit_pending:
+                return
+            # UpdateManager starts a separate worker; recording readiness and
+            # activity are independent, including when discovery fails offline.
+            try:
+                self._updates.check_on_startup()
+            except Exception:
+                # A UI lifecycle callback must not prevent opening the recorder.
+                # Manual checking remains available through update_action.
+                return
+
     def _update_blockers(self, model=None, *, installing=False):
         """Read-only eligibility. Never call close_allowed or pause a worker."""
         reasons=[]
@@ -1682,11 +1709,15 @@ class DesktopService:
                 state = client.get_record_status()
                 after = time.perf_counter()
                 directory = Path(client.send('GetRecordDirectory').record_directory).resolve() if state.output_active else None
+                if state.output_active and directory == session.path.resolve():
+                    session.ensure_microphone_monitor(client)
         except Exception:
+            session.close_microphone_monitor()
             session.finish_inputs(interrupted=True,error='与录制引擎的连接中断，操作采集已停止。')
             self._progress('无法连接 OBS，录像可能仍在继续。正在重连，请勿重复开始。', status='录制连接中断')
             return
         if not state.output_active:
+            session.close_microphone_monitor()
             session.finish_inputs(interrupted=True,error='OBS 录制意外停止。')
             session.update(state='失败', error='OBS 录制意外停止。原录像已保留，请选择恢复整理。')
             with self._lock:
@@ -1694,6 +1725,7 @@ class DesktopService:
             self._progress(session.meta['error'], status='录制已中断')
             return
         if directory != session.path.resolve():
+            session.close_microphone_monitor()
             session.finish_inputs(interrupted=True,error='录制归属已变化，操作采集已停止。')
             session.update(state='失败', error='OBS 已切换到其他录制目录。本场次原文件已保留，未停止其他录制。')
             with self._lock:
@@ -1709,7 +1741,7 @@ class DesktopService:
             self._progress(session.meta['warning'], status='待整理')
         else:
             self._report_recording_state(session,
-                'OBS 正在录制 ' + str(getattr(state, 'output_timecode', '')) + '；未开始电平检测。')
+                '录像正在保存，麦克风状态可在录制卡片中查看。')
 
     def close_allowed(self, *, for_update=False):
         """Only durable work blocks close. Idle readiness never owns the window."""
@@ -1752,6 +1784,7 @@ class DesktopService:
             return {'status': 'close_not_accepted'}
         with self._shutdown_lock:
             if self._active is not None:
+                self._active.close_microphone_monitor()
                 self._active.finish_inputs(interrupted=True,error='应用已关闭，操作采集已停止。')
             if self._obs_shutdown_result is None:
                 with self._operation_lock:

@@ -1,4 +1,4 @@
-"""Manual, unauthenticated GitHub Release updates for this fixed public project."""
+"""Public Release discovery; downloading and installation require user actions."""
 from __future__ import annotations
 from copy import deepcopy
 from functools import total_ordering
@@ -125,6 +125,7 @@ class UpdateManager:
         self._prepared=None
         self._installer=None
         self._install_lock=threading.Lock()
+        self._startup_checked=False
 
     def snapshot(self):
         with self._lock:result=deepcopy(self._state)
@@ -158,7 +159,7 @@ class UpdateManager:
                 except Cancelled:self._set(state='available' if self._release else 'idle',error=None)
                 except UpdateError as error:self._set(state='error',error=str(error))
                 except Exception:self._set(state='error',error='无法完成更新操作，请检查网络、文件权限和磁盘空间后重试。')
-            self._thread=threading.Thread(target=worker,name='manual-software-update',daemon=True)
+            self._thread=threading.Thread(target=worker,name='software-update',daemon=True)
             self._thread.start()
         return self.snapshot()
 
@@ -191,6 +192,21 @@ class UpdateManager:
                     if handle:handle.close()
                 return digest.hexdigest(),b''.join(chunks)
         raise UpdateError('更新服务器重定向次数过多。')
+
+    def check_on_startup(self):
+        """One stable-channel check per process, without superseding manual work.
+
+        Hold the same admission lock as manual check/download so a delayed
+        window-loaded event cannot discard an available or downloaded update.
+        A failed check is retried only by the user or on the next launch.
+        """
+        with self._lock:
+            if self._startup_checked:
+                return self.snapshot()
+            self._startup_checked=True
+            if self._state['state']!='idle' or self._thread is not None or self._preparing:
+                return self.snapshot()
+            return self.check(include_prerelease=False)
 
     def check(self,include_prerelease=False):
         if type(include_prerelease) is not bool:raise UpdateError('预览版本选项无效。')
