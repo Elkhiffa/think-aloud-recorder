@@ -61,6 +61,7 @@ def run_window(root):
     service.set_update_lifecycle(windows.review_count, windows.close_for_update)
     from update_installer import acknowledge_start
     window.events.loaded += lambda: acknowledge_start(root)
+    window.events.loaded += service.check_startup_update
     # Explicit renderer prevents silent fallback to the obsolete MSHTML engine.
     webview.settings['ALLOW_FILE_URLS'] = True
     try:

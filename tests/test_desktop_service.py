@@ -2134,7 +2134,7 @@ class DesktopServiceTests(unittest.TestCase):
         with patch.object(bridge.webbrowser, 'open', side_effect=OSError('synthetic failure')):
             self.assertFalse(self.service.open_bailian_console()['ok'])
 
-    def test_update_polling_is_read_only_and_startup_never_checks_network(self):
+    def test_update_polling_is_read_only_and_never_checks_network(self):
         self.service.set_update_lifecycle(lambda:2,MagicMock())
         self.updates.snapshot.return_value['state']='ready'
         before=deepcopy(self.service._readiness)
@@ -2144,11 +2144,29 @@ class DesktopServiceTests(unittest.TestCase):
                 self.assertTrue(state['can_install'])
                 self.assertEqual(state['review_count'],2)
         self.updates.check.assert_not_called()
+        self.updates.check_on_startup.assert_not_called()
         self.updates.download.assert_not_called()
         self.model.pause_download.assert_not_called()
         self.assertEqual(before,self.service._readiness)
         self.assertFalse(self.service._closed.is_set())
         self.assertFalse(self.service._exit_pending)
+
+    def test_window_loaded_update_check_does_not_claim_recording_activity(self):
+        active=self.session();self.service._active=active
+        before=deepcopy(self.service._activity)
+        readiness=deepcopy(self.service._readiness)
+        self.service.check_startup_update()
+        self.updates.check_on_startup.assert_called_once_with()
+        self.updates.check_on_startup.side_effect=RuntimeError('synthetic startup failure')
+        self.service.check_startup_update()
+        self.assertEqual(self.service._activity,before)
+        self.assertEqual(self.service._readiness,readiness)
+        self.assertIs(self.service._active,active)
+        self.model.pause_download.assert_not_called()
+        self.updates.download.assert_not_called()
+        self.service._exit_pending=True
+        self.service.check_startup_update()
+        self.assertEqual(self.updates.check_on_startup.call_count,2)
 
     def test_update_check_download_and_cancel_do_not_claim_recording_activity(self):
         session=self.session(state='录制中')

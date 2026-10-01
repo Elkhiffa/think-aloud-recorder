@@ -6,6 +6,7 @@ import os
 import zipfile
 from pathlib import Path
 import sys
+import threading
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
@@ -58,6 +59,52 @@ class UpdaterTests(unittest.TestCase):
         manager=self.manager(lambda request:httpx.Response(200,json=[]))
         manager.check();self.assertTrue(manager.wait(2))
         self.assertEqual(manager.snapshot()['state'],'no_release')
+
+    def test_startup_check_is_async_once_and_never_downloads(self):
+        entered,release=threading.Event(),threading.Event()
+        requests=[]
+        def handler(request):
+            requests.append(str(request.url));entered.set()
+            if not release.wait(2):raise AssertionError('Startup blocked the caller')
+            return httpx.Response(200,json=[])
+        manager=self.manager(handler)
+        try:
+            manager.check_on_startup()
+            self.assertTrue(entered.wait(1))
+            self.assertEqual(manager.snapshot()['state'],'checking')
+            manager.check_on_startup()
+        finally:
+            release.set();self.assertTrue(manager.wait(2))
+        manager.check_on_startup()
+        self.assertEqual(len(requests),1)
+        self.assertFalse(manager.snapshot()['include_prerelease'])
+        self.assertIsNone(manager._work)
+
+    def test_late_startup_preserves_manual_channel_and_prepared_download(self):
+        manager=self.manager(lambda request:httpx.Response(200,json=[]))
+        manager.check(include_prerelease=True);self.assertTrue(manager.wait(2))
+        manager.check_on_startup()
+        self.assertTrue(manager.snapshot()['include_prerelease'])
+        downloaded=self.download_fixture()
+        downloaded.download();self.assertTrue(downloaded.wait(3))
+        stage=downloaded._stage
+        downloaded.check_on_startup()
+        self.assertEqual(downloaded.snapshot()['state'],'ready')
+        self.assertEqual(downloaded._stage,stage)
+
+    def test_startup_network_failure_waits_for_manual_retry(self):
+        calls=[]
+        def handler(request):
+            calls.append(request)
+            if len(calls)==1:raise httpx.ConnectError('offline',request=request)
+            return httpx.Response(200,json=[])
+        manager=self.manager(handler)
+        manager.check_on_startup();self.assertTrue(manager.wait(2))
+        self.assertEqual(manager.snapshot()['state'],'error')
+        manager.check_on_startup();self.assertEqual(len(calls),1)
+        manager.check();self.assertTrue(manager.wait(2))
+        self.assertEqual(manager.snapshot()['state'],'no_release')
+        self.assertEqual(len(calls),2)
 
     def test_network_error_never_reports_current_or_leaks_url(self):
         def offline(request):raise httpx.ConnectError('SECRET_FROM_PROXY',request=request)

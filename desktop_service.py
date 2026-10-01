@@ -1432,6 +1432,20 @@ class DesktopService:
             self._update_review_count = review_count
             self._update_close_windows = close_windows
 
+    def check_startup_update(self):
+        """Called by the native window-loaded event, never by state polling."""
+        with self._lock:
+            if self._closed.is_set() or self._exit_pending:
+                return
+            # UpdateManager starts a separate worker; recording readiness and
+            # activity are independent, including when discovery fails offline.
+            try:
+                self._updates.check_on_startup()
+            except Exception:
+                # A UI lifecycle callback must not prevent opening the recorder.
+                # Manual checking remains available through update_action.
+                return
+
     def _update_blockers(self, model=None, *, installing=False):
         """Read-only eligibility. Never call close_allowed or pause a worker."""
         reasons=[]

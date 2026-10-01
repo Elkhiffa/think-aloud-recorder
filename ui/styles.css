@@ -39,6 +39,7 @@ fieldset:disabled{opacity:.75}
 .header-actions{display:flex;align-items:center;gap:10px}
 .version-button{border:0;background:none;color:var(--muted);font-size:12px;padding:8px 9px;border-radius:5px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .version-button:hover{color:var(--text);background:var(--surface)}
+.version-button.has-update{color:var(--accent);background:var(--surface);font-weight:600;max-width:240px}
 .update-dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 32px);overflow:hidden;padding:0}
 .update-dialog[open]{display:flex;flex-direction:column}
 .update-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 24px 14px;flex:none}

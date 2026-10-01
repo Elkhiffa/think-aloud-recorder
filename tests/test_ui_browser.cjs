@@ -727,6 +727,15 @@ async function updateChecks(context,origin){
     await updates({});assert.equal(await page.locator('#versionButton').textContent(),'v0.6.0-preview.3');
     assert.deepEqual(await box(page,'#recordButton'),initial);await screen(page,'updates-home-1060');
   });
+  await check('startup availability is visible without a modal or capture interruption',async()=>{
+    await updates({state:'available',latest_version:'0.7.0'});
+    assert.equal(await page.locator('#versionButton').textContent(),'v0.6.0-preview.3 · 有更新');
+    assert.equal(await page.locator('#versionButton').getAttribute('aria-label'),'有新版本 v0.7.0，查看更新');
+    assert.equal(await page.locator('#updateDialog').isVisible(),false);
+    assert.equal(await page.locator('#recordButton').isEnabled(),true);
+    assert.equal((await calls(page,'update_action')).length,0);
+    await screen(page,'updates-startup-available');await updates({});
+  });
   await check('stable is default and opening dialog does not check; explicit check and cancel use bridge',async()=>{
     await page.locator('#versionButton').click();assert.equal(await page.locator('#updateChannel').inputValue(),'stable');
     assert.equal((await calls(page,'update_action')).length,0);await screen(page,'updates-idle-light');

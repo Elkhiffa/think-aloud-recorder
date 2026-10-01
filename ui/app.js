@@ -45,8 +45,12 @@ function renderUpdates(){
  const u=updateState(),version=value=>String(value||'').replace(/^v/i,''),currentKnown=!!u.current_version&&u.current_version!=='unknown';
  renderLastInstall(u.last_install);
  if(updateInstallAccepted&&store.connected&&store.snapshot?.closing===false&&u.error)updateInstallAccepted=false;
- setText('versionButton',currentKnown?'v'+version(u.current_version):'版本与更新');
- $('#versionButton').title='版本与更新'+(currentKnown?' · v'+version(u.current_version):'');
+ const hasUpdate=['available','downloading','verifying','ready'].includes(u.state)&&!!u.latest_version;
+ const versionLabel=currentKnown?'v'+version(u.current_version):'版本与更新';
+ setText('versionButton',versionLabel+(hasUpdate?' · 有更新':''));
+ $('#versionButton').classList.toggle('has-update',hasUpdate);
+ $('#versionButton').title=hasUpdate?'新版本 v'+version(u.latest_version)+'，点击查看':'版本与更新'+(currentKnown?' · v'+version(u.current_version):'');
+ $('#versionButton').setAttribute('aria-label',hasUpdate?'有新版本 v'+version(u.latest_version)+'，查看更新':'版本与更新');
  setText('updateCurrent',currentKnown?'v'+version(u.current_version):u.current_version==='unknown'?'版本未知':'尚未获取');
  setText('updateLatest',u.latest_version?'v'+version(u.latest_version):u.state==='no_release'?'暂无发布':'尚未检查');
  const status={idle:['尚未检查更新','点击检查更新，查看当前频道的可用版本。'],checking:['正在检查更新','正在获取 GitHub Release 信息…'],available:['有新版本可用','下载完成并校验后，再由你确认退出更新。'],current:['已是当前频道的最新版本','暂时没有更新版本。'],no_release:['此频道暂无可用版本','稍后重试，或查看 Release 页面。'],downloading:['正在下载更新','关闭此窗口后，下载仍会继续。'],verifying:['正在校验更新','正在确认下载的文件是否完整。'],ready:['更新已下载并校验','准备好后，可退出记录器并安装更新。'],installing:['正在退出并更新','更新完成后会重新打开记录器。'],error:['更新未完成','可以重试，或前往 Release 页面查看。']};
