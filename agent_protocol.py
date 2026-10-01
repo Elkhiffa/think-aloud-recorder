@@ -120,6 +120,10 @@ def _identity(folder, meta=None):
     role = meta.get('recorder_speaker')
     role = {k: role.get(k) for k in ('transcript_id', 'speaker_id', 'source')} if isinstance(role, dict) else None
     sources = _stats(folder, FILES)
+    # Conditional to preserve the revisions of unaffected historical sessions.
+    corrections = _stats(folder, ('input-events.corrections.json',))
+    if corrections['input-events.corrections.json']:
+        sources.update(corrections)
     material = dict(version=VERSION, id=ident, game=meta.get('game', ''), duration=duration,
                     sources=sources, alignment=input_alignment(meta), recorder_speaker=role)
     revision = hashlib.sha256(json.dumps(material, sort_keys=True, ensure_ascii=False,
@@ -294,15 +298,16 @@ def evidence(folder, start=None, end=None):
                  title=session_title(meta),
                  test=bool(meta.get('test')), duration_seconds=duration,
                  timebase='video_seconds', speakers=speakers,
-                 paths={name: str(_path(folder, name)) for name in FILES if material['sources'][name]},
+                 paths={name: str(_path(folder, name)) for name in material['sources'] if material['sources'][name]},
                  transcript=segments, inputs={k: inputs[k] for k in
-                     ('state', 'error', 'alignment', 'recording_scope', 'timebase') if k in inputs},
+                     ('state', 'error', 'alignment', 'recording_scope', 'timebase', 'input_corrections') if k in inputs},
                  coverage=dict(transcript_segments=len(segments),
                                last_transcript_end=max((s['end'] for s in segments), default=None),
                                input_intervals=len(inputs['intervals']), gaps=inputs['gaps'],
                                window_states=inputs['window_states']),
                  cautions=['原话可能误转写；未讲述不等于没有体验问题。',
                            '设备输入不证明游戏收到操作；后台手柄可能有效。',
+                           'end_reason 标记的按键区间未收到松开消息；只保留到最后确认按下，不能推断精确长按时长。',
                            '自动推荐的记录者身份需要核对；原声与画面优先。'])
     from event_edits import context as correction_context
     value['manual_corrections'] = correction_context(folder)

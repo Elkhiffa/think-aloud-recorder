@@ -298,6 +298,21 @@ async function main(){
    assert.equal((await playback()).time,before.time);
    await page.screenshot({path:path.join(out,'vertical-scrollbar.png')});
  });
+ await check('corrected false holds stay absent and uncertain endings are explicit',async()=>{
+   await page.evaluate(()=>{
+     window.__snapshot.inputs={version:1,state:'complete',duration:32,timebase:'video_seconds',
+       intervals:[{id:'confirmed-prefix',device:'mouse',code:'MouseLeft',kind:'button',start:1,end:2,end_reason:'release_unobserved',end_uncertainty_seconds:.2}],gaps:[],
+       input_corrections:{excluded_count:1,note:'已排除经人工确认的不可信操作；原始记录保留。'}};
+     window.__snapshot.revision='corrected-inputs';
+   });
+   await page.waitForFunction(()=>document.querySelector('#timelineState').textContent.includes('已排除 1 段不可信操作'));
+   await page.locator('#inputTab').click();await seek(1.5);
+   if(await page.locator('#follow').getAttribute('aria-pressed')==='false')await page.locator('#follow').click();
+   const bar=page.locator('[data-input-id="confirmed-prefix"]');await bar.hover();
+   assert.match(await page.locator('#inputDetail').textContent(),/实际松开时刻未知/);
+   assert.match(await page.locator('#inputDetail').textContent(),/长按至少 1.00 秒/);
+   assert.equal(await page.locator('.key-bar').count(),1);
+ });
  await check('no browser exceptions',async()=>assert.deepEqual(errors,[]));
  await browser.close();server.close();const report={scope:'Synthetic production browser acceptance; no actual OBS/device/native capture validation.',checks,errors,passed:checks.every(c=>c.pass)};fs.writeFileSync(path.join(out,'acceptance.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));if(!report.passed)process.exitCode=1;
 }

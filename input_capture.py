@@ -369,6 +369,12 @@ class InputRecorder:
                 return
             self._control_times[key] = at
             if typ == 'button' and event.get('down') is not True:
+                current = self._active.get(key)
+                if current and event.get('end_reason') in ('release_unobserved', 'state_unavailable', 'recording_end'):
+                    current['end_reason'] = event['end_reason']
+                    uncertainty = event.get('end_uncertainty_seconds', 0.)
+                    if isinstance(uncertainty, (int, float)) and math.isfinite(uncertainty):
+                        current['end_uncertainty_seconds'] = round(max(0., uncertainty), 6)
                 self._close(key, at)
                 return
             props = {'device': device, 'code': code, 'label': str(event.get('label', code))[:32], 'kind': kind}

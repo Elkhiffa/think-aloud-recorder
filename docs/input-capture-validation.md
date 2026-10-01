@@ -2,6 +2,39 @@
 
 2026-09-22. These notes distinguish implemented safeguards, synthetic tests, native lifecycle checks and still-unverified hardware behavior.
 
+## 2026-10-02: missed button releases (0.7.2)
+
+Raw Input remains the source of precise transitions. Once its queue is drained,
+active mouse/keyboard buttons are checked every 100 ms against the high bit of
+GetAsyncKeyState. Two absent observations at least 50 ms apart end an unmatched
+press at its last positive observation, not at recording completion. A real hold
+has no maximum-duration cutoff. Background game state never gates all-input mode.
+
+Sampling checks the input desktop and foreground process integrity first. An
+inaccessible desktop/process is unknown, not a release. Both unknown access and
+missing-release endings retain `end_reason` and `end_uncertainty_seconds`; review
+tooltips and the agent evidence interface explain that exact release time cannot
+be inferred. Restored access resumes held controls with an explicit resumed flag.
+At stop, tracked buttons end at the last confirmed observation. Raw timestamps,
+controller sampling and independent window annotations are unchanged.
+
+An optional local `input-events.corrections.json` can exclude user-confirmed false
+intervals without changing original input JSON or the recovery journal. Version 1
+contains `source_sha256` (original file bytes) and `excluded` entries with exact
+`id`, `device`, `code`, `start`, `end` and a nonempty `reason`. The bounded reader
+requires unique matches; mismatched corrections make optional inputs unavailable
+instead of silently reusing false data. Review, portable export and agent evidence
+share this projection and display an exclusion notice. Its presence/content changes
+only that session's material revision: existing analysis is retained as stale until
+reprocessed. Do not infer or delete other long holds solely from their duration.
+
+Deterministic tests reproduce a lost MouseLeft release, preserve a genuine hold
+longer than 4,330 seconds, check raw short-tap timing, queue priority, unknown state,
+background capture, stop bounds, and non-destructive historical correction. The
+production-browser suite checks the warning and tooltip. Native hidden-target
+lifecycle checks register/unregister Raw Input and release SDL; they do not establish
+real hardware button accuracy. Actual in-game acceptance still requires a new clip.
+
 ## Integration API
 
 - `capture_readiness(settings, root=None)` returns `{enabled, ready, error}`. `record_inputs` must be true; source must be `游戏窗口`; exact OBS window identifier must resolve unambiguously. No listener starts during readiness.

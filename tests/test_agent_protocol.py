@@ -52,6 +52,32 @@ class AgentProtocolTests(unittest.TestCase):
                     questions=[dict(id='q1',event_id='e1',question='后来如何确认状态？',reason='当前片段未说明。')],
                     ideas=[dict(id='h1',event_id='e1',idea='比较不同状态的提示是否容易区分。',reason='原话表达了疑惑。')])
 
+    def test_input_correction_revises_evidence_preserves_analysis_and_exports_notice(self):
+        self.complete()
+        original = (self.folder / 'experience-events.json').read_bytes()
+        api = ReviewAPI(self.folder, {})
+        before = api.get_snapshot()['data']['revision']
+        raw = (self.folder / 'input-events.json').read_bytes()
+        row = json.loads(raw)['intervals'][0]
+        recorder.write(self.folder / 'input-events.corrections.json', dict(version=1,
+            source_sha256=hashlib.sha256(raw).hexdigest(), excluded=[dict(row, reason='Confirmed false hold')]))
+        self.assertNotEqual(api.get_snapshot()['data']['revision'], before)
+        self.assertEqual(agent.preprocessing_status(self.folder)['state'], 'stale')
+        manifest = agent.publish_ready(self.folder)
+        self.assertNotEqual(manifest['revision'], self.manifest['revision'])
+        evidence = agent.evidence(self.folder, 0, 12)
+        self.assertEqual(evidence['inputs']['intervals'], [])
+        self.assertEqual(evidence['inputs']['input_corrections']['excluded_count'], 1)
+        self.assertEqual((self.folder / 'experience-events.json').read_bytes(), original)
+        self.assertEqual((self.folder / 'input-events.json').read_bytes(), raw)
+        archive = recorder.Session(self.folder).package()
+        with zipfile.ZipFile(archive) as package:
+            name = next(n for n in package.namelist() if n.endswith('/input-events.json'))
+            projected = json.loads(package.read(name))
+            self.assertEqual(projected['intervals'], [])
+            self.assertEqual(projected['input_corrections']['excluded_count'], 1)
+            self.assertFalse(any(n.endswith('/input-events.corrections.json') for n in package.namelist()))
+
     def complete(self):
         job=agent.claim(self.folder,'synthetic-worker')
         agent.submit(self.folder,job['token'],self.candidate())

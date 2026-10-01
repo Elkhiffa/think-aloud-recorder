@@ -44,6 +44,45 @@ def input_alignment(meta):
                 uncertainty_seconds=uncertainty)
 
 
+def _input_corrections(folder, raw, data):
+    """Reject only explicitly identified intervals; keep the source untouched.
+
+    Bind corrections to exact file bytes and interval identity so a repaired or
+    re-recorded file can never inherit unrelated exclusions.
+    """
+    path = Path(folder) / 'input-events.corrections.json'
+    if not path.exists():
+        return None
+    import hashlib
+    path = contained_file(folder, path.name)
+    if path.stat().st_size > 65536:
+        raise ValueError('操作校准文件过大。')
+    correction = json.loads(path.read_text(encoding='utf-8'))
+    if (not isinstance(correction, dict) or correction.get('version') != 1
+            or correction.get('source_sha256') != hashlib.sha256(raw).hexdigest()):
+        raise ValueError('操作校准与原始记录不匹配，请核对；未使用可能失效的长按数据。')
+    rows = correction.get('excluded')
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 100:
+        raise ValueError('操作校准条目无效。')
+    identities = ('id', 'device', 'code', 'start', 'end')
+    intervals = data.get('intervals')
+    if not isinstance(intervals, list) or any(not isinstance(row, dict) for row in intervals):
+        raise ValueError('待校准的操作记录无效。')
+    rejected = set()
+    for item in rows:
+        if (not isinstance(item, dict) or any(k not in item for k in identities)
+                or not isinstance(item.get('reason'), str) or not item['reason'].strip()):
+            raise ValueError('操作校准缺少原因。')
+        matches = [i for i, row in enumerate(intervals)
+                   if all(row.get(k) == item.get(k) for k in identities)]
+        if len(matches) != 1 or matches[0] in rejected:
+            raise ValueError('操作校准无法唯一对应原始记录。')
+        rejected.add(matches[0])
+    data['intervals'] = [row for i, row in enumerate(data['intervals']) if i not in rejected]
+    return dict(excluded_count=len(rejected),
+                note=f'已排除 {len(rejected)} 段经人工确认的不可信操作；原始记录保留，真实松开时刻未知。')
+
+
 def input_payload(folder, meta):
     """Only the review schema crosses into HTML; never include raw device data."""
     duration = (meta.get('media') or {}).get('duration', 0)
@@ -58,7 +97,8 @@ def input_payload(folder, meta):
             base['error'] = '本场次未启用操作记录。' if 'record_inputs' in (meta.get('settings') or {}) else '旧场次没有操作记录。'
         return base
     try:
-        data = json.loads(contained_file(folder, 'input-events.json').read_text(encoding='utf-8'))
+        raw = contained_file(folder, 'input-events.json').read_bytes()
+        data = json.loads(raw.decode('utf-8'))
         if (not isinstance(data, dict) or data.get('version') != 1 or data.get('timebase') != 'video_seconds'
                 or data.get('state') not in ('complete', 'recording', 'failed', 'interrupted', 'disabled')):
             raise ValueError('操作记录格式不正确。')
@@ -66,6 +106,13 @@ def input_payload(folder, meta):
         if not _number(end) or end < 0:
             raise ValueError('操作记录时长无效。')
         base.update(state=data['state'], duration=end)
+        correction = _input_corrections(folder, raw, data)
+        # A portable export already contains the corrected projection.
+        correction = correction or data.get('input_corrections')
+        if (isinstance(correction, dict) and type(correction.get('excluded_count')) is int
+                and 0 < correction['excluded_count'] <= 100):
+            base['input_corrections'] = dict(excluded_count=correction['excluded_count'],
+                                             note=str(correction.get('note', ''))[:500])
         if data.get('recording_scope') == 'all':
             base['recording_scope'] = 'all'
             base['window_states'] = []
@@ -100,6 +147,11 @@ def input_payload(folder, meta):
                         clean[field] = row[field]
                 if key == 'intervals' and row.get('resumed') is True:
                     clean['resumed'] = True
+                if key == 'intervals' and row.get('end_reason') in ('release_unobserved', 'state_unavailable', 'recording_end'):
+                    clean['end_reason'] = row['end_reason']
+                    uncertainty = row.get('end_uncertainty_seconds')
+                    if _number(uncertainty) and uncertainty >= 0:
+                        clean['end_uncertainty_seconds'] = uncertainty
                 base[key].append(clean)
         if data.get('error'):
             base['error'] = _safe_error(data['error'])
@@ -327,7 +379,7 @@ class ReviewAPI:
 
     def _snapshot_revision(self):
         files=[]
-        for name in ('session.json','录像.whisper.json','input-events.json','input-events.revocation.json',
+        for name in ('session.json','录像.whisper.json','input-events.json','input-events.revocation.json','input-events.corrections.json',
                      '录像.mp4','口述.flac','agent-ready.json','agent-state.json','experience-events.json','experience-event-edits.json'):
             try:
                 info=(self._folder/name).stat()

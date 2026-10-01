@@ -121,6 +121,134 @@ def key_code(vkey, scan=0, flags=0):
     return KEY_NAMES.get(vkey)
 
 
+MOUSE_KEYS = {1: 'MouseLeft', 2: 'MouseRight', 4: 'MouseMiddle', 5: 'MouseX1', 6: 'MouseX2'}
+BUTTON_VKEYS = {('keyboard', code): vk for vk, code in KEY_NAMES.items()}
+BUTTON_VKEYS.update({('mouse', code): vk for vk, code in MOUSE_KEYS.items()})
+# Win32 cannot distinguish Enter from NumEnter when sampling. A positive state
+# is only corroboration; the original Raw Input transition retains its identity.
+BUTTON_VKEYS['keyboard', 'NumEnter'] = 13
+
+
+class ButtonStateReconciler:
+    """Bound missed key-up messages by observations, never by hold duration.
+
+    A sampled zero can also mean access was lost. After two observations we
+    retain only the last positively confirmed point, with an uncertain ending.
+    Raw releases remain exact. Unknown desktop/access state is never an up.
+    """
+    def __init__(self):
+        self.active = {}
+
+    def observe(self, event):
+        key = (event.get('device'), event.get('code'))
+        if event.get('type') != 'button' or key not in BUTTON_VKEYS:
+            return
+        stamp = event['timestamp']
+        current = self.active.get(key)
+        if current and stamp < current['confirmed']:
+            return
+        if event.get('down'):
+            self.active[key] = dict(confirmed=stamp, absent=None)
+        else:
+            self.active.pop(key, None)
+
+    def sample(self, at, read):
+        events = []
+        for key, state in list(self.active.items()):
+            down = read(BUTTON_VKEYS[key])
+            if down is True:
+                state.update(confirmed=max(at, state['confirmed']), absent=None)
+                continue
+            if down is False:
+                if state['absent'] is None:
+                    state['absent'] = at
+                    continue
+                if at - state['absent'] < .05:
+                    continue
+            reason = 'state_unavailable' if down is None else 'release_unobserved'
+            events.append(dict(type='button', device=key[0], code=key[1], down=False,
+                               timestamp=state['confirmed'], end_reason=reason,
+                               end_uncertainty_seconds=max(0., at - state['confirmed'])))
+            del self.active[key]
+        return events
+
+    def finish(self, at):
+        events = self.sample(at, lambda vk: None)
+        for event in events:
+            event['end_reason'] = 'recording_end'
+        return events
+
+
+class ButtonStateProbe:
+    """Read-only checks; never attach to or switch the user's desktop."""
+    def __init__(self, user, kernel):
+        self.user, self.kernel = user, kernel
+        self.advapi = C.WinDLL('advapi32', use_last_error=True)
+        for library, name, args, result in (
+            (user, 'OpenInputDesktop', [W.DWORD, W.BOOL, W.DWORD], W.HANDLE),
+            (user, 'CloseDesktop', [W.HANDLE], W.BOOL),
+            (user, 'GetThreadDesktop', [W.DWORD], W.HANDLE),
+            (user, 'GetUserObjectInformationW', [W.HANDLE, C.c_int, C.c_void_p, W.DWORD, C.POINTER(W.DWORD)], W.BOOL),
+            (kernel, 'GetCurrentThreadId', [], W.DWORD),
+            (self.advapi, 'OpenProcessToken', [W.HANDLE, W.DWORD, C.POINTER(W.HANDLE)], W.BOOL),
+            (self.advapi, 'GetTokenInformation', [W.HANDLE, C.c_int, C.c_void_p, W.DWORD, C.POINTER(W.DWORD)], W.BOOL),
+            (self.advapi, 'GetSidSubAuthorityCount', [C.c_void_p], C.POINTER(C.c_ubyte)),
+            (self.advapi, 'GetSidSubAuthority', [C.c_void_p, W.DWORD], C.POINTER(W.DWORD)),
+        ):
+            fn = getattr(library, name)
+            fn.argtypes, fn.restype = args, result
+        self.integrity = self._integrity(os.getpid())
+        self._foreground_pid = None
+        self._foreground_integrity = None
+
+    def _integrity(self, pid):
+        process = self.kernel.OpenProcess(0x1000, False, pid)
+        if not process:
+            return None
+        token = W.HANDLE()
+        try:
+            if not self.advapi.OpenProcessToken(process, 0x8, C.byref(token)):
+                return None
+            needed = W.DWORD()
+            self.advapi.GetTokenInformation(token, 25, None, 0, C.byref(needed))
+            if not 0 < needed.value < 65536:
+                return None
+            buffer = C.create_string_buffer(needed.value)
+            if not self.advapi.GetTokenInformation(token, 25, buffer, len(buffer), C.byref(needed)):
+                return None
+            sid = C.cast(buffer, C.POINTER(C.c_void_p)).contents.value
+            count = self.advapi.GetSidSubAuthorityCount(sid).contents.value
+            return self.advapi.GetSidSubAuthority(sid, count - 1).contents.value if count else None
+        finally:
+            if token:
+                self.kernel.CloseHandle(token)
+            self.kernel.CloseHandle(process)
+
+    def _name(self, desktop):
+        name, needed = C.create_unicode_buffer(512), W.DWORD()
+        return name.value if self.user.GetUserObjectInformationW(desktop, 2, name, C.sizeof(name), C.byref(needed)) else None
+
+    def available(self):
+        desktop = self.user.OpenInputDesktop(0, False, 0x1 | 0x8)
+        if not desktop:
+            return False
+        try:
+            current = self._name(self.user.GetThreadDesktop(self.kernel.GetCurrentThreadId()))
+            if not current or self._name(desktop) != current:
+                return False
+        finally:
+            self.user.CloseDesktop(desktop)
+        foreground = self.user.GetForegroundWindow()
+        if not foreground or self.integrity is None:
+            return False
+        pid = W.DWORD()
+        self.user.GetWindowThreadProcessId(foreground, C.byref(pid))
+        if pid.value != self._foreground_pid:
+            self._foreground_pid = pid.value
+            self._foreground_integrity = self._integrity(pid.value)
+        return self._foreground_integrity is not None and self._foreground_integrity <= self.integrity
+
+
 class Header(C.Structure):
     _fields_ = [('type', W.DWORD), ('size', W.DWORD), ('device', W.HANDLE), ('param', W.WPARAM)]
 
@@ -386,6 +514,10 @@ class WindowsInputSource:
         self._motion_started = False
         self._mapper = None
         self._resume_due = None
+        self._buttons = ButtonStateReconciler()
+        self._button_probe = None
+        self._button_sample_at = 0.
+        self._button_access = None
 
     def start(self, callback):
         self.callback = callback
@@ -435,6 +567,8 @@ class WindowsInputSource:
             self._mouse_accum = [0, 0]
             self._motion_started = False
             self._resume_due = self.clock() + .064 if foreground else None
+            if not foreground:
+                self._buttons.active.clear()
         return foreground
 
     def _resume_if_stable(self):
@@ -455,6 +589,7 @@ class WindowsInputSource:
         if self.capture_all:
             if event.get('timestamp', self.clock()) >= self._capture_started:
                 self._pending.append(dict(event))
+                self._buttons.observe(event)
             return
         # Re-check for each event; never trust a foreground state cached by a
         # previous timer iteration. Also discard older messages queued outside.
@@ -464,22 +599,42 @@ class WindowsInputSource:
             self._pending.append({'type': 'coverage_gap', 'timestamp': event['timestamp'], 'end': self.clock()})
             return
         self._pending.append(dict(event, foreground=True))
+        self._buttons.observe(event)
 
     def _resume_keyboard(self):
-        # No state is sampled while another program is foreground. A resumed
-        # hold is marked explicitly rather than pretending to know its onset.
+        # Resume only where physical state can be queried. In all-input mode
+        # this is independent of whether the target game is foreground.
+        if self._button_probe is not None and not self._button_probe.available():
+            return
         for vk, code in KEY_NAMES.items():
             if not self.capture_all and not self._foreground():
                 return
             if self.user.GetAsyncKeyState(vk) & 0x8000:
                 self._emit({'type': 'button', 'device': 'keyboard', 'code': code,
                                'down': True, 'timestamp': self.clock(), 'foreground': True, 'resumed': True})
-        for vk, code in ((1, 'MouseLeft'), (2, 'MouseRight'), (4, 'MouseMiddle'), (5, 'MouseX1'), (6, 'MouseX2')):
+        for vk, code in MOUSE_KEYS.items():
             if not self.capture_all and not self._foreground():
                 return
             if self.user.GetAsyncKeyState(vk) & 0x8000:
                 self._emit({'type': 'button', 'device': 'mouse', 'code': code,
                                'down': True, 'timestamp': self.clock(), 'foreground': True, 'resumed': True})
+
+    def _reconcile_buttons(self, queue_drained=True):
+        now = self.clock()
+        # A queued release owns its original timestamp. Never let polling get
+        # ahead of Raw Input, including the bounded 512-message drain batches.
+        if not queue_drained or now < self._button_sample_at:
+            return
+        self._button_sample_at = now + .1
+        if not self.capture_all and not self._foreground():
+            return
+        available = self._button_probe.available()
+        if available and self._button_access is False:
+            self._resume_keyboard()
+        self._button_access = available
+        read = (lambda vk: bool(self.user.GetAsyncKeyState(vk) & 0x8000)) if available else (lambda vk: None)
+        for event in self._buttons.sample(now, read):
+            self._emit(event)
 
     def _invalidate(self, timestamp):
         diagnostic = getattr(self._observer, 'diagnostic', None) or {'component': 'foreground_context'}
@@ -605,6 +760,7 @@ class WindowsInputSource:
             if not acquired:
                 raise InputCaptureError('已有场次正在采集操作。')
             self.user, self.kernel = winapi()
+            self._button_probe = ButtonStateProbe(self.user, self.kernel)
             import psutil
             if psutil.Process(self.target.pid).create_time() != self.target.created:
                 raise InputCaptureError('目标程序已重新启动，请重新开始录制。')
@@ -690,9 +846,12 @@ class WindowsInputSource:
                 self._controllers.pump()
                 stage = 'input_delivery'
                 self._resume_if_stable()
+                self._reconcile_buttons(queue_drained=count < 512)
                 self._flush_pending()
                 self._stop.wait(.004)
             stop_at = self.clock()
+            for event in self._buttons.finish(stop_at):
+                self._emit(event)
             # Wait only for a real marker acknowledgement, never advance a fence
             # merely because wall time elapsed. Unconfirmed tail remains absent.
             deadline = stop_at + .5

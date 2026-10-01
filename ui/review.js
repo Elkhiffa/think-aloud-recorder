@@ -811,10 +811,11 @@
       const time=pointerTime(event,item),sample=inputSampleAt(item,time),label=sample?.label||item.label||item.code;
       const value=sample?.value!=null?` · ${Math.round(sample.value*100)}%`:'';
       const detail=sample?`${sample.direction||inputLabel(sample)}${item.activity&&time>=sample.end?' · 上次输入（已松开）':''}${value}${sample.x!=null?` · X ${sample.x} / Y ${sample.y}`:''}`:item.end===item.start?'瞬时操作':'此刻已松开';
-      const press=sample||item,hold=isLongPress(press)?` · 长按 ${(press.end-press.start).toFixed(2)} 秒`:'';
+      const press=sample||item,hold=isLongPress(press)?` · 长按${press.end_reason?'至少':''} ${(press.end-press.start).toFixed(2)} 秒`:'';
       const windowState=source.recording_scope==='all'?windowStateAt(windowIndex,Math.max(item.start,Math.min(time,Math.max(item.start,item.end-1e-9)))):null;
       const windowNote=windowState==='background'?'游戏在后台 · 此操作不代表游戏已接收':windowState==='unknown'?'窗口状态未知':'';
-      inputDetail.innerHTML=`<time>${preciseClock(item.start)} — ${preciseClock(item.end)}</time><strong>${escape(deviceName(group(sample?.device||item.device))+' · '+label+hold)}</strong><span>${preciseClock(Math.max(item.start,time))} · ${escape(detail.trim()||'持续中')}</span>${windowNote?`<span class="input-window-note">${windowNote}</span>`:''}`;
+      const endNote=({release_unobserved:'未收到松开消息，仅保留到最后确认按下；实际松开时刻未知。',state_unavailable:'按键状态无法继续核对，仅保留到最后确认按下。',recording_end:'录制结束时仍未收到松开消息，仅保留到最后确认按下。'})[press.end_reason]||'';
+      inputDetail.innerHTML=`<time>${preciseClock(item.start)} — ${preciseClock(item.end)}</time><strong>${escape(deviceName(group(sample?.device||item.device))+' · '+label+hold)}</strong><span>${preciseClock(Math.max(item.start,time))} · ${escape(detail.trim()||'持续中')}</span>${endNote?`<span class="input-window-note">${escape(endNote)}</span>`:''}${windowNote?`<span class="input-window-note">${windowNote}</span>`:''}`;
       inputDetail.hidden=false;const rect=event?.currentTarget?.getBoundingClientRect()||timeline.getBoundingClientRect();
       inputDetail.style.left=Math.max(12,Math.min(root.innerWidth-inputDetail.offsetWidth-12,(event?.clientX??rect.right)+14))+'px';
       inputDetail.style.top=Math.max(12,Math.min(root.innerHeight-inputDetail.offsetHeight-12,(event?.clientY??rect.top)+14))+'px';
@@ -1038,6 +1039,7 @@
       const transcript=data.transcription?.state||'ready',isReady=transcript==='ready';quoteIndex=intervalIndex(isReady?segments.map((item,i)=>({...item,index:i})):[]);$('transcriptTab').disabled=!isReady;$('transcriptTab').textContent=isReady?'原话':transcript==='failed'?'转写失败':'转写中';$('transcriptTab').title=data.transcription?.error||'';
       if(!isReady&&state.tab==='transcript')setTab('inputs');
       const message=inputMessage(),gapCount=source.gaps.filter(gap=>!gap.preparation).length;$('timelineState').textContent=message||`${bands.length} 段记录${gapCount?' · '+gapCount+' 处缺口':''}`;$('timelineState').title=source.error||message||`${source.intervals.length} 个原始采样区间；暖色实线为超过 0.5 秒的长按，深色为短按；虚线浅色为合并活动，短横线为实际输入。内容区滚轮浏览，时间刻度区滚轮缩放。`;
+      if(source.input_corrections?.excluded_count){$('timelineState').textContent+=` · 已排除 ${source.input_corrections.excluded_count} 段不可信操作`;$('timelineState').title=source.input_corrections.note;}
       if(state.pinned&&pinnedQuote)state.quote=segments.findIndex(s=>s.start===pinnedQuote.start&&s.end===pinnedQuote.end&&s.text===pinnedQuote.text);
       state.lastInput='';closeQuote();setTab(state.tab);render(true);
     }
