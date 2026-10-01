@@ -9,6 +9,7 @@ let downloadDirectory=null,presetSignature='',deviceSignature='',sessionSignatur
 let dialogGeneration=0,connectionMessage='',lastActivitySignature='',actionContext=null;
 let pendingDeviceSetup=null;
 let updatePending='',updateError='',updateChannelDirty=false,updateInstallAccepted=false;
+let microphoneRequest=null,microphoneSession=null,microphoneUpdated=0;
 const firstWizardStep=()=>wizardMode==='edit'?1:0;
 const setText=(id,value)=>{const n=document.getElementById(id);const text=String(value??'');if(n.textContent!==text)n.textContent=text;};
 const show=(id,value)=>document.getElementById(id).classList.toggle('hidden',!value);
@@ -98,6 +99,7 @@ function render(){renderHome();renderPresets();if(store.draft){completeDeviceSet
  if(!firstSetupHandled&&store.snapshot){firstSetupHandled=true;if(!store.presets.length&&!store.recording)openWizard('new',0,true);}}
 function renderHome(){
  const a=store.activity,r=store.readiness,recording=store.recording;
+ syncMicrophoneVisibility();
  const closing=!!store.snapshot?.closing;
  const foreground=!!a.busy&&!['devices','idle'].includes(a.kind);
  const checking=r.checking===true||a.kind==='devices'&&a.busy===true;
@@ -137,6 +139,44 @@ function renderHome(){
  setText('jobDetail',cancelPending?'更新助手尚未确认取消，请打开顶部“版本与更新”重试取消。':closing?'正在保存并等待现有整理完成，完成后此窗口会自动关闭。':foreground?a.detail:'');
  setText('savedLocation',store.activeId&&store.saved.vault?'保存到 '+store.saved.vault:'尚未选择保存位置');
  $('#openVault').title=store.saved.vault||'';
+}
+function showMicrophone(data={state:'connecting',level:0}){
+ const states={
+  connecting:['正在读取音量…','说句话，确认音量条随声音变化。'],
+  signal:['有声音','说句话，确认音量条随声音变化。'],
+  quiet:['暂时安静','说句话，确认音量条随声音变化。'],
+  silent:['持续未收到明显声音','如果你正在说话，请检查麦克风静音键、连接和所选设备。录像仍在继续。'],
+  muted:['麦克风已静音','录制引擎中的麦克风已静音，请取消静音后确认音量条有变化。'],
+  unrouted:['口述音轨未接入','当前麦克风未送入口述音轨。请结束这段录制，检查录制设置后重试。'],
+  loud:['音量偏高','声音可能失真，试着离麦克风远一点或降低麦克风增益。'],
+  unavailable:['音量状态暂不可用','暂时无法确认麦克风是否收到声音，正在重试。录像不会因此停止。']
+ };
+ const state=Object.hasOwn(states,data.state)?data.state:'unavailable',copy=states[state];
+ $('#microphoneMonitor').dataset.state=state;
+ if(data.name){setText('microphoneName',data.name);$('#microphoneName').title=data.name;}
+ setText('microphoneStatus',copy[0]);setText('microphoneHint',copy[1]);
+ const value=['signal','quiet','silent','loud'].includes(state)&&Number.isFinite(data.level)?Math.max(0,Math.min(1,data.level)):0;
+ $('#microphoneFill').style.transform=`scaleX(${value})`;
+ $('#microphoneLevel').setAttribute('aria-valuenow',Math.round(value*100));
+ $('#microphoneLevel').setAttribute('aria-valuetext',copy[0]);
+}
+function syncMicrophoneVisibility(){
+ const id=store.recording?store.activity.active_id:null;
+ show('microphoneMonitor',!!id);
+ if(id!==microphoneSession){microphoneSession=id;microphoneUpdated=performance.now();setText('microphoneName','麦克风');showMicrophone();}
+ if(id&&!store.connected)showMicrophone({state:'unavailable'});
+}
+async function pollMicrophone(){
+ syncMicrophoneVisibility();
+ const id=microphoneSession;if(!id)return;
+ if(performance.now()-microphoneUpdated>2500)showMicrophone({state:'unavailable'});
+ if(microphoneRequest||!store.connected)return;
+ const token={};microphoneRequest=token;
+ try{
+  const data=await api('get_microphone_state');
+  if(id===microphoneSession&&store.connected&&data?.session_id===id){microphoneUpdated=performance.now();showMicrophone(data);}
+ }catch(_){if(id===microphoneSession)showMicrophone({state:'unavailable'});}
+ finally{if(microphoneRequest===token)microphoneRequest=null;}
 }
 function renderPresets(){const signature=JSON.stringify([store.presets,store.activeId]);if(signature===presetSignature)return;presetSignature=signature;$('#presetSelect').innerHTML=(store.activeId?'':'<option value="">选择录制预设</option>')+store.presets.map(p=>`<option value="${escapeHTML(p.id)}">${escapeHTML(p.name)}</option>`).join('');$('#presetSelect').value=store.activeId||'';}
 function renderControls(){renderHome();renderUpdates();const locked=!store.connected||store.requestPending||store.busy;$('#recordButton').disabled=store.recording?(!store.connected||store.requestPending||!!store.activity.busy):!store.canStart;$('#presetSelect').disabled=locked||!store.presets.length;$('#newPresetButton').disabled=locked;$('#settingsButton').disabled=locked||!store.activeId;$('#openVault').disabled=!store.connected||store.requestPending||!store.activeId;
@@ -270,9 +310,9 @@ function sessionRow(s){
  return `<article class="session-row"><div class="session-main"><div class="session-name"><div class="session-title-row"><strong>${escapeHTML(title)}${s.test?' <span class="test-tag">合成测试</span>':''}</strong>${rename}</div>${s.session_name?`<p class="session-game">${escapeHTML(s.game||'')}</p>`:''}<p class="session-meta"><span>${escapeHTML(formatDate(s.created))}</span><span class="session-duration"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>${escapeHTML(formatTime(s.duration))}</span></p>${progress?`<p class="session-progress">${escapeHTML(progress)}</p>`:''}</div><span class="session-state ${kind}">${escapeHTML(state)}</span>${canReview(s)?`<button class="session-quick" data-session-action="review" data-id="${ident}">${icon('play')}回看</button>`:['pending','failed'].includes(kind)?`<button class="session-quick" data-session-action="process" data-id="${ident}">${kind==='failed'?'重试':'整理'}</button>`:''}<button class="session-toggle" data-detail="${ident}" aria-expanded="${expandedSession===s.id}" aria-label="${expandedSession===s.id?'收起':'展开'}${escapeHTML(title)}详情">${icon('chevron')}</button></div>${expandedSession===s.id?sessionDetail(s):''}</article>`;
 }
 function renameSession(s){
- showDialog('编辑片段名称',`<p class="field-note">${escapeHTML(s.game||'')} · ${escapeHTML(formatDate(s.created))}</p><label for="sessionName">片段名称</label><input id="sessionName" maxlength="100" autocomplete="off" value="${escapeHTML(s.session_name||'')}" placeholder="例如：通道入口、首次使用背包"><p class="field-note">留空恢复默认名称。预设名称与保存位置不变。</p><p id="sessionNameError" class="error-text" role="alert"></p>`,[{label:'保存',primary:true,run:async()=>{
+ showDialog('编辑片段名称',`<p class="field-note">${escapeHTML(s.game||'')} · ${escapeHTML(formatDate(s.created))}</p><label for="sessionName">片段名称</label><input id="sessionName" maxlength="4096" autocomplete="off" value="${escapeHTML(s.session_name||'')}" placeholder="例如：通道入口、首次使用背包"><p class="field-note">留空恢复默认名称。预设名称与保存位置不变。</p><p id="sessionNameError" class="error-text" role="alert"></p>`,[{label:'保存',primary:true,run:async()=>{
   const input=$('#sessionName'),name=input.value.trim();
-  if(name.length>100||/[\u0000-\u001f\u007f]/.test(name)){setText('sessionNameError','名称最多 100 字，不能包含换行或控制字符。');return false;}
+  if(name.length>4096||/[\u0000-\u001f\u007f]/.test(name)){setText('sessionNameError','名称最多 4096 字，不能包含换行或控制字符。');return false;}
   try{await api('rename_session',s.id,name);await freshPoll();notify('片段名称已保存');return true;}
   catch(error){setText('sessionNameError',error.message||'名称保存失败，请重试。');return false;}
  }}]);
@@ -285,7 +325,7 @@ function findSession(id){return (store.snapshot?.sessions||[]).find(s=>String(s.
 function processSession(s){if(store.saved.transcription_provider==='later'){showDialog('先选择整理方式','<p>当前预设只保存录制。选择本地或云端转写后，再回来整理此场次。</p>',[{label:'设置整理方式',primary:true,run:()=>{setTimeout(()=>openWizard('edit',2),0);}}]);return;}showDialog('整理这次体验','<p>'+escapeHTML(s.game||s.id)+'\n使用'+escapeHTML(providerNames[store.saved.transcription_provider]||'已保存的方式')+'。旧版文字与复盘会保留。</p>'+(store.saved.transcription_provider==='qwen'?'<p>将上传这次的麦克风录音到 Qwen，可能产生服务费用。</p>':'')+'<p>如果上次云端任务结果不确定，请从详情恢复原任务，避免重复提交。</p>',[{label:'开始整理',primary:true,run:()=>action('process_session',[s.id])}]);}
 function recoverSession(s){showDialog('恢复已有云端任务','<p>填写已有任务编号，继续查询原任务，不重新上传录音。</p><label for="recoveryId">云端任务编号</label><input id="recoveryId" autocomplete="off" spellcheck="false" placeholder="已有 task_id">',[{label:'恢复任务',primary:true,run:()=>{const id=$('#recoveryId').value.trim();if(!id){notify('请填写已有任务编号。');return false;}return action('recover_cloud_task',[s.id,id]);}}]);}
 $('#sessionList').addEventListener('click',event=>{const detail=event.target.closest('[data-detail]');if(detail){const id=detail.dataset.detail;expandedSession=String(expandedSession)===id?null:id;renderSessions();$('#sessionList').querySelector(`[data-detail="${CSS.escape(id)}"]`)?.focus();return;}const button=event.target.closest('[data-session-action]');if(!button)return;const s=findSession(button.dataset.id);if(!s)return;const name=button.dataset.sessionAction;if(name==='rename')renameSession(s);else if(name==='process')processSession(s);else if(name==='recover')recoverSession(s);else if(name==='review')action('open_review',[s.id]);else action({folder:'open_folder',raw:'open_raw',export:'package_session'}[name],[s.id]);});
-function begin(){if(booted)return;booted=true;poll();setInterval(poll,1000);}window.addEventListener('pywebviewready',begin);if(window.pywebview?.api)begin();setTimeout(()=>{if(!booted){connectionMessage='尚未连接记录器。请从桌面应用打开。';renderHome();}},6000);
+function begin(){if(booted)return;booted=true;poll();setInterval(poll,1000);setInterval(pollMicrophone,200);}window.addEventListener('pywebviewready',begin);if(window.pywebview?.api)begin();setTimeout(()=>{if(!booted){connectionMessage='尚未连接记录器。请从桌面应用打开。';renderHome();}},6000);
 
 // A fixed external destination, opened by the native bridge without any key.
 $('#bailianConsole').onclick=async event=>{event.preventDefault();if(store.requestPending||saving)return;await action('open_bailian_console');};

@@ -122,6 +122,73 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(result['gaps'][0]['type'], 'capture')
         self.assertEqual(json.loads(self.capture.path.read_text(encoding='utf-8'))['state'], 'failed')
 
+    def test_failure_keeps_first_diagnostic_and_last_confirmed_input(self):
+        from input_capture import failure_event
+        self.button('W', 1)
+        self.send('watermark', 1.5)
+        self.clock.value = 103
+        try:
+            raise PermissionError(13, 'synthetic password=secret-value sk-secret-test')
+        except PermissionError as error:
+            self.source.callback(failure_event('journal_write', error))
+        receipt = self.capture.path.with_name('input-capture-diagnostic.json')
+        first = receipt.read_bytes()
+        self.source.callback(failure_event('source_thread', RuntimeError('secondary cleanup')))
+        self.assertEqual(receipt.read_bytes(), first)
+        diagnostic = json.loads(first)
+        self.assertEqual(diagnostic['component'], 'journal_write')
+        self.assertEqual(diagnostic['exception_type'], 'PermissionError')
+        self.assertEqual(diagnostic['errno'], 13)
+        self.assertEqual(diagnostic['confirmed_until_seconds'], 1.5)
+        self.assertEqual(diagnostic['frames'][-1]['file'], 'test_input_capture.py')
+        self.assertNotIn('secret-value', first.decode('utf-8'))
+        self.assertNotIn('sk-secret-test', first.decode('utf-8'))
+        self.button('Q', 4)
+        value = self.capture.stop(duration=5)
+        self.assertEqual(value['failure'], diagnostic)
+        self.assertEqual(value['intervals'][0]['end'], 1.5)
+        self.assertEqual(len(value['intervals']), 1)
+        self.assertTrue(any(g['start'] == 1.5 and g['end'] == 5 for g in value['gaps']))
+
+    def test_live_health_detects_silent_source_exit_without_reading_history(self):
+        self.button('W', 1)
+        self.send('watermark', 1.5)
+        self.source.healthy = lambda: False
+        self.clock.value = 104
+        with patch('input_capture._read_journal', side_effect=AssertionError('health must not read history')):
+            status = self.capture.health()
+        self.assertEqual(status['state'], 'failed')
+        self.assertIn('线程意外退出', status['error'])
+        self.assertEqual(status['confirmed_until_seconds'], 1.5)
+
+    def test_writer_failure_is_diagnosed_even_when_checkpoint_cannot_be_written(self):
+        from unittest.mock import MagicMock
+        self.capture._writer_stop.set()
+        self.capture._writer.join(timeout=2)
+        waiter = MagicMock()
+        waiter.wait.return_value = False
+        with patch.object(self.capture, '_writer_stop', waiter), \
+             patch.object(self.capture, '_flush', side_effect=OSError(28, 'synthetic disk full')):
+            self.capture._write_loop()
+        self.assertEqual(self.capture.health()['state'], 'failed')
+        diagnostic = json.loads(self.capture.path.with_name('input-capture-diagnostic.json').read_text(encoding='utf-8'))
+        self.assertEqual((diagnostic['component'], diagnostic['errno']), ('journal_write', 28))
+        self.assertEqual(self.source.stopped, 1)
+
+    def test_native_failure_event_reaches_collector_with_component_and_exception(self):
+        from input_capture_windows import WindowsInputSource
+        source = WindowsInputSource(None, None)
+        source.callback = self.source.callback
+        self.clock.value = 103
+        source._failed('controller_poll', OSError(5, 'synthetic SDL failure'))
+        self.assertTrue(source._stop.is_set())
+        self.assertFalse(source.healthy())
+        status = self.capture.health()
+        self.assertIn('手柄输入读取失败', status['error'])
+        receipt = json.loads(self.capture.path.with_name('input-capture-diagnostic.json').read_text(encoding='utf-8'))
+        self.assertEqual(receipt['component'], 'controller_poll')
+        self.assertEqual(receipt['errno'], 5)
+
     def test_offset_matches_video_seconds(self):
         self.capture.stop()
         source = Source()

@@ -613,6 +613,129 @@ def submit(folder, token, value):
                     questions=len(result['questions']), ideas=len(result['ideas']))
 
 
+def _activity_name_source(folder):
+    """Read naming context under the caller's metadata lock; never return settings."""
+    meta, material, revision, _ = _ready(folder)
+    try:
+        raw = _load(folder, RESULT, MAX_RESULT)
+    except FileNotFoundError as error:
+        raise ValueError('尚无已完成的预处理结果，请先提交体验事件再整理活动类型。') from error
+    job = _optional_object(folder, STATE)
+    if _active_lease(job, raw):
+        raise ValueError('本场次仍在预处理，请完成提交后再整理活动类型。')
+    result = validate_result(folder, raw, meta, material, revision)
+    digest = _file_hash(_path(folder, RESULT))
+    name = meta.get('session_name') or ''
+    if not isinstance(name, str):
+        raise ValueError('当前场次名称格式无效。')
+    previous = meta.get('activity_naming')
+    previous = previous if isinstance(previous, dict) else {}
+    managed = (bool(name) and previous.get('applied_name') == name
+               and meta.get('session_name_source') != 'manual')
+    manual_name = name
+    if managed:
+        manual_name = previous.get('manual_name', '')
+    elif isinstance(previous.get('manual_name'), str) and previous['manual_name']:
+        # A user may edit the prefix in an older recorder that only knows the
+        # combined display name. Recognize only our exact, recorded suffix;
+        # never guess ownership from brackets in a user's title.
+        suffix = ' ' + str(previous.get('suggested_name') or '')
+        if (previous.get('applied_name') == previous['manual_name'] + suffix
+                and name.endswith(suffix) and len(name) > len(suffix)):
+            manual_name = name[:-len(suffix)]
+    if not isinstance(manual_name, str):
+        raise ValueError('已保存的手动名称格式无效。')
+    return meta, result, dict(version=1, session_id=meta['id'], revision=revision,
+                             result_sha256=digest, expected_name=name,
+                             naming_policy='append-content-v2', manual_name=manual_name,
+                             can_auto_name=not manual_name,
+                             activity_naming=previous)
+
+
+def name_activities(folder, value=None, *, apply=False):
+    """Name completed events, preserving a manual prefix before managed content.
+
+    The result hash fences reanalysis with unchanged materials; expected_name
+    fences concurrent manual edits. The optional projection never rewrites the
+    source result, ready marker, lease, media or directory.
+    """
+    from session_metadata import MAX_SESSION_NAME, metadata_lock
+    with metadata_lock(folder):
+        meta, result, context = _activity_name_source(folder)
+        if value is None:
+            if apply:
+                raise ValueError('应用活动命名需要 --file 候选文件。')
+            return context
+        if (not isinstance(value, dict) or type(value.get('version')) is not int
+                or value['version'] != 1):
+            raise ValueError('不支持的活动命名版本。')
+        for key in ('session_id', 'revision', 'result_sha256'):
+            if value.get(key) != context[key]:
+                raise ValueError('活动命名不属于当前场次、素材或预处理结果，请重新核对。')
+        worker = _text(value.get('worker'), 160, '处理者名称')
+        expected = value.get('expected_name')
+        if not isinstance(expected, str):
+            raise ValueError('请提供读取时的 expected_name，未命名时为空字符串。')
+        known_events = {event['id'] for event in result['events']}
+        activities, seen = [], set()
+        for row in _rows(value.get('activities'), 32, '活动类型'):
+            if not isinstance(row, dict):
+                raise ValueError('活动类型须包含名称和依据事件。')
+            name = _text(row.get('name'), 24, '活动类型名称')
+            if any(ord(c) < 32 or ord(c) == 127 or c in '+＋【】[]' for c in name):
+                raise ValueError('活动类型名称不能包含控制字符、方括号或加号。')
+            if name.casefold() in seen:
+                raise ValueError('活动类型重复，请合并同义类型并保留全部依据。')
+            seen.add(name.casefold())
+            refs = _rows(row.get('event_ids'), 300, '活动依据事件')
+            if not refs or any(not isinstance(ref, str) or ref not in known_events for ref in refs):
+                raise ValueError('每种活动类型至少引用一个当前预处理结果中的事件。')
+            activities.append(dict(name=name, event_ids=list(dict.fromkeys(refs))))
+        if not activities:
+            raise ValueError('暂无有依据的活动类型，请保留未命名并说明资料限制。')
+        suggested = '【' + '+'.join(row['name'] for row in activities) + '】'
+        proposal = dict(version=1, session_id=context['session_id'], revision=context['revision'],
+                        result_sha256=context['result_sha256'], expected_name=expected,
+                        worker=worker, activities=activities, naming_policy=context['naming_policy'])
+        fingerprint = hashlib.sha256(json.dumps(proposal, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
+        previous = context['activity_naming']
+        replayed = (previous.get('proposal_sha256') == fingerprint
+                    and previous.get('display_name') == context['expected_name']
+                    and previous.get('manual_name') == context['manual_name'])
+        if expected != context['expected_name'] and not replayed:
+            raise ValueError('场次名称已被修改，请重新读取；不会覆盖新的手动名称。')
+        manual_name = context['manual_name']
+        display_name = manual_name + ' ' + suggested if manual_name else suggested
+        if len(display_name) > MAX_SESSION_NAME:
+            raise ValueError('组合名称超过4096字，请精简重复内容；原名称保持不变。')
+        response = dict(session_id=context['session_id'], revision=context['revision'],
+                        result_sha256=context['result_sha256'], activities=activities,
+                        suggested_name=suggested, session_name=display_name,
+                        manual_name=manual_name, manual_name_preserved=bool(manual_name),
+                        manual_summary_appended=bool(manual_name), replayed=replayed)
+        if not apply:
+            return dict(response, state='preview')
+        if replayed:
+            return dict(response, state='complete')
+        # Validation can read a large transcript: check material and result again
+        # immediately before the single metadata commit.
+        if (_ready(folder)[2] != context['revision']
+                or _file_hash(_path(folder, RESULT)) != context['result_sha256']):
+            raise ValueError('命名期间素材或整理结果已更新，请重新核对。')
+        meta['activity_naming'] = dict(proposal_sha256=fingerprint, version=1,
+                                      revision=context['revision'], result_sha256=context['result_sha256'],
+                                      worker=worker, activities=activities, suggested_name=suggested,
+                                      naming_policy=context['naming_policy'], manual_name=manual_name,
+                                      display_name=display_name, applied_name=display_name,
+                                      previous_name=context['expected_name'], updated_at=time.time())
+        meta.update(session_name=display_name,
+                    session_name_source='manual_with_summary' if manual_name else 'agent')
+        if len(json.dumps(meta, ensure_ascii=False).encode('utf-8')) > 1024 * 1024:
+            raise ValueError('活动分类使场次信息超过1 MB，请减少重复事件引用。')
+        _write(folder, 'session.json', meta)
+        return dict(response, state='complete')
+
+
 def _reanalysis_status(job, raw):
     if not job.get('redo') or _committed(job, raw):
         return None

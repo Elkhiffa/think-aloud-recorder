@@ -176,7 +176,10 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual(snapshot['title'], '新的场次名')
         self.assertEqual(snapshot['game'], self.meta['game'])
         self.assertTrue((self.folder / '录像.mp4').is_file())
-        self.assertFalse(api.rename_session('x' * 121)['ok'])
+        long_name = '自己的体验记录 ' + '【任务与探索内容】' * 20
+        self.assertTrue(api.rename_session(long_name)['ok'])
+        self.assertEqual(api.get_snapshot()['data']['title'], long_name)
+        self.assertFalse(api.rename_session('x' * 4097)['ok'])
         self.assertFalse(api.rename_session('bad\nname')['ok'])
         self.assertTrue(api.rename_session('')['ok'])
         self.assertEqual(api.get_snapshot()['data']['title'], self.meta['game'])

@@ -7,6 +7,7 @@ import msvcrt
 
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
+MAX_SESSION_NAME = 4096
 
 
 @contextmanager
@@ -50,7 +51,7 @@ def session_title(meta):
 
 
 def rename_session(folder, name):
-    if not isinstance(name, str) or len(name) > 100 or any(ord(c) < 32 or ord(c) == 127 for c in name):
-        raise ValueError('片段名称最多 100 字，不能包含换行或控制字符。')
-    meta = update_metadata(folder, {'session_name': name.strip()})
+    if not isinstance(name, str) or len(name) > MAX_SESSION_NAME or any(ord(c) < 32 or ord(c) == 127 for c in name):
+        raise ValueError('片段名称最多 4096 字，不能包含换行或控制字符。')
+    meta = update_metadata(folder, {'session_name': name.strip(), 'session_name_source': 'manual'})
     return {'session_name': meta['session_name'], 'title': session_title(meta)}

@@ -14,6 +14,7 @@ import webview.util as webview_util
 # An independent contract, rather than deriving expectations from the facade.
 EXPECTED_EXPORTS = {
     'get_state': [],
+    'get_microphone_state': [],
     'refresh_devices': [],
     'save_settings': ['payload'],
     'save_preset': ['payload', 'preset_id'],

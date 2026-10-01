@@ -74,6 +74,34 @@ class SessionInputTests(unittest.TestCase):
         self.assertIsNone(session._input_clock_anchor)
         self.assertLessEqual(client.get_record_status.call_count,52)
 
+    def test_capture_failure_is_finalized_during_live_clock_check(self):
+        from input_capture import InputRecorder, failure_event
+        from tests.test_input_capture import Clock, Source
+        session = self.session(input_state='recording', input_clock={'initial_seconds': 0})
+        clock, source = Clock(), Source()
+        capture = InputRecorder(session.path, lambda: source, clock=clock, flush_interval=60)
+        capture.start(origin=100)
+        self.addCleanup(capture.stop)
+        session._input_capture = capture
+        session._input_clock_anchor = session._input_clock_trusted = (100, 0, 0)
+        session._input_clock_continuous = True
+        source.callback(dict(type='focus', timestamp=100, foreground=True))
+        source.callback(dict(type='button', timestamp=101, device='keyboard', code='W', down=True, foreground=True))
+        source.callback(dict(type='watermark', timestamp=101.5))
+        clock.value = 102
+        source.callback(failure_event('raw_input', ValueError('synthetic parse failure')))
+        clock.value = 105
+        self.assertFalse(session.observe_input_clock(SimpleNamespace(output_duration=5000), 105, 105))
+        self.assertIsNone(session._input_capture)
+        self.assertEqual(session.meta['input_state'], 'failed')
+        self.assertEqual(session.meta['state'], '录制中')
+        self.assertIn('键鼠输入读取失败', session.meta['input_error'])
+        self.assertFalse(session._input_clock_continuous)
+        value = recorder.read(session.path/'input-events.json')
+        self.assertEqual(value['failure']['component'], 'raw_input')
+        self.assertEqual(value['intervals'][0]['end'], 1.5)
+        self.assertTrue(any(g['start'] == 1.5 and g['end'] == 5 for g in value['gaps']))
+
     def test_startup_pause_does_not_accept_an_advancing_sample(self):
         session=self.session()
         client=MagicMock()

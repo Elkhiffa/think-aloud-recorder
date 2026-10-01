@@ -65,6 +65,8 @@ class NativeLifecycleSmoke(unittest.TestCase):
                     self.assertFalse(user.IsWindowVisible(hwnd))
                     self.assertNotEqual(user.GetForegroundWindow(), hwnd)
                     self.assertFalse(source._eligible)
+                    self.assertTrue(source.healthy())
+                    self.assertEqual(capture.health()['state'], 'recording')
                     self.assertEqual(capture.snapshot()['intervals'], [])
                     time.sleep(.1)
                 observed = sorted({item['device'] for item in source._controllers.controllers.values()})

@@ -316,6 +316,31 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertEqual(activity['detail'], session.meta['input_error'])
         client.stop_record.assert_not_called()
 
+    def test_live_capture_failure_reaches_recording_warning_without_stopping_obs(self):
+        session = self.session(test=False, input_state='recording',
+            settings={**self.config, 'record_inputs': True}, input_clock={'initial_seconds': .3})
+        capture = MagicMock()
+        capture.health.return_value = dict(state='failed', error='操作日志写入失败，录像仍在继续。')
+        capture.stop.return_value = dict(version=1, state='failed', duration=5,
+                                         error=capture.health.return_value['error'])
+        session._input_capture = capture
+        self.service._active = session
+        client = MagicMock()
+        client.get_record_status.return_value = SimpleNamespace(output_active=True, output_duration=5000)
+        client.send.return_value = SimpleNamespace(record_directory=str(session.path))
+        with patch.object(bridge.recorder, 'client', return_value=client), \
+             patch.object(bridge.shutil, 'disk_usage', return_value=SimpleNamespace(free=10*1024**3)):
+            self.service._inspect_recording()
+            first = self.service.get_state()['data']['activity']
+            self.service._inspect_recording()
+        second = self.service.get_state()['data']['activity']
+        self.assertEqual(first['status'], '录制中 · 操作记录已中断')
+        self.assertEqual(first['detail'], capture.health.return_value['error'])
+        self.assertEqual(second['detail'], first['detail'])
+        self.assertIs(self.service._active, session)
+        capture.stop.assert_called_once()
+        client.stop_record.assert_not_called()
+
     def test_finished_startup_recovery_reports_ready_and_keeps_existing_errors(self):
         activity = self.service.get_state()['data']['activity']
         self.assertFalse(activity['busy'])

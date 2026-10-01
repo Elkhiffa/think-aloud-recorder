@@ -251,6 +251,7 @@ class ForegroundObserver:
         self.ledger = ForegroundLedger()
         self.ready, self.stopping = threading.Event(), threading.Event()
         self.error = None
+        self.diagnostic = None
         self.thread = None
         self.unhooked = False
         self.markers_acknowledged = 0
@@ -348,7 +349,9 @@ class ForegroundObserver:
                 elif self.clock() - min(waiting.values()) > 1.:
                     raise InputCaptureError('前台事件确认超时，操作采集已停止。')
                 self.stopping.wait(.004)
-        except Exception:
+        except Exception as error:
+            from input_capture import failure_event
+            self.diagnostic = failure_event('foreground_observer', error)['diagnostic']
             self.error = '前台窗口事件不可用。'
         finally:
             if hook:
@@ -400,6 +403,17 @@ class WindowsInputSource:
             self._thread.join(timeout=5)
             if self._thread.is_alive():
                 raise InputCaptureError('操作采集仍在退出，请稍后重试。')
+
+    def healthy(self):
+        return bool(self._thread and self._thread.is_alive() and not self._error)
+
+    def _failed(self, component, error):
+        from input_capture import FAILURE_MESSAGES, failure_event
+        event = failure_event(component, error)
+        self._error = (event['diagnostic']['message'] if isinstance(error, InputCaptureError)
+                       else FAILURE_MESSAGES.get(component, '操作采集线程异常，录像仍在继续。'))
+        self.callback(event)
+        self._stop.set()
 
     def _foreground(self):
         if self.user.GetForegroundWindow() != self.target.hwnd:
@@ -468,14 +482,15 @@ class WindowsInputSource:
                                'down': True, 'timestamp': self.clock(), 'foreground': True, 'resumed': True})
 
     def _invalidate(self, timestamp):
+        diagnostic = getattr(self._observer, 'diagnostic', None) or {'component': 'foreground_context'}
         if self.capture_all:
             if not self._context_failed:
-                self.callback({'type': 'focus_error', 'timestamp': timestamp})
+                self.callback({'type': 'focus_error', 'timestamp': timestamp, 'diagnostic': diagnostic})
             self._context_failed = True
             return
         if self._invalid_sent is None or timestamp < self._invalid_sent:
             self._invalid_sent = timestamp
-            self.callback({'type': 'invalidate', 'timestamp': timestamp})
+            self.callback({'type': 'invalidate', 'timestamp': timestamp, 'diagnostic': diagnostic})
         self._stop.set()
 
     def _flush_pending(self, through=None):
@@ -585,6 +600,7 @@ class WindowsInputSource:
         hwnd = instance = process_handle = None
         class_name = 'ThinkAloudInput-' + uuid.uuid4().hex
         registered = raw_registered = False
+        stage = 'source_start'
         try:
             if not acquired:
                 raise InputCaptureError('已有场次正在采集操作。')
@@ -604,8 +620,7 @@ class WindowsInputSource:
                 if not self.capture_all:
                     raise
                 # Window state may be unavailable without losing physical input.
-                self._context_failed = True
-                self.callback({'type':'focus_error','timestamp':self.clock()})
+                self._invalidate(self.clock())
             wndproc_type = C.WINFUNCTYPE(C.c_ssize_t, W.HWND, W.UINT, W.WPARAM, W.LPARAM)
 
             class WindowClass(C.Structure):
@@ -635,10 +650,8 @@ class WindowsInputSource:
                 if message == 0xff:
                     try:
                         self._raw(data)
-                    except Exception:
-                        self._error = '操作采集读取异常，已停止采集。'
-                        self.callback({'type': 'error'})
-                        self._stop.set()
+                    except Exception as exc:
+                        self._failed('raw_input', exc)
                 return self.user.DefWindowProcW(window, message, param, data)
 
             instance = self.kernel.GetModuleHandleW(None)
@@ -664,6 +677,7 @@ class WindowsInputSource:
             self._ready.set()
             message = W.MSG()
             while not self._stop.is_set():
+                stage = 'window_context'
                 self._focus()
                 count = 0
                 while self.user.PeekMessageW(C.byref(message), None, 0, 0, 1):
@@ -672,7 +686,9 @@ class WindowsInputSource:
                     count += 1
                     if count >= 512 or self._stop.is_set():
                         break
+                stage = 'controller_poll'
                 self._controllers.pump()
+                stage = 'input_delivery'
                 self._resume_if_stable()
                 self._flush_pending()
                 self._stop.wait(.004)
@@ -684,8 +700,7 @@ class WindowsInputSource:
                 time.sleep(.005)
             self._flush_pending(through=stop_at)
         except Exception as exc:
-            self._error = str(exc) if isinstance(exc, InputCaptureError) else '操作采集不可用，请检查设备和窗口。'
-            self.callback({'type': 'error'})
+            self._failed(stage, exc)
         finally:
             if self._observer:
                 self._observer.stop()

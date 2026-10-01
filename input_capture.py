@@ -12,10 +12,34 @@ import os
 from pathlib import Path
 import threading
 import time
+import traceback
 
 
 class InputCaptureError(RuntimeError):
     pass
+
+
+FAILURE_MESSAGES = {
+    'raw_input': '键鼠输入读取失败，操作采集已停止，录像仍在继续。',
+    'controller_poll': '手柄输入读取失败，操作采集已停止，录像仍在继续。',
+    'journal_write': '操作日志写入失败，操作采集已停止，录像仍在继续。',
+    'source_thread': '操作采集线程意外退出，录像仍在继续。',
+    'writer_thread': '操作保存线程意外退出，录像仍在继续。',
+}
+
+
+def failure_event(component, error=None):
+    """Bounded diagnostics without traceback locals, source text or credentials."""
+    from review_runtime import _safe_error
+    detail = dict(component=str(component)[:80])
+    if error is not None:
+        detail.update(exception_type=type(error).__name__[:80], message=_safe_error(error)[:1000],
+                      frames=[dict(file=Path(frame.filename).name, line=frame.lineno, function=frame.name)
+                              for frame in traceback.extract_tb(error.__traceback__)[-12:]])
+        for key in ('errno', 'winerror'):
+            value = getattr(error, key, None)
+            if type(value) is int: detail[key] = value
+    return dict(type='error', diagnostic=detail)
 
 
 DEVICES = {'keyboard', 'mouse', 'xbox', 'dualsense'}
@@ -145,6 +169,8 @@ class InputRecorder:
         self._eligible = False
         self._state = 'prepared'
         self.error = None
+        self._failure = None
+        self._window_failure = None
         self._last_motion = None
         self._coverage_gap = None
 
@@ -225,6 +251,13 @@ class InputRecorder:
             at = self._time(event.get('timestamp'))
             self._expire_motion(at)
             typ = event.get('type')
+            if typ in ('invalidate', 'focus_error') and self._window_failure is None:
+                self._window_failure = dict(event.get('diagnostic') or {'component': 'foreground_context'},
+                                            unknown_from_seconds=round(at, 6))
+                try:
+                    _atomic_json(self.path.with_name('window-state-diagnostic.json'), self._window_failure)
+                except (OSError, ValueError):
+                    pass
             if typ in ('invalidate', 'focus_error') and self.recording_scope == 'all':
                 self._focus_invalid_from = at if self._focus_invalid_from is None else min(at, self._focus_invalid_from)
                 # Foreground uncertainty invalidates only window annotations.
@@ -247,13 +280,24 @@ class InputRecorder:
                     self._purger.start()
                 return
             if typ == 'error':
-                self.error = '操作采集中断，视频录制不受影响。'
+                if self.error:
+                    return  # Preserve the first cause; cleanup can fail too.
+                diagnostic = event.get('diagnostic') or {'component': 'unknown'}
+                self.error = FAILURE_MESSAGES.get(diagnostic.get('component'), '操作采集中断，视频录制不受影响。')
                 # An observer failure can be reported after its last confirmed
                 # fence. Unknown time must become a gap, not a longer hold.
                 covered = min(at, self._durable_until) if self._durable_until is not None else at
                 self._close_all(covered)
                 self._eligible = False
                 self._open_gaps.setdefault('capture', {'start': covered, 'type': 'capture', 'reason': self.error})
+                self._failure = dict(diagnostic, occurred_seconds=round(at, 6),
+                                     confirmed_until_seconds=round(covered, 6))
+                try:
+                    # A separate, one-time receipt can survive failure to replace
+                    # the live input checkpoint. Storage failure may affect both.
+                    _atomic_json(self.path.with_name('input-capture-diagnostic.json'), self._failure)
+                except (OSError, ValueError):
+                    pass
                 return
             if self.error:
                 return
@@ -368,7 +412,23 @@ class InputRecorder:
                 value['window_state_invalid_from'] = self._focus_invalid_from
         if self.error:
             value['error'] = self.error
+        if self._failure:
+            value['failure'] = dict(self._failure)
+        if self._window_failure:
+            value['window_state_failure'] = dict(self._window_failure)
         return value
+
+    def health(self):
+        """Cheap live state: never read/materialize the accumulated input log."""
+        with self._lock:
+            if self._state == 'recording' and not self.error:
+                healthy = getattr(self._source, 'healthy', None)
+                if callable(healthy) and healthy() is False:
+                    self.feed(failure_event('source_thread'))
+                elif self._writer is not None and not self._writer.is_alive():
+                    self.feed(failure_event('writer_thread'))
+            return dict(state='failed' if self.error else self._state, error=self.error,
+                        confirmed_until_seconds=self._durable_until)
 
     def snapshot(self):
         # A diagnostic snapshot can materialize history, but disk reads/sorting
@@ -461,8 +521,8 @@ class InputRecorder:
         while not self._writer_stop.wait(self.flush_interval):
             try:
                 self._flush()
-            except Exception:
-                self.feed({'type': 'error'})
+            except Exception as exc:
+                self.feed(failure_event('journal_write', exc))
                 if self._source:
                     self._source.stop()
                 return
