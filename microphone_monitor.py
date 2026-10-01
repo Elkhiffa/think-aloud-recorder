@@ -11,7 +11,7 @@ import time
 import obsws_python as obs
 
 STALE_SECONDS = 2.5
-QUIET_SECONDS = 15
+QUIET_SECONDS = 120
 SOUND_DB = -55
 
 
@@ -73,7 +73,7 @@ class MicrophoneLevels:
             with self.lock:
                 self.muted = value
                 self.mute_revision += 1
-                self.sound_at = self.loud_at = None
+                self.loud_at = None
                 self.db = -100.0
 
     def on_input_audio_tracks_changed(self, event):
@@ -84,19 +84,20 @@ class MicrophoneLevels:
             with self.lock:
                 self.track = tracks['2']
                 self.track_revision += 1
-                self.sound_at = self.loud_at = None
+                self.loud_at = None
 
     def on_input_removed(self, event):
         if getattr(event, 'input_name', None) == self.source:
             with self.lock:
                 self.sample_at = None
-                self.sound_at = self.loud_at = None
+                self.loud_at = None
                 self.db = -100.0
 
     def snapshot(self, connected=True):
         now = self.clock()
         with self.lock:
-            result = dict(state='unavailable', level=0, db=None, quiet_seconds=0)
+            quiet = max(0, now - (self.sound_at if self.sound_at is not None else self.started))
+            result = dict(state='unavailable', level=0, db=None, quiet_seconds=int(quiet))
             if not connected or (self.packet_at is not None and now - self.packet_at > STALE_SECONDS):
                 return result
             if self.packet_at is None:
@@ -115,7 +116,7 @@ class MicrophoneLevels:
             quiet = max(0, now - (self.sound_at if self.sound_at is not None else self.started))
             db = max(-100, self.db - 45 * (now - self.sample_at))
             state = 'silent' if quiet >= QUIET_SECONDS else 'quiet'
-            if self.sound_at is not None and quiet < 1:
+            if self.sound_at is not None and quiet < 1 and db >= SOUND_DB:
                 state = 'signal'
             if self.loud_at is not None and now - self.loud_at < .8:
                 state = 'loud'
@@ -124,11 +125,15 @@ class MicrophoneLevels:
 
 
 class MicrophoneMonitor:
-    def __init__(self, request, source='口述'):
+    def __init__(self, request, source='口述', *, levels=None):
         base = request.base_client
         if base.host not in ('127.0.0.1', 'localhost') or type(base.port) is not int:
             raise ValueError('A local OBS endpoint is required')
-        self.levels = MicrophoneLevels(source)
+        self.levels = levels if levels is not None else MicrophoneLevels(source)
+        with self.levels.lock:
+            self.levels.packet_at = self.levels.sample_at = self.levels.loud_at = None
+            self.levels.muted = self.levels.track = None
+            self.levels.db = -100.0
         self.client = None
         try:
             self.client = obs.EventClient(host=base.host, port=base.port, password=base.password,

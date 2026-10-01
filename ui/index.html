@@ -8,16 +8,10 @@
 </header>
 <main class="home">
 <section class="capture" id="capturePanel" aria-labelledby="homeTitle">
-  <div class="capture-heading"><h1 id="homeTitle">记录体验</h1><p class="home-subtitle" id="homeSubtitle">边体验，边说出你此刻的想法。</p></div>
+  <div class="capture-heading"><div class="capture-time-row"><h1 id="homeTitle">记录体验</h1><div class="microphone-monitor hidden" id="microphoneMonitor" data-state="connecting" aria-label="录制麦克风音量"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="2" width="8" height="13" rx="4"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg><div class="microphone-level" id="microphoneLevel" role="meter" aria-label="口述音量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="microphoneFill"></span></div></div></div><p class="home-subtitle" id="homeSubtitle">边体验，边说出你此刻的想法。</p></div>
   <button class="quiet-button" id="methodButton"><svg aria-hidden="true"><use href="#i-info"/></svg>记录方法</button>
   <div class="preset-switcher"><div class="preset-caption"><label for="presetSelect">录制预设</label><button class="text-button" id="newPresetButton" disabled><span aria-hidden="true">＋</span> 新建预设</button></div><div class="preset-control"><select id="presetSelect" disabled><option value="">选择录制预设</option></select><button class="preset-settings" id="settingsButton" disabled title="编辑录制预设" aria-label="编辑录制预设"><svg aria-hidden="true"><use href="#i-gear"/></svg></button></div></div>
   <div class="capture-action-row"><div class="status-slot" id="statusSlot" role="status" aria-live="polite" aria-atomic="true"><span class="capture-label" id="homeStatus">正在连接</span><div class="blockers hidden" id="blockers"></div></div><div class="primary-area"><button class="primary-button capture-button" id="recordButton" aria-describedby="statusSlot" disabled><span class="record-dot"></span><span id="recordButtonText">开始录制</span></button></div></div>
-  <div class="microphone-monitor hidden" id="microphoneMonitor" data-state="connecting" aria-label="录制麦克风状态">
-    <div class="microphone-name"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="2" width="8" height="13" rx="4"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8"/></svg><span id="microphoneName">麦克风</span></div>
-    <div class="microphone-level" id="microphoneLevel" role="meter" aria-label="口述音量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="microphoneFill"></span></div>
-    <strong class="microphone-status" id="microphoneStatus">正在读取音量…</strong>
-    <p class="microphone-hint" id="microphoneHint" aria-live="polite">说句话，确认音量条随声音变化。</p>
-  </div>
   <p class="job-detail hidden" id="jobDetail" aria-live="polite"></p>
   <button class="save-location" id="openVault" disabled title="打开保存文件夹"><svg><use href="#i-folder"/></svg><span id="savedLocation">尚未选择保存位置</span><svg class="location-arrow"><use href="#i-open"/></svg></button>
 </section>

@@ -4,6 +4,7 @@ The ready manifest is published last; a result is one atomic commit. A leased
 claim fences late workers. Source revisions deliberately exclude session names,
 job state and user notes, so presenting a result cannot enqueue itself again.
 """
+from session_metadata import session_title
 from collections import OrderedDict
 from copy import deepcopy
 import hashlib
@@ -290,7 +291,7 @@ def evidence(folder, start=None, end=None):
     from speaker_roles import speaker_payload
     speakers = speaker_payload(folder, meta, segments)
     value = dict(version=VERSION, session_id=meta['id'], revision=revision,
-                 title=meta.get('session_name') or meta.get('game') or meta['id'],
+                 title=session_title(meta),
                  test=bool(meta.get('test')), duration_seconds=duration,
                  timebase='video_seconds', speakers=speakers,
                  paths={name: str(_path(folder, name)) for name in FILES if material['sources'][name]},
@@ -303,6 +304,8 @@ def evidence(folder, start=None, end=None):
                  cautions=['原话可能误转写；未讲述不等于没有体验问题。',
                            '设备输入不证明游戏收到操作；后台手柄可能有效。',
                            '自动推荐的记录者身份需要核对；原声与画面优先。'])
+    from event_edits import context as correction_context
+    value['manual_corrections'] = correction_context(folder)
     if start is not None:
         inside = lambda row: row['end'] >= start and row['start'] <= end
         value['range'] = dict(start=start, end=end)
@@ -411,6 +414,8 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
         events.append(dict(id=ident, **span, title=_text(row.get('title'), 160, '事件标题'),
                            summary=_text(row.get('summary'), 3000, '事件描述'),
                            context=_text(row.get('context', ''), 2000, '上下文', empty=True),
+                            issue=_text(row.get('issue', ''), 3000, '问题与感受', empty=True),
+                            notes=_text(row.get('notes', ''), 2000, '备注', empty=True),
                            basis=row['basis'], kind=row['kind'], evidence=refs))
     def related(field, text_key, limit):
         result, ids = [], set()
@@ -599,6 +604,10 @@ def submit(folder, token, value):
     with metadata_lock(folder):
         meta, material, revision, job = _owned(folder, token)
         result = validate_result(folder, value, meta, material, revision)
+        from event_edits import reviewed
+        correction_review = reviewed(folder, value)
+        if correction_review:
+            result['corrections_review'] = correction_review
         # Recheck after potentially expensive evidence validation. No old worker
         # can overwrite a newer lease, even after a filesystem watcher restart.
         _owned(folder, token)
@@ -630,30 +639,19 @@ def _activity_name_source(folder):
         raise ValueError('当前场次名称格式无效。')
     previous = meta.get('activity_naming')
     previous = previous if isinstance(previous, dict) else {}
-    managed = (bool(name) and previous.get('applied_name') == name
-               and meta.get('session_name_source') != 'manual')
-    manual_name = name
-    if managed:
-        manual_name = previous.get('manual_name', '')
-    elif isinstance(previous.get('manual_name'), str) and previous['manual_name']:
-        # A user may edit the prefix in an older recorder that only knows the
-        # combined display name. Recognize only our exact, recorded suffix;
-        # never guess ownership from brackets in a user's title.
-        suffix = ' ' + str(previous.get('suggested_name') or '')
-        if (previous.get('applied_name') == previous['manual_name'] + suffix
-                and name.endswith(suffix) and len(name) > len(suffix)):
-            manual_name = name[:-len(suffix)]
+    from session_metadata import session_naming
+    manual_name = session_naming(meta)['manual_name']
     if not isinstance(manual_name, str):
         raise ValueError('已保存的手动名称格式无效。')
     return meta, result, dict(version=1, session_id=meta['id'], revision=revision,
                              result_sha256=digest, expected_name=name,
-                             naming_policy='append-content-v2', manual_name=manual_name,
+                             naming_policy='separate-title-v3', manual_name=manual_name,
                              can_auto_name=not manual_name,
                              activity_naming=previous)
 
 
 def name_activities(folder, value=None, *, apply=False):
-    """Name completed events, preserving a manual prefix before managed content.
+    """Give completed events a short title and separate, traceable content details.
 
     The result hash fences reanalysis with unchanged materials; expected_name
     fences concurrent manual edits. The optional projection never rewrites the
@@ -693,26 +691,34 @@ def name_activities(folder, value=None, *, apply=False):
             activities.append(dict(name=name, event_ids=list(dict.fromkeys(refs))))
         if not activities:
             raise ValueError('暂无有依据的活动类型，请保留未命名并说明资料限制。')
+        previous = context['activity_naming']
+        # Older callers can still update content labels, but cannot recreate
+        # a long combined title. New callers explicitly supply a short title.
+        short_title = value.get('title', previous.get('short_title', ''))
+        if not isinstance(short_title, str) or len(short_title) > 60 or any(ord(c) < 32 or ord(c) == 127 for c in short_title):
+            raise ValueError('概括标题最多60字，不能包含换行或控制字符。')
+        short_title = short_title.strip()
         suggested = '【' + '+'.join(row['name'] for row in activities) + '】'
         proposal = dict(version=1, session_id=context['session_id'], revision=context['revision'],
                         result_sha256=context['result_sha256'], expected_name=expected,
-                        worker=worker, activities=activities, naming_policy=context['naming_policy'])
+                        worker=worker, title=short_title, activities=activities, naming_policy=context['naming_policy'])
         fingerprint = hashlib.sha256(json.dumps(proposal, sort_keys=True, ensure_ascii=False).encode('utf-8')).hexdigest()
-        previous = context['activity_naming']
         replayed = (previous.get('proposal_sha256') == fingerprint
                     and previous.get('display_name') == context['expected_name']
                     and previous.get('manual_name') == context['manual_name'])
         if expected != context['expected_name'] and not replayed:
             raise ValueError('场次名称已被修改，请重新读取；不会覆盖新的手动名称。')
         manual_name = context['manual_name']
-        display_name = manual_name + ' ' + suggested if manual_name else suggested
+        display_name = manual_name or short_title
         if len(display_name) > MAX_SESSION_NAME:
             raise ValueError('组合名称超过4096字，请精简重复内容；原名称保持不变。')
         response = dict(session_id=context['session_id'], revision=context['revision'],
                         result_sha256=context['result_sha256'], activities=activities,
                         suggested_name=suggested, session_name=display_name,
+                        title=display_name or meta.get('game') or meta['id'], short_title=short_title,
+                        activity_details=' + '.join(row['name'] for row in activities),
                         manual_name=manual_name, manual_name_preserved=bool(manual_name),
-                        manual_summary_appended=bool(manual_name), replayed=replayed)
+                        manual_summary_appended=False, replayed=replayed)
         if not apply:
             return dict(response, state='preview')
         if replayed:
@@ -725,11 +731,12 @@ def name_activities(folder, value=None, *, apply=False):
         meta['activity_naming'] = dict(proposal_sha256=fingerprint, version=1,
                                       revision=context['revision'], result_sha256=context['result_sha256'],
                                       worker=worker, activities=activities, suggested_name=suggested,
+                                      short_title=short_title,
                                       naming_policy=context['naming_policy'], manual_name=manual_name,
                                       display_name=display_name, applied_name=display_name,
                                       previous_name=context['expected_name'], updated_at=time.time())
         meta.update(session_name=display_name,
-                    session_name_source='manual_with_summary' if manual_name else 'agent')
+                    session_name_source='manual' if manual_name else 'agent')
         if len(json.dumps(meta, ensure_ascii=False).encode('utf-8')) > 1024 * 1024:
             raise ValueError('活动分类使场次信息超过1 MB，请减少重复事件引用。')
         _write(folder, 'session.json', meta)
@@ -766,9 +773,14 @@ def _status(folder, meta):
         raw = _load(folder, RESULT, MAX_RESULT)
         if raw.get('revision') == revision:
             result = validate_result(folder, raw, meta, material, revision)
+            from event_edits import project
+            try:
+                result, editing = project(folder, result, _file_hash(_path(folder, RESULT)))
+            except (OSError, ValueError, TypeError):
+                editing = dict(error='手动校准记录无法读取，暂时显示原整理结果；校准文件已保留。')
             value = dict(state='complete', label=f'已预处理 · {len(result["events"])} 个事件',
                          events=len(result['events']), questions=len(result['questions']),
-                         ideas=len(result['ideas']), result=result)
+                         ideas=len(result['ideas']), result=result, editing=editing)
             redo = _reanalysis_status(job, raw)
             if redo:
                 value['reanalysis'] = redo
@@ -788,7 +800,7 @@ def preprocessing_status(folder, meta=None, include_result=False):
     """Bounded cache: polling never re-reads an unchanged large sidecar."""
     try:
         meta, material, revision, complete = _identity(folder, meta)
-        stats = _stats(folder, (READY, STATE, RESULT))
+        stats = _stats(folder, (READY, STATE, RESULT, 'experience-event-edits.json'))
         key = str(Path(folder).resolve())
         signature = json.dumps([revision, complete, stats], sort_keys=True)
         with _CACHE_LOCK:

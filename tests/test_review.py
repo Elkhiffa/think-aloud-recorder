@@ -77,7 +77,7 @@ class ReviewTests(unittest.TestCase):
             self.assertFalse(api.open_document('../outside')['ok'])
             self.assertTrue(api.open_document('notes')['ok'])
         self.assertEqual({name for name in dir(api) if not name.startswith('_')},
-                         {'ready', 'open_folder', 'copy_path', 'open_document', 'get_layout', 'save_layout', 'get_snapshot', 'rename_session', 'set_input_offset', 'set_recorder_speaker'})
+                         {'ready', 'open_folder', 'copy_path', 'open_document', 'get_layout', 'save_layout', 'get_snapshot', 'rename_session', 'edit_event', 'set_input_offset', 'set_recorder_speaker'})
 
     def test_input_offset_is_per_session_metadata_and_never_rewrites_captured_facts(self):
         recorder.write(self.folder/'input-events.json',dict(version=1,state='complete',duration=10,

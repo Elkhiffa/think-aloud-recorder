@@ -30,7 +30,7 @@ ROOT_FILES = (
     'model_manager.py', 'model-manifest.json', 'media_runtime.py', 'portable_check.py', 'portable_config.py',
     'portable_entry.py', 'processing_worker.py', 'processing.py', 'qwen_transcription.py',
     'recorder.py', 'window_manager.py', 'review_runtime.py', 'scel_to_text.py', 'secret_store.py',
-    'transcription_runtime.py', 'speaker_roles.py', 'microphone_monitor.py', 'agent_protocol.py', 'agent_cli.py',
+    'transcription_runtime.py', 'speaker_roles.py', 'microphone_monitor.py', 'agent_protocol.py', 'event_edits.py', 'agent_cli.py',
     'visual_nodes.py', 'visual_change.py', 'visual_evidence.py', 'visual_compare.py', 'player.html', 'requirements-lock.txt',
     'input_capture.py', 'input_capture_windows.py', 'input_capture_devices.py', 'session_metadata.py',
     'updater.py', 'update_installer.py',

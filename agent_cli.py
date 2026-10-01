@@ -1,4 +1,5 @@
 """Machine-readable local bridge. No model, watcher, upload or credential use."""
+from session_metadata import session_title
 import argparse
 import json
 import os
@@ -43,7 +44,7 @@ def scan(database, publish=False, include_test=False):
             meta, _, revision, marker = protocol._ready(folder)
             state = protocol.preprocessing_status(folder)
             sessions.append(dict(session_id=ident, folder=str(folder), revision=revision,
-                                 title=meta.get('session_name') or meta.get('game') or ident,
+                                 title=session_title(meta),
                                  preprocessing=state, test=bool(meta.get('test'))))
         except (OSError, ValueError, TypeError) as error:
             skipped.append(dict(session_id=ident, folder=str(folder), reason=str(error)))
@@ -149,7 +150,7 @@ def main(argv=None):
     visual_review = commands.add_parser('visual-review', help='仅在本机打开候选检查页；Ctrl+C 结束')
     visual_review.add_argument('index')
     visual_review.add_argument('--port', type=int, default=0)
-    naming = commands.add_parser('name-activities', help='按已完成事件概括内容，为未命名场次命名或在手动名后追加摘要')
+    naming = commands.add_parser('name-activities', help='按已完成事件概括内容，为未命名场次命名或保留手动标题，分别保存短标题与内容详情')
     naming.add_argument('session')
     naming.add_argument('--file', help='工作目录中的活动命名候选 JSON；省略则读取当前命名上下文')
     naming.add_argument('--apply', action='store_true', help='原子保存具体内容标签与名称，保留手动前缀并更新自动摘要；默认仅预览')
@@ -257,7 +258,14 @@ def main(argv=None):
             if path.stat().st_size > protocol.MAX_RESULT:
                 raise ValueError('候选结果超过 2 MB。')
             candidate = json.loads(path.read_text(encoding='utf-8-sig'))
-            value = protocol.submit(args.session, args.token, candidate) if name == 'submit' else protocol.validate_result(args.session, candidate)
+            if name == 'submit':
+                value = protocol.submit(args.session, args.token, candidate)
+            else:
+                value = protocol.validate_result(args.session, candidate)
+                from event_edits import reviewed
+                correction_review = reviewed(args.session, candidate)
+                if correction_review:
+                    value['corrections_review'] = correction_review
         print(json.dumps(dict(ok=True, data=value), ensure_ascii=False, allow_nan=False))
         return 0
     except Exception as error:

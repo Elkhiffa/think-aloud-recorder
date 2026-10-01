@@ -10,7 +10,7 @@ import time
 import uuid
 import re
 import hashlib
-from session_metadata import session_title, rename_session as rename_session_metadata
+from session_metadata import session_title, session_presentation, rename_session as rename_session_metadata
 
 _LAYOUT_LOCK = threading.Lock()
 
@@ -162,8 +162,8 @@ def review_payload(folder, meta, segments, *, desktop=False):
         narration = audio.as_uri() if desktop else '口述.flac'
     except (OSError, ValueError):
         pass
-    return dict(id=str(meta.get('id', Path(folder).name)), title=session_title(meta),
-                game=str(meta.get('game', '')), session_name=str(meta.get('session_name') or ''),
+    return dict(id=str(meta.get('id', Path(folder).name)), **session_presentation(meta),
+                game=str(meta.get('game', '')),
                 created=str(meta.get('created', '')), test=bool(meta.get('test')),
                 vault_path=str(Path(folder).resolve().parent.parent) if desktop else '../..',
                 inputs=input_payload(folder, meta), video_display=video_display_payload(folder),
@@ -328,7 +328,7 @@ class ReviewAPI:
     def _snapshot_revision(self):
         files=[]
         for name in ('session.json','录像.whisper.json','input-events.json','input-events.revocation.json',
-                     '录像.mp4','口述.flac','agent-ready.json','agent-state.json','experience-events.json'):
+                     '录像.mp4','口述.flac','agent-ready.json','agent-state.json','experience-events.json','experience-event-edits.json'):
             try:
                 info=(self._folder/name).stat()
                 files.append((name,info.st_mtime_ns,info.st_size))
@@ -359,6 +359,14 @@ class ReviewAPI:
         try:
             contained_file(self._folder, 'session.json')
             return {'ok': True, 'data': rename_session_metadata(self._folder, name)}
+        except Exception as error:
+            return {'ok': False, 'error': _safe_error(error)}
+
+    def edit_event(self, request):
+        try:
+            contained_file(self._folder, 'session.json')
+            from event_edits import save
+            return {'ok': True, 'data': save(self._folder, request)}
         except Exception as error:
             return {'ok': False, 'error': _safe_error(error)}
 

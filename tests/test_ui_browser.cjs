@@ -55,6 +55,7 @@ function snapshot(overrides = {}) {
       id: `synthetic-session-${i}`, game: i % 3 === 2 ? '另一个示例游戏' : '示例游戏',
       created: `2026-09-${String(22 - i).padStart(2, '0')}T10:30:00`, duration: 438 + i * 61,
       state: i === 0 ? '转写中' : '可回看', test: true,
+      ...(i===1?{title:'清河探索与初次止戈',session_name:'清河探索与初次止戈',activity_details:'清河任务 + 野外探索 + 止戈 + 萌宠争锋 + 城镇养成 + 装备比较与资源收集',preprocessing:{state:'complete',events:8}}:{}),
     })),
     devices: {
       window: [{ itemName: '示例游戏窗口（合成测试）', itemValue: 'synthetic-window', itemEnabled: true }],
@@ -269,6 +270,16 @@ async function homeChecks(context, origin) {
     assert.equal(await page.locator('#blockers').isVisible(), false);
     assert.match(await page.locator('#backgroundSummary').innerText(), /整理中/);
     assert.equal((await calls(page, 'start_recording')).length, 0);
+  });
+  await check('short title, project with event count, then wrapping content details',async()=>{
+    const row=page.locator('.session-row').nth(1);
+    assert.match(await row.locator('.session-title-row strong').textContent(),/^清河探索与初次止戈/);
+    assert.match(await row.locator('.session-subtitle').textContent(),/示例游戏.*预处理 8 个事件/);
+    assert.match(await row.locator('.session-content').textContent(),/萌宠争锋/);
+    const title=await row.locator('.session-title-row strong').boundingBox(),sub=await row.locator('.session-subtitle').boundingBox(),details=await row.locator('.session-content').boundingBox();
+    assert.ok(title.y<sub.y&&sub.y<details.y);
+    assert.equal(await row.locator('.session-content').evaluate(el=>getComputedStyle(el).whiteSpace),'normal');
+    await screen(page,'session-hierarchy');
   });
   await check('equal home headings and aligned 48 px capture controls', async () => {
     const headings = await page.locator('#homeTitle,.session-heading h2').evaluateAll(nodes => nodes.map(node => ({ size: getComputedStyle(node).fontSize, weight: getComputedStyle(node).fontWeight })));

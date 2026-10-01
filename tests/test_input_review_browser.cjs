@@ -284,6 +284,20 @@ async function main(){
    await page.locator('#inputScope').selectOption('all');await settleVideo();assert.equal(await page.locator('[data-input-id="background"]').count(),1);
    assert.equal(await page.locator('#timelineGaps .timeline-gap').count(),0);
  });
+ await check('native right scrollbar browses long timeline without zooming or seeking',async()=>{
+   await page.evaluate(()=>{window.__snapshot.inputs.duration=7200;window.__snapshot.revision='vertical-scroll-test';});
+   await page.waitForTimeout(2300);await page.locator('#inputTab').click();
+   const bar=page.locator('#timelineVerticalScroll');const dims=await bar.evaluate(el=>({height:el.clientHeight,scroll:el.scrollHeight,rect:el.getBoundingClientRect().toJSON()}));assert.ok(dims.scroll>dims.height*10);
+   const panel=await page.locator('#inputTimelinePanel').boundingBox();assert.ok(Math.abs(dims.rect.x+dims.rect.width-panel.x-panel.width)<8);
+   const before=await playback(),zoom=await page.locator('#timelineScale').textContent().catch(()=>null);
+   await bar.evaluate(el=>el.scrollTop=(el.scrollHeight-el.clientHeight)*.6);await page.waitForTimeout(150);
+   const ruler=await page.locator('.timeline-ruler').textContent();assert.match(ruler,/01:/);
+   assert.equal((await playback()).time,before.time);assert.equal((await playback()).paused,before.paused);
+   assert.equal(await page.locator('#timelineScale').textContent().catch(()=>null),zoom);
+   await bar.focus();await page.keyboard.press('Home');await page.waitForTimeout(150);assert.ok(await bar.evaluate(el=>el.scrollTop)<2);
+   assert.equal((await playback()).time,before.time);
+   await page.screenshot({path:path.join(out,'vertical-scrollbar.png')});
+ });
  await check('no browser exceptions',async()=>assert.deepEqual(errors,[]));
  await browser.close();server.close();const report={scope:'Synthetic production browser acceptance; no actual OBS/device/native capture validation.',checks,errors,passed:checks.every(c=>c.pass)};fs.writeFileSync(path.join(out,'acceptance.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));if(!report.passed)process.exitCode=1;
 }

@@ -5,7 +5,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(process.env.REVIEW_ASSET_ROOT||path.join(__dirname,'..')),read=name=>fs.readFileSync(path.join(root,name),'utf8'),out=path.resolve(process.env.REVIEW_TEST_OUTPUT||path.join(__dirname,'..','work','agent-integration'));
 fs.mkdirSync(out,{recursive:true});
 const result={version:1,session_id:'synthetic-agent',revision:'fixture',summary:'仅检查了合成按钮的状态变化。',coverage:{video_ranges:[{start:2,end:4}],transcript:'full',inputs:'none',limitations:['合成数据，无真实游戏结论。']},events:[{id:'e1',start:2,end:4,title:'按钮状态难以判断',summary:'记录者说不知道是否成功。<img src=x onerror=alert(1)>',basis:'explicit',kind:'friction',context:'目标需核对。',evidence:[{kind:'quote',ref:'t000001',start:2,end:4,text:'我不知道这个按钮的状态。'},{kind:'video',start:3,end:3,text:'合成按钮保持在原处。'}]}],questions:[{id:'q1',event_id:'e1',question:'后来怎样确认？',reason:'片段尚未说明。'}],ideas:[{id:'h1',event_id:'e1',idea:'比较状态提示的辨识度。',reason:'以原话为线索，待进一步验证。'}]};
-const ready={state:'complete',label:'已预处理 · 1 个事件',events:1,questions:1,ideas:1,result};
+const ready={editing:{result_sha256:'synthetic-result',corrections_revision:''},state:'complete',label:'已预处理 · 1 个事件',events:1,questions:1,ideas:1,result};
 // A single raw segment with distant phrases; only the later words support this event.
 const excerptReady=structuredClone(ready);
 Object.assign(excerptReady.result.events[0],{start:8,end:9,evidence:[{kind:'quote_words',ref:'t000001',word_range:[3,6],start:8.2,end:8.8,text:'这是后半句。<img src=x>',speaker_id:0}]});
@@ -17,7 +17,7 @@ let browser;const report={scope:'Synthetic local protocol UI; no real agent infe
 async function main(){
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin=`http://127.0.0.1:${server.address().port}`;
  browser=await chromium.launch({channel:'msedge',headless:true});const page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>report.errors.push(String(e)));
- await page.addInitScript(d=>{window.__snapshot=structuredClone(d);window.__ready=null;window.pywebview={api:{ready:async error=>{window.__ready={error};return {ok:true};},get_layout:async()=>({ok:true,data:{}}),save_layout:async()=>({ok:true}),get_snapshot:async()=>({ok:true,data:window.__snapshot})}};},data);
+ await page.addInitScript(d=>{window.__snapshot=structuredClone(d);window.__ready=null;window.pywebview={api:{ready:async error=>{window.__ready={error};return {ok:true};},edit_event:async request=>{window.__editRequest=request;if(window.__editError)return {ok:false,error:window.__editError};Object.assign(window.__snapshot.preprocessing.result.events[0],request.fields,{manually_edited:true});window.__snapshot.preprocessing.editing.corrections_revision='saved-edit';return {ok:true,data:structuredClone(window.__snapshot.preprocessing)};},get_layout:async()=>({ok:true,data:{}}),save_layout:async()=>({ok:true}),get_snapshot:async()=>({ok:true,data:window.__snapshot})}};},data);
  const check=async(name,run)=>{await run();report.checks.push({name,pass:true});};
  await page.goto(origin);await page.waitForFunction(()=>document.querySelector('video').readyState>=2);
  await check('no agent means no empty event tab or unfinished notice',async()=>{assert.equal(await page.locator('#eventsTab').isHidden(),true);assert.equal(await page.locator('#preprocessingNotice').isHidden(),true);assert.equal(await page.locator('.line').count(),1);assert.deepEqual(await page.evaluate(()=>window.__ready),{error:null});});
@@ -54,6 +54,39 @@ async function main(){
    await quote.click();assert.ok(Math.abs(await page.locator('video').evaluate(v=>v.currentTime)-8.2)<.00001);
    assert.equal(await page.locator('video').evaluate(v=>v.paused),true);
  });
+ await page.goto(origin+'/ready');await page.waitForFunction(()=>document.querySelector('video').readyState>=2);
+ await page.evaluate(value=>window.__snapshot.preprocessing=structuredClone(value),ready);
+ await page.locator('#eventsTab').click();
+ await check('editable event has all fields, cancellation and concurrent-save error keep text',async()=>{
+   await page.locator('.event-edit').click();await page.locator('#eventEdittitle').fill('未保存标题');await page.locator('#cancelEventEdit').click();
+   assert.equal(await page.locator('.event-title').textContent(),result.events[0].title);
+   await page.locator('.event-edit').click();await page.locator('#eventEditend').fill('00:00:01');await page.locator('#saveEventEdit').click();
+   assert.match(await page.locator('#eventEditError').textContent(),/结束时间/);
+   await page.locator('#eventEditstart').fill('00:00:01.500');await page.locator('#eventEditend').fill('00:00:05.250');
+   await page.locator('#eventEdittitle').fill('红点含义不清楚');await page.locator('#eventEditsummary').fill('查看经营界面的选中与上架。');
+   await page.locator('#eventEditissue').fill('选中状态难辨认；红点含义与位置不清楚。');await page.locator('#eventEditnotes').fill('尚未核实实际键位冲突。');
+   await page.evaluate(()=>window.__editError='体验事件已更新，请重新打开');await page.locator('#saveEventEdit').click();
+   assert.equal(await page.locator('#eventEdittitle').inputValue(),'红点含义不清楚');assert.equal(await page.locator('#eventDialog').isVisible(),true);
+   await page.evaluate(()=>window.__editError='');await page.locator('#saveEventEdit').click();await page.waitForFunction(()=>!document.querySelector('#eventDialog').open);
+   const saved=await page.evaluate(()=>window.__editRequest);assert.equal(saved.fields.start,1.5);assert.equal(saved.fields.end,5.25);
+   assert.equal(saved.result_sha256,'synthetic-result');assert.match(await page.locator('.event-issue').textContent(),/红点含义/);
+   assert.match(await page.locator('.event-meta').textContent(),/已校准/);
+   const colors=await page.locator('.experience-event').evaluate(el=>({description:getComputedStyle(el.querySelector('.event-description')).color,notes:getComputedStyle(el.querySelector('.event-notes')).color}));assert.notEqual(colors.description,colors.notes);
+   assert.equal(await page.locator('.event-evidence').getAttribute('open'),null);
+ });
+ await check('long evidence keeps collapse at the top, then returns to its event',async()=>{
+   await page.evaluate(()=>{const e=window.__snapshot.preprocessing.result.events[0];e.evidence=Array.from({length:20},(_,i)=>({kind:'quote',start:2,end:4,text:`合成证据 ${i+1}：原话用于验证滚动和收起。`}));});
+   await page.waitForFunction(()=>document.querySelectorAll('.event-evidence-row').length===20);
+   await page.locator('.event-evidence summary').click();
+   await page.locator('#experienceEvents').evaluate(panel=>panel.scrollTop=900);
+   const top=await page.locator('.event-evidence summary').boundingBox(),panel=await page.locator('#experienceEvents').boundingBox();
+   assert.ok(Math.abs(top.y-panel.y)<3);assert.match(await page.locator('.event-evidence summary').innerText(),/收起证据/);
+   await page.screenshot({path:path.join(out,'sticky-evidence.png')});
+   await page.locator('.event-evidence summary').click();await page.waitForTimeout(100);assert.equal(await page.locator('.event-evidence').getAttribute('open'),null);
+   assert.equal(await page.locator('.event-title').isVisible(),true);
+   await page.locator('.event-edit').click();await page.screenshot({path:path.join(out,'event-edit.png')});await page.locator('#cancelEventEdit').click();
+ });
+ await page.goto(origin+'/ready-portable');await page.locator('#eventsTab').click();assert.equal(await page.locator('.event-edit').count(),0);
  assert.deepEqual(report.errors,[]);report.pass=true;
 }
 main().catch(error=>{report.error=String(error.stack||error);process.exitCode=1;}).finally(async()=>{fs.writeFileSync(path.join(out,'browser-acceptance.json'),JSON.stringify(report,null,2));if(browser)await browser.close();server.close();console.log(JSON.stringify(report));});

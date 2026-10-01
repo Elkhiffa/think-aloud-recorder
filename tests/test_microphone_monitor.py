@@ -32,16 +32,31 @@ class MicrophoneLevelsTests(unittest.TestCase):
 
     def test_short_pauses_are_neutral_and_long_silence_warns_then_recovers(self):
         self.assertEqual(self.feed()['state'], 'quiet')
-        self.now = 14.9
+        self.now = 119.9
         self.assertEqual(self.feed()['state'], 'quiet')
-        self.now = 15
+        self.now = 120
         self.assertEqual(self.feed()['state'], 'silent')
-        self.now = 16
+        self.now = 121
         self.assertEqual(self.feed(.1)['state'], 'signal')
-        self.now = 17.2
+        self.now = 122.2
         self.assertEqual(self.feed()['state'], 'quiet')
-        self.now = 31
+        self.now = 241
         self.assertEqual(self.feed()['state'], 'silent')
+
+    def test_last_sound_time_survives_mute_routing_and_missing_packets(self):
+        self.now=50;self.feed(.2)
+        self.now=90
+        self.levels.on_input_mute_state_changed(NS(input_name='口述',input_muted=True))
+        self.now=169.9;self.feed(.5)
+        self.assertEqual(self.levels.snapshot()['quiet_seconds'],119)
+        self.now=170;self.feed(.5)
+        self.assertEqual(self.levels.snapshot()['quiet_seconds'],120)
+        self.levels.on_input_audio_tracks_changed(NS(input_name='口述',input_audio_tracks={'2':False}))
+        self.levels.on_input_removed(NS(input_name='口述'))
+        self.assertEqual(self.levels.snapshot(connected=False)['quiet_seconds'],120)
+        self.levels.on_input_mute_state_changed(NS(input_name='口述',input_muted=False))
+        self.levels.on_input_audio_tracks_changed(NS(input_name='口述',input_audio_tracks={'2':True}))
+        self.assertEqual(self.feed(.1)['quiet_seconds'],0)
 
     def test_obs_mute_is_immediate_even_when_obs_reports_pre_mute_signal(self):
         self.feed(.5)

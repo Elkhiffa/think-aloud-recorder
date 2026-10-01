@@ -57,6 +57,94 @@ class AgentProtocolTests(unittest.TestCase):
         agent.submit(self.folder,job['token'],self.candidate())
         return job
 
+    def edit_request(self):
+        from event_edits import editable
+        state=agent.preprocessing_status(self.folder,include_result=True)
+        return dict(**state['editing'],event_id='e1',fields=editable(state['result']['events'][0]))
+
+    def test_manual_event_edit_preserves_sources_and_exports_projection(self):
+        self.complete()
+        source={name:(self.folder/name).read_bytes() for name in ('experience-events.json','agent-ready.json','录像.whisper.json','复盘.md')}
+        request=self.edit_request()
+        request['fields'].update(start=1.5,end=5,title='状态辨认困难',summary='尝试确认按钮状态。',issue='选中与完成状态难以区分。',notes='尚不能判断实现原因。')
+        api=ReviewAPI(self.folder,{})
+        before=api.get_snapshot()['data']['revision']
+        response=api.edit_event(request)
+        self.assertTrue(response['ok'],response)
+        row=response['data']['result']['events'][0]
+        for key,value in request['fields'].items(): self.assertEqual(row[key],value)
+        self.assertTrue(row['manually_edited'])
+        self.assertNotEqual(api.get_snapshot()['data']['revision'],before)
+        for name,content in source.items(): self.assertEqual((self.folder/name).read_bytes(),content)
+        from event_edits import context,FILE
+        ctx=context(self.folder)
+        self.assertEqual(len(ctx['history']),1)
+        self.assertIn('-  "title": "按钮状态难以判断"',ctx['history'][0]['diff'])
+        self.assertEqual(agent.evidence(self.folder)['manual_corrections'],ctx)
+        self.assertEqual(session_review_payload(self.folder)['preprocessing']['result']['events'][0]['issue'],request['fields']['issue'])
+        # A no-op save does not add a history entry or change the digest.
+        api.edit_event(self.edit_request())
+        self.assertEqual(context(self.folder),ctx)
+
+    def test_manual_event_conflicts_validation_and_failures_preserve_previous_edits(self):
+        import event_edits
+        self.complete();request=self.edit_request()
+        for field,value in [('start',-1),('end',99),('start',float('nan')),('title',''),('summary',''),('notes','x'*2001)]:
+            bad=deepcopy(request);bad['fields'][field]=value
+            with self.assertRaises(ValueError):event_edits.save(self.folder,bad)
+        request['fields']['notes']='第一次修正'
+        event_edits.save(self.folder,request)
+        with self.assertRaisesRegex(ValueError,'已更新'):event_edits.save(self.folder,request)
+        current=self.edit_request();current['fields']['notes']='第二次修正'
+        with patch('agent_protocol.os.replace',side_effect=OSError('synthetic write failure')):
+            with self.assertRaises(OSError):event_edits.save(self.folder,current)
+        self.assertEqual(self.edit_request()['fields']['notes'],'第一次修正')
+        (self.folder/event_edits.FILE).write_text('{}',encoding='utf-8')
+        state=agent.preprocessing_status(self.folder,include_result=True)
+        self.assertEqual(state['state'],'complete')
+        self.assertIn('error',state['editing'])
+        with self.assertRaises(ValueError):agent.evidence(self.folder)
+
+    def test_reanalysis_must_reconcile_latest_manual_diff_and_retains_history(self):
+        import event_edits
+        self.complete();request=self.edit_request();request['fields']['issue']='红点意义不清楚'
+        event_edits.save(self.folder,request)
+        job=agent.reprocess(self.folder,'another-worker','核对手动校准')
+        candidate=self.candidate()
+        with self.assertRaisesRegex(ValueError,'手动校准'):agent.submit(self.folder,job['token'],candidate)
+        ctx=event_edits.context(self.folder)
+        candidate['corrections_review']=dict(revision=ctx['revision'],summary='保留红点理解困惑，区分未核实机制。')
+        candidate['events'][0]['issue']='红点意义不清楚'
+        request=self.edit_request();request['fields']['notes']='又补充了判断边界'
+        event_edits.save(self.folder,request)
+        with self.assertRaisesRegex(ValueError,'手动校准'):agent.submit(self.folder,job['token'],candidate)
+        candidate['corrections_review']['revision']=event_edits.context(self.folder)['revision']
+        candidate['events'][0]['notes']='又补充了判断边界'
+        agent.submit(self.folder,job['token'],candidate)
+        raw=agent._load(self.folder,agent.RESULT)
+        self.assertEqual(raw['corrections_review'],candidate['corrections_review'])
+        # The old overlay never attaches to a reused ID in a different result.
+        row=agent.preprocessing_status(self.folder,include_result=True)['result']['events'][0]
+        self.assertNotIn('manually_edited',row)
+        self.assertEqual(row['issue'],'红点意义不清楚')
+        self.assertEqual(len(event_edits.context(self.folder)['history']),2)
+        self.assertTrue(list((self.folder/'agent-history').glob('*.json')))
+
+    def test_legacy_inline_notes_are_split_and_simultaneous_edits_are_fenced(self):
+        import event_edits
+        job=agent.claim(self.folder,'synthetic-worker')
+        candidate=self.candidate();candidate['events'][0]['summary']='概述。\n\n备注：旧版限制。'
+        agent.submit(self.folder,job['token'],candidate)
+        request=self.edit_request()
+        self.assertEqual(request['fields']['notes'],'旧版限制。')
+        self.assertEqual(request['fields']['summary'],'概述。')
+        def apply(number):
+            edit=deepcopy(request);edit['fields']['title']=f'人工校准{number}'
+            return ReviewAPI(self.folder,{}).edit_event(edit)
+        with ThreadPoolExecutor(max_workers=4) as pool: replies=list(pool.map(apply,range(4)))
+        self.assertEqual(sum(item['ok'] for item in replies),1)
+        self.assertEqual(len(event_edits.context(self.folder)['history']),1)
+
     def test_no_agent_has_no_extra_status_and_manifest_contains_no_configuration(self):
         self.assertEqual(agent.preprocessing_status(self.folder),dict(state='none'))
         self.assertNotIn('private-sentinel',json.dumps(self.manifest))
@@ -303,119 +391,100 @@ class AgentProtocolTests(unittest.TestCase):
         context = agent.name_activities(self.folder)
         return dict(version=1, session_id=context['session_id'], revision=context['revision'],
                     result_sha256=context['result_sha256'], expected_name=context['expected_name'],
-                    worker='synthetic-classifier',
+                    worker='synthetic-classifier', title='进城探索与角色培养',
                     activities=[dict(name=name, event_ids=['e1']) for name in ('任务', '探索', '养成', '战斗')])
 
     def test_activity_naming_preview_apply_replay_and_source_preservation(self):
         self.complete()
-        protected = {p.name: p.read_bytes() for p in self.folder.iterdir() if p.is_file() and p.name != '.metadata.lock'}
-        candidate = self.activity_candidate()
-        context = agent.name_activities(self.folder)
-        self.assertNotIn('private-sentinel', json.dumps(context))
-        preview = agent.name_activities(self.folder, candidate)
-        self.assertEqual(preview['session_name'], '【任务+探索+养成+战斗】')
-        for name, raw in protected.items(): self.assertEqual((self.folder/name).read_bytes(), raw)
-        applied = agent.name_activities(self.folder, candidate, apply=True)
-        self.assertEqual(applied['state'], 'complete')
-        self.assertFalse(applied['manual_name_preserved'])
-        meta = recorder.read(self.folder/'session.json')
-        self.assertEqual(meta['session_name_source'], 'agent')
-        self.assertEqual(meta['activity_naming']['activities'], candidate['activities'])
-        self.assertEqual(meta['settings'], self.meta['settings'])
-        self.assertEqual(agent.publish_ready(self.folder)['revision'], self.manifest['revision'])
-        self.assertEqual(agent.preprocessing_status(self.folder)['state'], 'complete')
-        for name, raw in protected.items():
-            if name != 'session.json': self.assertEqual((self.folder/name).read_bytes(), raw)
-        committed = (self.folder/'session.json').read_bytes()
-        self.assertTrue(agent.name_activities(self.folder, candidate, apply=True)['replayed'])
-        self.assertEqual((self.folder/'session.json').read_bytes(), committed)
-        self.assertEqual(session_review_payload(self.folder)['session_name'], applied['session_name'])
+        protected = {p.name:p.read_bytes() for p in self.folder.iterdir() if p.is_file() and p.name!='.metadata.lock'}
+        candidate=self.activity_candidate()
+        self.assertNotIn('private-sentinel',json.dumps(agent.name_activities(self.folder)))
+        preview=agent.name_activities(self.folder,candidate)
+        self.assertEqual(preview['session_name'],'进城探索与角色培养')
+        self.assertEqual(preview['activity_details'],'任务 + 探索 + 养成 + 战斗')
+        for name,raw in protected.items():self.assertEqual((self.folder/name).read_bytes(),raw)
+        applied=agent.name_activities(self.folder,candidate,apply=True)
+        meta=recorder.read(self.folder/'session.json')
+        self.assertEqual(meta['session_name_source'],'agent')
+        self.assertEqual(meta['activity_naming']['activities'],candidate['activities'])
+        self.assertEqual(meta['settings'],self.meta['settings'])
+        self.assertEqual(agent.publish_ready(self.folder)['revision'],self.manifest['revision'])
+        for name,raw in protected.items():
+            if name!='session.json':self.assertEqual((self.folder/name).read_bytes(),raw)
+        committed=(self.folder/'session.json').read_bytes()
+        self.assertTrue(agent.name_activities(self.folder,candidate,apply=True)['replayed'])
+        self.assertEqual((self.folder/'session.json').read_bytes(),committed)
+        payload=session_review_payload(self.folder)
+        self.assertEqual(payload['session_name'],applied['session_name'])
+        self.assertEqual(payload['activity_details'],preview['activity_details'])
 
-    def test_activity_naming_appends_to_legacy_manual_name_without_replacing_it(self):
-        self.complete()
-        # Old installations have manual names without provenance metadata.
-        update_metadata(self.folder, {'session_name': '第一次进城'})
-        candidate = self.activity_candidate()
-        before = (self.folder/'session.json').read_bytes()
-        self.assertEqual(agent.name_activities(self.folder, candidate)['session_name'], '第一次进城 【任务+探索+养成+战斗】')
-        self.assertEqual((self.folder/'session.json').read_bytes(), before)
-        value = agent.name_activities(self.folder, candidate, apply=True)
+    def test_activity_naming_preserves_manual_title_and_updates_only_details(self):
+        self.complete();rename_session(self.folder,'第一次进城【自己的备注】')
+        candidate=self.activity_candidate()
+        value=agent.name_activities(self.folder,candidate,apply=True)
+        self.assertEqual(value['session_name'],'第一次进城【自己的备注】')
         self.assertTrue(value['manual_name_preserved'])
-        self.assertTrue(value['manual_summary_appended'])
-        self.assertEqual(value['session_name'], '第一次进城 【任务+探索+养成+战斗】')
-        meta = recorder.read(self.folder/'session.json')
-        self.assertEqual(len(meta['activity_naming']['activities']), 4)
-        self.assertEqual(meta['activity_naming']['manual_name'], '第一次进城')
-        self.assertEqual(meta['activity_naming']['applied_name'], value['session_name'])
-        self.assertEqual(meta['session_name_source'], 'manual_with_summary')
-        committed = (self.folder/'session.json').read_bytes()
-        self.assertTrue(agent.name_activities(self.folder, candidate, apply=True)['replayed'])
-        self.assertEqual((self.folder/'session.json').read_bytes(), committed)
-        refreshed = self.activity_candidate()
-        self.assertEqual(agent.name_activities(self.folder, refreshed, apply=True)['session_name'], value['session_name'])
+        self.assertFalse(value['manual_summary_appended'])
+        candidate=self.activity_candidate();candidate['title']='尝试新路线'
+        candidate['activities']=[dict(name='止戈',event_ids=['e1'])]
+        value=agent.name_activities(self.folder,candidate,apply=True)
+        self.assertEqual(value['session_name'],'第一次进城【自己的备注】')
+        self.assertEqual(value['activity_details'],'止戈')
 
     def test_activity_naming_updates_agent_names_but_not_manual_edits(self):
-        self.complete()
-        agent.name_activities(self.folder, self.activity_candidate(), apply=True)
-        candidate = self.activity_candidate()
-        candidate['activities'].append(dict(name='解谜', event_ids=['e1']))
-        value = agent.name_activities(self.folder, candidate, apply=True)
-        self.assertEqual(value['session_name'], '【任务+探索+养成+战斗+解谜】')
-        # A user's explicit save wins even when the text equals the old auto name.
-        rename_session(self.folder, value['session_name'])
-        candidate = self.activity_candidate()
-        candidate['activities'] = [dict(name='探索', event_ids=['e1'])]
-        protected = agent.name_activities(self.folder, candidate, apply=True)
-        self.assertEqual(protected['session_name'], value['session_name'] + ' 【探索】')
-        self.assertTrue(protected['manual_name_preserved'])
-        rename_session(self.folder, '')
+        self.complete();agent.name_activities(self.folder,self.activity_candidate(),apply=True)
+        candidate=self.activity_candidate();candidate['title']='探索城外的谜题'
+        value=agent.name_activities(self.folder,candidate,apply=True)
+        self.assertEqual(value['session_name'],'探索城外的谜题')
+        rename_session(self.folder,value['session_name'])
+        candidate=self.activity_candidate()
+        self.assertEqual(agent.name_activities(self.folder,candidate,apply=True)['session_name'],'探索城外的谜题')
+        rename_session(self.folder,'')
+        self.assertEqual(session_review_payload(self.folder)['title'],self.meta['game'])
         self.assertTrue(agent.name_activities(self.folder)['can_auto_name'])
 
-    def test_activity_naming_replaces_summary_after_reanalysis_and_manual_prefix_edit(self):
+    def test_legacy_combined_names_split_on_read_without_rewriting_sources(self):
+        from session_metadata import session_presentation
         self.complete()
-        rename_session(self.folder, '第一次进城【自己的备注】')
-        agent.name_activities(self.folder, self.activity_candidate(), apply=True)
-        # The installed older UI saves the full display title without naming provenance.
-        update_metadata(self.folder, {'session_name': '重返城镇【自己的备注】 【任务+探索+养成+战斗】'})
-        job = agent.reprocess(self.folder, 'synthetic-worker', 'Synthetic new analysis')
-        result = self.candidate()
-        result['summary'] = '新的有效整理'
-        agent.submit(self.folder, job['token'], result)
-        candidate = self.activity_candidate()
-        candidate['activities'] = [dict(name='清河任务', event_ids=['e1']), dict(name='止戈', event_ids=['e1'])]
-        value = agent.name_activities(self.folder, candidate, apply=True)
-        self.assertEqual(value['session_name'], '重返城镇【自己的备注】 【清河任务+止戈】')
-        self.assertEqual(value['manual_name'], '重返城镇【自己的备注】')
-        # Completely replacing the title creates a new manual prefix.
-        rename_session(self.folder, '新计划【探索】')
-        value = agent.name_activities(self.folder, self.activity_candidate(), apply=True)
-        self.assertEqual(value['session_name'], '新计划【探索】 【任务+探索+养成+战斗】')
+        old='第一次进城 【任务+探索】'
+        update_metadata(self.folder,dict(session_name=old,session_name_source='manual_with_summary',activity_naming=dict(
+            naming_policy='append-content-v2',manual_name='第一次进城',suggested_name='【任务+探索】',applied_name=old,
+            activities=[dict(name='任务'),dict(name='探索')])))
+        before=(self.folder/'session.json').read_bytes()
+        view=session_review_payload(self.folder)
+        self.assertEqual(view['title'],'第一次进城');self.assertEqual(view['activity_details'],'任务 + 探索')
+        self.assertEqual((self.folder/'session.json').read_bytes(),before)
+        candidate=self.activity_candidate()
+        self.assertEqual(candidate['expected_name'],old)
+        self.assertEqual(agent.name_activities(self.folder,candidate,apply=True)['session_name'],'第一次进城')
+        # Brackets alone never imply an agent-owned name.
+        self.assertEqual(session_presentation({'session_name':'【自己的完整标题】'})['title'],'【自己的完整标题】')
+        self.assertEqual(session_presentation({'game':'项目','activity_naming':{'activities':None}})['title'],'项目')
 
-    def test_activity_naming_upgrades_old_saved_manual_classification(self):
+    def test_legacy_auto_name_moves_to_details_and_old_callers_cannot_restore_it(self):
         self.complete()
-        update_metadata(self.folder, {'session_name': '我的标题', 'activity_naming': {
-            'version': 1, 'applied_name': None, 'display_name': '我的标题',
-            'suggested_name': '【任务】', 'proposal_sha256': 'old-policy'}})
-        value = agent.name_activities(self.folder, self.activity_candidate(), apply=True)
-        self.assertEqual(value['session_name'], '我的标题 【任务+探索+养成+战斗】')
-        self.assertEqual(agent.name_activities(self.folder)['naming_policy'], 'append-content-v2')
+        old='【任务+探索】'
+        update_metadata(self.folder,dict(session_name=old,session_name_source='agent',activity_naming=dict(
+            naming_policy='append-content-v2',manual_name='',suggested_name=old,applied_name=old,
+            activities=[dict(name='任务'),dict(name='探索')])))
+        self.assertEqual(session_review_payload(self.folder)['title'],self.meta['game'])
+        candidate=self.activity_candidate();candidate.pop('title')
+        value=agent.name_activities(self.folder,candidate,apply=True)
+        self.assertEqual(value['title'],self.meta['game'])
+        self.assertEqual(value['session_name'],'')
+        self.assertEqual(agent.name_activities(self.folder)['naming_policy'],'separate-title-v3')
 
-    def test_activity_naming_keeps_long_content_and_manual_prefix_intact(self):
-        self.complete()
-        manual = '这是一份很长的手动名称' * 12
-        rename_session(self.folder, manual)
-        candidate = self.activity_candidate()
-        candidate['activities'] = [dict(name=str(i)+'具体任务与探索内容'*2, event_ids=['e1']) for i in range(8)]
-        value = agent.name_activities(self.folder, candidate, apply=True)
-        self.assertGreater(len(value['suggested_name']), 100)
-        self.assertEqual(value['session_name'], manual + ' ' + value['suggested_name'])
-        self.assertEqual(session_review_payload(self.folder)['title'], value['session_name'])
-        rename_session(self.folder, '长' * 4090)
-        candidate = self.activity_candidate()
-        before = (self.folder/'session.json').read_bytes()
-        with self.assertRaisesRegex(ValueError, '4096'):
-            agent.name_activities(self.folder, candidate, apply=True)
-        self.assertEqual((self.folder/'session.json').read_bytes(), before)
+    def test_activity_details_are_not_limited_by_short_title_or_manual_name(self):
+        self.complete();manual='长'*4090;rename_session(self.folder,manual)
+        candidate=self.activity_candidate()
+        candidate['activities']=[dict(name=str(i)+'具体任务与探索内容'*2,event_ids=['e1']) for i in range(8)]
+        value=agent.name_activities(self.folder,candidate,apply=True)
+        self.assertGreater(len(value['activity_details']),100)
+        self.assertEqual(value['session_name'],manual)
+        before=(self.folder/'session.json').read_bytes()
+        candidate=self.activity_candidate();candidate['title']='长'*61
+        with self.assertRaisesRegex(ValueError,'60字'):agent.name_activities(self.folder,candidate,apply=True)
+        self.assertEqual((self.folder/'session.json').read_bytes(),before)
 
     def test_activity_naming_fences_manual_changes_and_stale_analysis(self):
         self.complete()

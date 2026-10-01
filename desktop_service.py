@@ -371,8 +371,9 @@ class DesktopService:
                         background = self._background_for(path)
                         result = self._background_history.get(str(path))
                         from agent_protocol import preprocessing_status
+                        from session_metadata import session_presentation
                         sessions.append(dict(id=ident, game=meta.get('game', ''),
-                                             session_name=meta.get('session_name', ''),
+                                             **session_presentation(meta),
                                              preprocessing=preprocessing_status(path, meta),
                                              can_review=(path / '录像.mp4').is_file() and (path / '录像.mp4').resolve().parent == path.resolve()
                                                  and not bool(self._active and self._active.path.resolve() == path.resolve()),

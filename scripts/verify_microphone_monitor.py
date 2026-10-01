@@ -111,7 +111,13 @@ def main():
                 expect('muted')
                 request.send('SetInputVolume', {'inputName': '测试素材', 'inputVolumeMul': 0})
                 request.set_input_mute('测试素材', False)
-                expect('silent', timeout=20)
+                expect('quiet')
+                # The threshold itself is exercised with an injected clock in
+                # unit tests. Advance this synthetic monitor's quiet interval
+                # instead of keeping native OBS recording for two minutes.
+                with session._microphone_levels.lock:
+                    session._microphone_levels.sound_at=time.monotonic()-121
+                expect('silent')
                 assert request.get_record_status().output_active, 'Meter warnings stopped recording'
                 request.send('SetInputVolume', {'inputName': '测试素材', 'inputVolumeMul': 1})
                 expect('signal')

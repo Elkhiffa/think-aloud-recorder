@@ -711,15 +711,20 @@ class Session:
         self._input_stop_boundary=None
         self._input_clock_continuous=False
         self._microphone_monitor=None
+        self._microphone_levels=None
     def ensure_microphone_monitor(self,request):
-        from microphone_monitor import MicrophoneMonitor
+        from microphone_monitor import MicrophoneMonitor, MicrophoneLevels
         if self._microphone_monitor is not None and self._microphone_monitor.healthy():return
         self.close_microphone_monitor()
-        try:self._microphone_monitor=MicrophoneMonitor(request,'测试素材' if self.meta.get('test') else '口述')
+        source='测试素材' if self.meta.get('test') else '口述'
+        if self._microphone_levels is None:self._microphone_levels=MicrophoneLevels(source)
+        try:self._microphone_monitor=MicrophoneMonitor(request,source,levels=self._microphone_levels)
         except Exception:pass  # Optional feedback must never stop or fail a recording.
     def microphone_state(self):
         monitor=self._microphone_monitor
-        return monitor.snapshot() if monitor is not None else dict(state='unavailable',level=0,db=None)
+        if monitor is not None:return monitor.snapshot()
+        if self._microphone_levels is not None:return self._microphone_levels.snapshot(connected=False)
+        return dict(state='unavailable',level=0,db=None,quiet_seconds=0)
     def close_microphone_monitor(self):
         monitor,self._microphone_monitor=self._microphone_monitor,None
         if monitor is not None:monitor.close()

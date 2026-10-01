@@ -135,7 +135,9 @@
   "events": [{
     "id": "e1", "start": 130, "end": 140,
     "title": "尝试找到并比较适用的装备",
-    "summary": "观察到什么、做了什么、结果如何；未知项明确标注。",
+    "summary": "当前目标、主要过程和局部结果。",
+    "issue": "片段中具体的困惑、阻碍、感受与后果；没有可支持的问题时可留空。",
+    "notes": "判断边界、未核实的机制及资料限制，可留空。",
     "context": "记录者当前目标与前后关系；仅从画面推测时明确说明，无法识别时写目标未明。",
     "basis": "explicit", "kind": "friction",
     "evidence": [
@@ -152,7 +154,7 @@
 - 时间单位是相对录像开始的秒。所有证据必须位于对应事件时间段，画面证据还必须落在实际检查的 video_ranges 中。一帧用 start=end。
 - basis：`explicit`（有原话引用的明确表达）、`observed`（可见现象）、`inferred`（推测）。这是事件依据类型，不是量化置信度。
 - kind：`friction`、`positive`、`routine`、`question`。用 summary 区分事实与假设，分类本身不代表设计结论。
-- 事件以目标与过程组织，沿用 v1 的 title/context/summary，正常过程可用 `routine`；不新增私有 schema。问题从事件中归纳，在 summary/ideas 或单独对比报告中记录，并引用事件和源证据。没有原话不等于没有目标；画面推测目标时用 `inferred`，不要因存在无关原话就标成 `explicit`。
+- 事件以游戏内活动为单位，同一活动的多个问题作为 issue 子项保留，正常过程可用 `routine`；0.7.1 的 v1 扩展支持独立 issue 和 notes，分别承载问题／感受与判断边界。问题从事件中归纳，并引用事件和源证据。没有原话不等于没有目标；画面推测目标时用 `inferred`，不要因存在无关原话就标成 `explicit`。
 - 原话和输入只填引用；原话节选另带上述 `word_range`。不手工复制文本或调整时间；发布时程序从当前素材展开，防止引用漂移。参考原话的 speaker_id 保留其他讲述者的身份。
 - coverage.transcript / inputs 为 `full`、`partial` 或 `none`，只描述本轮实际检查范围。无有效操作时记 `none` 并写限制；缺口不等于没有操作。
 - events 最多 300，每事件证据最多 30；ideas 最多 100；questions 最多 30。多数场次应远少于上限，无充分依据可返回空列表。
@@ -160,3 +162,5 @@
 - 候选与展开后的结果均不超过 2 MB。只支持 v1；未知附加字段不会进入回看。
 
 原子提交位置是场次内的 `experience-events.json`，就绪文件 `agent-ready.json`，领取文件 `agent-state.json`。不要直接改这些文件；通过 CLI 更新才有并发检查、版本校验和历史保留。revision 包含素材文件大小/修改时间、同步偏移和记录者选择，不是内容真实性签名。结果中自动加入回执，UI 不显示领取令牌。
+
+0.7.1 的 `evidence.manual_corrections` 提供人手校准历史和 diff；有历史时，提交须带当前 `corrections_review.revision` 与采纳说明 `summary`。见[手动校准与事件表达](manual-corrections.md)。旧客户端不支持这些字段，请先确认版本。

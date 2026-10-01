@@ -29,7 +29,7 @@
               <button data-document="notes">打开复盘文档</button>
               <button data-document="transcript">打开逐字稿文档</button>
             </div>
-          </div></div></div><span id="testLabel" hidden>合成测试</span></div>
+          </div></div><p id="sessionContent" class="session-content"></p></div><span id="testLabel" hidden>合成测试</span></div>
     <div class="review-header-actions"><span class="review-wordmark">Think Aloud</span><button id="themeButton" class="theme-button" aria-label="切换深色模式" title="切换深色模式"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14a8 8 0 0 1-10-10 8.5 8.5 0 1 0 10 10Z"/></svg></button></div>
   </header>
   <main class="review-layout">
@@ -62,6 +62,21 @@
     </aside>
   </main>
   <div id="quotePopover" class="quote-popover" role="dialog" aria-label="原话全文" hidden><div class="quote-popover-heading"><time id="quoteTime"></time><button id="quoteClose" aria-label="关闭原话">×</button></div><span id="quoteSpeaker" class="speaker-tag" hidden></span><p id="quoteText"></p></div>
+  <dialog id="eventDialog" class="event-dialog" aria-labelledby="eventEditTitle">
+    <form id="eventForm">
+      <header><h2 id="eventEditTitle">校准体验事件</h2><button type="button" id="closeEventEdit" aria-label="关闭编辑">×</button></header>
+      <div class="event-edit-body">
+        <div class="event-edit-times"><label>开始时间<input id="eventEditstart" required placeholder="00:00:00.000" inputmode="decimal"></label><label>结束时间<input id="eventEditend" required placeholder="00:00:00.000" inputmode="decimal"></label></div>
+        <label>名称<input id="eventEdittitle" maxlength="160" required></label>
+        <label>概述<textarea id="eventEditsummary" rows="3" maxlength="3000" required></textarea></label>
+        <label>问题与感受<textarea id="eventEditissue" rows="3" maxlength="3000" placeholder="同一活动内的多个问题与感受可分行填写；没有可留空"></textarea></label>
+        <label>备注与判断边界<textarea id="eventEditnotes" rows="3" maxlength="2000" placeholder="还不能确定什么、哪些判断需要核实"></textarea></label>
+        <p class="event-edit-hint">保留原整理结果和修改差异，供下次整理参考。时间相对于本段录像开始。</p>
+        <p id="eventEditError" role="alert" hidden></p>
+      </div>
+      <footer><button id="cancelEventEdit" type="button">取消</button><button id="saveEventEdit" type="submit">保存修改</button></footer>
+    </form>
+  </dialog>
   <dialog id="speakerDialog" class="speaker-dialog" aria-labelledby="speakerTitle" aria-describedby="speakerExplanation">
     <audio id="speakerAudio" preload="none"></audio>
     <form id="speakerForm">

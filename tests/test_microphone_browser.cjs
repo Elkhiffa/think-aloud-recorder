@@ -15,7 +15,7 @@ const server=http.createServer((req,res)=>{
  page.on('pageerror',e=>errors.push(e.message));
  try{
   await page.addInitScript(()=>{
-   window.fixture={calls:0,hold:false,level:{session_id:'synthetic-recording',state:'signal',level:.72,name:'示例麦克风（合成测试）'},state:{
+   window.fixture={calls:0,hold:false,level:{session_id:'synthetic-recording',state:'signal',quiet_seconds:0,level:.72,name:'示例麦克风（合成测试）'},state:{
     config:{game:'麦克风反馈 · 合成测试',vault:'F:\\synthetic-only',configured:true,mic:'synthetic-mic',source:'游戏窗口',transcription_provider:'later'},
     presets:[{id:'synthetic-preset',name:'麦克风反馈 · 合成测试'}],active_preset_id:'synthetic-preset',
     activity:{kind:'recording',busy:false,status:'录制中',active_id:'synthetic-recording',elapsed_seconds:84},
@@ -42,7 +42,10 @@ const server=http.createServer((req,res)=>{
    assert.equal(await page.locator('#recordButton').isEnabled(),true);
    assert.equal(await page.locator('#capturePanel').evaluate(el=>el.offsetHeight),height);
   }
-  await state('silent');await page.screenshot({path:path.join(out,'recording-silent.png')});
+  await state('silent',{quiet_seconds:121});await page.waitForFunction(()=>document.querySelector('#homeStatus').classList.contains('microphone-warning'));
+  assert.match(await page.locator('#homeStatus').textContent(),/2 分钟/);
+  assert.equal(await page.locator('.capture-time-row #microphoneMonitor').count(),1);
+  await page.screenshot({path:path.join(out,'recording-silent.png')});
   for(const [width,height] of [[820,620],[3440,1440],[390,640]]){
    await page.setViewportSize({width,height});
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
@@ -50,7 +53,9 @@ const server=http.createServer((req,res)=>{
   }
   await page.setViewportSize({width:820,height:620});await page.locator('#themeButton').click();
   await page.screenshot({path:path.join(out,'recording-silent-compact-dark.png')});
-  await state('signal',{level:.4});
+  await state('signal',{level:.4,quiet_seconds:0});
+  await page.waitForFunction(()=>!document.querySelector('#homeStatus').classList.contains('microphone-warning'));
+  assert.equal(await page.locator('#microphoneMonitor').textContent(),'');
   await page.evaluate(()=>fixture.hold=true);
   await page.waitForFunction(()=>typeof fixture.release==='function');
   const calls=await page.evaluate(()=>fixture.calls);

@@ -301,7 +301,8 @@
   video.addEventListener('play',keepInitialPosition,{once:true});
   video.addEventListener('seeking',keepInitialPosition,{once:true});
   const status=(message,error=false)=>{$('status').textContent=message;$('status').classList.toggle('error',error);};
-  function updateTitle(){const title=data.session_name||data.title||data.game||'体验片段';$('title').textContent=title;$('title').title=title;document.title=title+' · 回看';const date=new Date(data.created);const created=Number.isNaN(date.getTime())?'':date.toLocaleString('zh-CN',{year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});$('sessionInfo').textContent=[data.game,created].filter(Boolean).join(' · ');}
+  const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+  function updateTitle(){const title=data.session_name||data.title||data.game||'体验片段';$('title').textContent=title;$('title').title=title;document.title=title+' · 回看';const date=new Date(data.created);const created=Number.isNaN(date.getTime())?'':date.toLocaleString('zh-CN',{year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});const info=data.preprocessing||{},count=info.state==='complete'&&Number.isInteger(info.events)?`<span class="preprocessing-count">预处理 ${info.events} 个事件</span>`:'';$('sessionInfo').innerHTML=escape(data.game||'')+count+(created?`<span class="session-created"> · ${escape(created)}</span>`:'');$('sessionContent').textContent=data.activity_details||'';}
   updateTitle();
   $('testLabel').hidden=!data.test;
   const layout=document.querySelector('.review-layout'),splitter=$('reviewSplitter');
@@ -618,7 +619,7 @@
     try{const next=await native('get_snapshot',snapshotRevision);if(!next)return;
       snapshotRevision=typeof next.revision==='string'?next.revision:null;
       if(next.unchanged===true)return;
-      for(const key of ['session_name','game','title','transcription','inputs','vault_path','speakers','narration','preprocessing'])if(Object.hasOwn(next,key))data[key]=next[key];
+      for(const key of ['session_name','game','title','activity_details','transcription','inputs','vault_path','speakers','narration','preprocessing'])if(Object.hasOwn(next,key))data[key]=next[key];
       updateTitle();const signature=JSON.stringify(next.segments);
       if(Array.isArray(next.segments)&&signature!==segmentSignature){segments=next.segments;data.segments=segments;segmentSignature=signature;buildTranscript();}
       renderSpeakerSummary();inputUI.update();
@@ -644,7 +645,11 @@
     const headings=document.querySelector('.timeline-column-headings'),horizontal=document.createElement('div'),grid=document.createElement('div');
     const dpadHeading=document.createElement('span');dpadHeading.textContent='十字键';headings.lastElementChild.before(dpadHeading);
     horizontal.className='timeline-horizontal-scroll';horizontal.setAttribute('aria-label','横向浏览操作轨道');grid.className='timeline-grid';
-    headings.before(horizontal);horizontal.append(grid);grid.append(headings,timeline);
+    const navigation=document.createElement('div'),vertical=document.createElement('div'),scrollSpace=document.createElement('div');
+    navigation.className='timeline-navigation';vertical.className='timeline-vertical-scroll';vertical.id='timelineVerticalScroll';vertical.tabIndex=0;
+    vertical.setAttribute('aria-label','纵向浏览时间轴，不改变缩放或播放进度');scrollSpace.setAttribute('aria-hidden','true');vertical.append(scrollSpace);
+    headings.before(navigation);navigation.append(horizontal,vertical);horizontal.append(grid);grid.append(headings,timeline);
+    let projectedScrollTop=0;
     const returnToPlayhead=document.createElement('button');returnToPlayhead.type='button';returnToPlayhead.id='returnToPlayhead';returnToPlayhead.className='timeline-return';returnToPlayhead.hidden=true;
     returnToPlayhead.innerHTML='<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 12 5-5 5 5"/></svg><span>播放位置</span>';
     returnToPlayhead.title='回到当前播放位置并恢复跟随';$('inputTimelinePanel').append(returnToPlayhead);
@@ -658,6 +663,17 @@
     let windowIndex=intervalIndex(source.window_states||[]);
     $('inputScope').onchange=()=>{state.scope=$('inputScope').value;update();};
     function duration(){return Math.max(Number.isFinite(video.duration)?video.duration:0,source.duration,segments.at(-1)?.end||0,1);}
+    function syncVerticalScroll(){
+      vertical.style.marginTop=headings.offsetHeight+'px';vertical.style.marginBottom=(horizontal.offsetHeight-horizontal.clientHeight)+'px';
+      const height=vertical.clientHeight;if(!height)return;
+      // A single native scroll surface controls the virtual timeline; its
+      // height is bounded even for extremely long recordings and high zoom.
+      scrollSpace.style.height=Math.max(height,Math.min(1000000,duration()*state.scale))+'px';
+      const maxStart=Math.max(0,duration()-timeline.clientHeight/state.scale),range=vertical.scrollHeight-height;
+      const top=maxStart?state.viewStart/maxStart*range:0;
+      if(Math.abs(vertical.scrollTop-top)>.5)vertical.scrollTop=top;
+      projectedScrollTop=vertical.scrollTop;
+    }
     function glyph(item){if(item.movement)return `<span class="movement-glyph">${escape(item.direction||'•')}</span>`;if(item.device==='mouse'){const fill=item.code==='MouseLeft'?'<path fill="currentColor" stroke="none" d="M4 10a7 7 0 0 1 6-7v7Z"/>':item.code==='MouseRight'?'<path fill="currentColor" stroke="none" d="M12 3a7 7 0 0 1 6 7h-6Z"/>':item.code==='MouseMiddle'?'<rect fill="currentColor" x="9" y="4" width="4" height="7" rx="2"/>':'';const direction=item.direction||({WheelUp:'↑',WheelDown:'↓',WheelLeft:'←',WheelRight:'→',MouseX1:'4',MouseX2:'5'}[item.code])||'';return mouseIcon.replace('</svg>',fill+'</svg>')+(direction?`<span class="mouse-arrow">${escape(direction)}</span>`:'');}if(item.kind==='axis')return `<span class="axis-glyph">${item.code==='LeftStick'?'L':'R'}<span>${escape(item.direction||'•')}</span></span>`;if(/^D[Pp]ad/.test(item.code))return `<span class="dpad-glyph"><svg viewBox="0 0 18 18" aria-hidden="true"><path d="M6 1h6v5h5v6h-5v5H6v-5H1V6h5Z"/></svg><span>${escape(inputLabel(item))}</span></span>`;return escape(inputLabel(item));}
     function inputMessage(){if(source.state==='disabled'&&source.error?.includes('旧场次'))return '旧场次没有操作记录';if(source.state==='complete'&&!source.intervals.length&&source.gaps.some(gap=>gap.discarded_events))return '本片段未保存有效操作记录';return ({missing:'此场次没有操作记录',disabled:'此场次未启用操作记录',failed:'操作记录采集失败',unavailable:'操作记录文件不可用',invalid:'操作记录文件不可用',interrupted:'操作记录未完整保存',pending:'操作记录正在保存',recording:'操作记录正在保存'}[source.state]||'');}
     function gapName(gap){return gap.preparation?'录制准备':({focus:'已切出目标程序',focus_lost:'已切出目标程序',disconnect:'设备连接中断',device_disconnected:'设备连接中断',error:'采集异常'}[gap.type]||'采集缺口');}
@@ -665,6 +681,32 @@
     function setTab(tab){if(tab==='transcript'&&$('transcriptTab').disabled)return;if(tab==='events'&&$('eventsTab').hidden)return;state.tab=tab;$('inputTab').setAttribute('aria-selected',String(tab==='inputs'));$('transcriptTab').setAttribute('aria-selected',String(tab==='transcript'));$('eventsTab').setAttribute('aria-selected',String(tab==='events'));$('inputTimelinePanel').hidden=tab!=='inputs';lines.hidden=tab!=='transcript';$('transcriptSearch').hidden=tab!=='transcript';$('experienceEvents').hidden=tab!=='events';$('follow').hidden=tab==='events';$('empty').hidden=tab!=='transcript'||nodes.some(node=>!node.hidden);closeQuote();if(tab==='transcript')scrollCurrent();else if(tab==='inputs')render(true);}
     $('inputTab').onclick=()=>setTab('inputs');$('transcriptTab').onclick=()=>setTab('transcript');$('eventsTab').onclick=()=>setTab('events');
     for(const button of [$('inputTab'),$('transcriptTab'),$('eventsTab')])button.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const tabs=[$('inputTab'),$('transcriptTab'),$('eventsTab')].filter(tab=>!tab.hidden&&!tab.disabled),i=tabs.indexOf(button);const next=event.key==='Home'?tabs[0]:event.key==='End'?tabs.at(-1):tabs[(i+(event.key==='ArrowLeft'?-1:1)+tabs.length)%tabs.length];if(next){next.click();next.focus();}}});
+    const eventDialog=$('eventDialog'),eventForm=$('eventForm');let editingEvent=null,eventSaving=false;
+    const eventFields=['title','summary','issue','notes'];
+    const editClock=seconds=>{const n=Math.round(seconds*1000);return `${formatTime(n/1000)}.${String(n%1000).padStart(3,'0')}`;};
+    function parseEventClock(text){const s=text.trim();if(/^\d+(?:\.\d{1,3})?$/.test(s))return Number(s);const m=/^(?:(\d+):)?([0-5]?\d):([0-5]\d)(?:\.(\d{1,3}))?$/.exec(s);if(!m)throw new Error('时间请填写 时:分:秒 或秒数，可精确到毫秒。');return Number(m[1]||0)*3600+Number(m[2])*60+Number(m[3])+Number('0.'+(m[4]||'0'));}
+    function editEvent(event,editing){
+      editingEvent={...editing,event_id:event.id};eventForm.reset();$('eventEditError').hidden=true;
+      for(const field of ['start','end'])$('eventEdit'+field).value=editClock(event[field]);
+      const pieces=String(event.summary||'').split(/(?:^|\n)\s*备注[：:]\s*/);
+      for(const field of eventFields)$('eventEdit'+field).value=field==='summary'?pieces[0]:field==='notes'?[...pieces.slice(1),event.notes].filter(Boolean).join('\n'):event[field]||'';
+      eventDialog.showModal();$('eventEdittitle').focus();
+    }
+    const closeEditor=()=>{if(!eventSaving)eventDialog.close();};
+    $('cancelEventEdit').onclick=closeEditor;$('closeEventEdit').onclick=closeEditor;
+    eventDialog.addEventListener('cancel',event=>{if(eventSaving)event.preventDefault();});
+    eventForm.onsubmit=async event=>{
+      event.preventDefault();if(eventSaving||!editingEvent)return;
+      const error=$('eventEditError');error.hidden=true;
+      try{
+        const fields=Object.fromEntries(eventFields.map(field=>[field,$('eventEdit'+field).value]));
+        fields.start=parseEventClock($('eventEditstart').value);fields.end=parseEventClock($('eventEditend').value);
+        if(fields.end<fields.start)throw new Error('结束时间不能早于开始时间。');
+        eventSaving=true;$('saveEventEdit').disabled=true;
+        data.preprocessing=await native('edit_event',{...editingEvent,fields});updateEvents();eventDialog.close();status('体验事件已保存。');
+      }catch(problem){error.textContent=problem.message;error.hidden=false;}
+      finally{eventSaving=false;$('saveEventEdit').disabled=false;}
+    };
     let eventSignature='';
     function updateEvents(){
       const info=data.preprocessing||{state:'none'},signature=JSON.stringify(info);if(signature===eventSignature)return;eventSignature=signature;
@@ -674,12 +716,21 @@
       panel.replaceChildren();if(!result){if(state.tab==='events')setTab((data.transcription?.state||'ready')==='ready'?'transcript':'inputs');return;}
       const jump=(time,label,cls='event-jump')=>`<button class="${cls}" data-event-time="${time}" title="定位原始录像">${escape(label)}</button>`;
       const basis={explicit:'你明确说出的体验',observed:'从画面与操作整理',inferred:'待核实的推测'},kind={friction:'遇到阻碍',positive:'顺畅体验',routine:'正常过程',question:'疑问'};
+      const content=event=>{const parts=String(event.summary||'').split(/(?:^|\n)\s*备注[：:]\s*/),notes=[...parts.slice(1),event.notes].filter(Boolean).join('\n');return `<p class="event-description">${escape(parts[0])}</p>${event.context?`<p class="event-context">上下文：${escape(event.context)}</p>`:''}${event.issue?`<div class="event-issue"><strong>问题与感受</strong><p>${escape(event.issue)}</p></div>`:''}${notes?`<p class="event-notes">备注：${escape(notes)}</p>`:''}`;};
       const related=(field,key,heading)=>result[field]?.length?`<section class="event-related"><h3>${heading}</h3>${result[field].map(item=>{const event=result.events.find(e=>e.id===item.event_id);return `<div class="event-question">${event?jump(event.start,event.title,'event-reference'):''}<p>${escape(item[key])}</p><small>${escape(item.reason)}</small></div>`;}).join('')}</section>`:'';
       panel.innerHTML=`<div class="event-intro"><p>${escape(result.summary)}</p><details class="event-coverage"><summary>查看整理范围与资料限制</summary><p>画面检查：${result.coverage.video_ranges.length?result.coverage.video_ranges.map(r=>`${formatTime(r.start)}–${formatTime(r.end)}`).join('、'):'未检查'}</p><p>原话：${({full:'全部',partial:'部分',none:'未检查'})[result.coverage.transcript]}；操作：${({full:'全部',partial:'部分',none:'未检查'})[result.coverage.inputs]}</p>${result.coverage.limitations.map(s=>`<p>${escape(s)}</p>`).join('')}</details></div>`+
-        result.events.map(event=>`<article class="experience-event"><div class="event-meta">${jump(event.start,`${formatTime(event.start)}–${formatTime(event.end)}`)}<span>${escape(kind[event.kind]||'体验')}</span></div><h3>${jump(event.start,event.title,'event-title')}</h3><p class="event-basis">${escape(basis[event.basis])}</p><p>${escape(event.summary)}</p>${event.context?`<p class="event-context">上下文整理：${escape(event.context)}</p>`:''}<details class="event-evidence"><summary>展开证据 · ${event.evidence.length} 条</summary>${event.evidence.map(ref=>`<div class="event-evidence-row">${jump(ref.start,`${formatTime(ref.start)} · ${{quote:'原话',quote_words:'原话节选',video:'画面',input:'操作'}[ref.kind]}`)}<p${['quote','quote_words'].includes(ref.kind)?' class="event-quote"':''}>${escape(ref.text)}</p></div>`).join('')}</details></article>`).join('')+
+        result.events.map(event=>`<article class="experience-event"><div class="event-meta">${jump(event.start,`${formatTime(event.start)}–${formatTime(event.end)}`)}<span>${escape(kind[event.kind]||'体验')}${event.manually_edited?' · 已校准':''}</span>${data.desktop&&info.editing?.result_sha256?`<button class="event-edit" data-edit-event="${escape(event.id)}" aria-label="编辑体验事件">编辑</button>`:''}</div><h3>${jump(event.start,event.title,'event-title')}</h3><p class="event-basis">${escape(basis[event.basis])}</p>${content(event)}<details class="event-evidence"><summary><span class="evidence-expand">展开证据</span><span class="evidence-collapse">收起证据</span> · ${event.evidence.length} 条</summary>${event.evidence.map(ref=>`<div class="event-evidence-row">${jump(ref.start,`${formatTime(ref.start)} · ${{quote:'原话',quote_words:'原话节选',video:'画面',input:'操作'}[ref.kind]}`)}<p${['quote','quote_words'].includes(ref.kind)?' class="event-quote"':''}>${escape(ref.text)}</p></div>`).join('')}</details></article>`).join('')+
         (!result.events.length?'<p class="event-empty">本轮没有提取出有充分依据的体验事件。</p>':'')+related('ideas','idea','值得展开的想法')+related('questions','question','可选补充')+
         (result.questions?.length?'<p class="event-footnote">这些问题可以之后补充，不影响本轮预处理完成。</p>':'');
+      if(info.editing?.error){const error=document.createElement('p');error.className='event-notes';error.textContent=info.editing.error;panel.prepend(error);}
+      panel.querySelectorAll('[data-edit-event]').forEach(button=>button.onclick=()=>editEvent(result.events.find(event=>event.id===button.dataset.editEvent),info.editing));
       panel.querySelectorAll('[data-event-time]').forEach(button=>button.onclick=()=>seekKeep(Number(button.dataset.eventTime),false));
+      panel.querySelectorAll('.event-evidence').forEach(details=>details.addEventListener('toggle',()=>{
+        if(!details.open&&details.dataset.wasOpen==='true'){
+          const article=details.closest('.experience-event');panel.scrollTop+=article.getBoundingClientRect().top-panel.getBoundingClientRect().top;
+        }
+        details.dataset.wasOpen=String(details.open);
+      }));
     }
     // Device diagrams are static geometry; activity only changes fills and axes.
   const keyboardRows = [
@@ -870,6 +921,7 @@
       const height=timeline.clientHeight,span=height/state.scale;
       if(state.follow)state.viewStart=Math.max(0,Math.min(Math.max(0,duration()-span),time-span*.38));
       else state.viewStart=Math.max(0,Math.min(Math.max(0,duration()-span),state.viewStart));
+      syncVerticalScroll();
       const key=[Math.floor(state.viewStart/(Math.max(span*.45,.1))),state.scale,timeline.clientWidth,height,state.revision].join('/');
       if(force||key!==state.renderKey){state.renderKey=key;rebuild();}
       const offset=(renderStart-state.viewStart)*state.scale;layers.forEach(layer=>layer.style.transform=`translateY(${offset}px)`);
@@ -914,6 +966,20 @@
     timeline.addEventListener('wheel',event=>{event.preventDefault();if(gesture)return;const rect=timeline.getBoundingClientRect(),unit=event.deltaMode===1?16:event.deltaMode===2?rect.height:1,delta=event.deltaY*unit;hideInputDetail();if(Math.abs(event.deltaX)>Math.abs(event.deltaY)){horizontal.scrollLeft+=event.deltaX*unit;return;}if(event.clientX-horizontal.getBoundingClientRect().left<geometry().time){const z=anchoredZoom({scale:state.scale,delta,viewStart:state.viewStart,pointerY:event.clientY-rect.top,duration:duration(),height:rect.height});state.scale=z.scale;state.viewStart=z.viewStart;}else{state.viewStart=Math.max(0,Math.min(Math.max(0,duration()-rect.height/state.scale),state.viewStart+delta/state.scale));}setFollow(false);state.needsRender=true;if(!state.pinned)closeQuote();},{passive:false});
     timeline.addEventListener('keydown',event=>{if(['PageDown','PageUp','ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();const sign=['PageUp','ArrowUp'].includes(event.key)?-1:1;seekKeep(event.key==='Home'?0:event.key==='End'?duration():video.currentTime+sign*(event.key.startsWith('Page')?timeline.clientHeight/state.scale*.8:1));}});
     horizontal.addEventListener('scroll',()=>{grid.style.setProperty('--timeline-scroll-x',horizontal.scrollLeft+'px');hideInputDetail();if(!state.pinned)closeQuote();});
+    vertical.addEventListener('scroll',()=>{
+      if(Math.abs(vertical.scrollTop-projectedScrollTop)<.5)return;
+      const range=vertical.scrollHeight-vertical.clientHeight;if(range<=0)return;
+      state.viewStart=vertical.scrollTop/range*Math.max(0,duration()-timeline.clientHeight/state.scale);
+      projectedScrollTop=vertical.scrollTop;setFollow(false);hideInputDetail();if(!state.pinned)closeQuote();state.needsRender=true;
+    });
+    vertical.addEventListener('pointerdown',()=>setFollow(false));
+    vertical.addEventListener('keydown',event=>{
+      if(!['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key))return;
+      event.preventDefault();event.stopPropagation();setFollow(false);
+      const range=Math.max(0,vertical.scrollHeight-vertical.clientHeight),step=event.key.startsWith('Arrow')?40:vertical.clientHeight*.8;
+      const sign=['ArrowUp','PageUp'].includes(event.key)||(event.key===' '&&event.shiftKey)?-1:1;
+      vertical.scrollTop=event.key==='Home'?0:event.key==='End'?range:vertical.scrollTop+sign*step;
+    });
     horizontal.addEventListener('keydown',event=>{if(event.target===horizontal&&['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();event.stopPropagation();horizontal.scrollLeft+=event.key==='ArrowLeft'?-80:80;}});horizontal.tabIndex=0;
     document.addEventListener('keydown',event=>{if(event.key==='Escape')hideInputDetail();});
     const observer=new ResizeObserver(()=>{state.renderKey='';render(true);});observer.observe(horizontal);
