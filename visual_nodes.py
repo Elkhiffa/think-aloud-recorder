@@ -394,7 +394,8 @@ def extract(folder, output, *, start=0, end=None, max_images=120, config=None, p
         extra_notes = []
         if detector_stats.get('truncated'):
             extra_notes.append(f"索引达到上限，有 {detector_stats['omitted_nodes']} 个主要候选和 "
-                               f"{detector_stats.get('omitted_weak_motion_observations', 0)} 处弱观察未列出；请分段重跑。")
+                               f"{detector_stats.get('omitted_weak_motion_observations', 0)} 处弱观察未列出；"
+                               '按具体疑点查询短窗，仅在证据不足时局部补查，沿用原取材预算。')
         if stats.get('missing_timestamps'):
             extra_notes.append('有画面缺少时间戳，已跳过，不能认为检测完整。')
         if any(r['reason'] == 'after_last_video_frame' for r in uncovered):
@@ -543,7 +544,35 @@ def _candidate_rows(index,start,end):
         yield dict(id=node['id'],parent=None,level='primary',row=node)
         for i,row in enumerate(node.get('motion_observations',[])):
             if row['end']>=start and row['start']<=end:
-                yield dict(id=f"{node['id']}/w{i+1}",parent=node['id'],level='weak',row=row)
+                ordinal = row.get('observation_ordinal', i + 1)
+                yield dict(id=f"{node['id']}/w{ordinal}",parent=node['id'],level='weak',row=row)
+
+
+def _omission_windows(detector, start, end):
+    """Intersect disclosed loss envelopes with a question, never schedule work.
+
+    Old indexes only know one envelope. They cannot retroactively recover exact
+    missing timestamps. New bounded bins describe where losses may occur; even
+    their counts are not exact counts inside an arbitrary clipped query.
+    """
+    bins = detector.get('omission_bins')
+    counts = dict(major_nodes=detector.get('omitted_nodes', 0),
+                  weak_observations=detector.get('omitted_weak_motion_observations', 0))
+    complete_bins = isinstance(bins, list) and all(
+        sum(row.get(key, 0) for row in bins) == total for key, total in counts.items())
+    basis = 'time_bin_envelopes' if complete_bins else 'legacy_global_envelope'
+    envelope = detector.get('omitted_time_range')
+    spans = [(row['start'], row['end']) for row in bins] if complete_bins else ([envelope] if envelope else [])
+    windows = []
+    for left, right in sorted(spans):
+        if right < start or left > end:
+            continue
+        left, right = max(start, left), min(end, right)
+        if windows and left <= windows[-1]['end']:
+            windows[-1]['end'] = max(windows[-1]['end'], right)
+        else:
+            windows.append(dict(start=left, end=right))
+    return basis, windows
 
 
 def _existing_image_stats(path):
@@ -631,6 +660,7 @@ def read_candidates(path, *, start, end, offset=0, limit=24, level='all', parent
                      record['parent'],weak_counts.get(record['id'],0)])
     detector=index['stats'].get('detector',{})
     omitted=detector.get('omitted_time_range')
+    omission_basis, follow_up_ranges = _omission_windows(detector, start, end)
     value=dict(version=1,kind='visual-interval-candidates',index=str(path),
                session_id=index['session_id'],revision=index['revision'],range=dict(start=start,end=end),
                total_matching=len(records),offset=offset,level=level,parent=parent,
@@ -642,9 +672,13 @@ def read_candidates(path, *, start, end, offset=0, limit=24, level='all', parent
                omissions=dict(major_nodes=detector.get('omitted_nodes',0),
                               weak_observations=detector.get('omitted_weak_motion_observations',0),
                               time_range=omitted,
-                              overlaps_query=bool(omitted and omitted[1]>=start and omitted[0]<=end)),
+                              overlaps_query=bool(follow_up_ranges), basis=omission_basis),
+               follow_up=dict(ranges=follow_up_ranges[:8], total_ranges=len(follow_up_ranges),
+                              truncated=len(follow_up_ranges)>8, automatic=False,
+                              note='仅为疑点窗口内的遗漏包络，不是精确缺失或必查清单。证据不足才在新目录局部补索引；'
+                                   '沿用原计划通过 visual-packet --at 取图，保留补索引 SHA 与候选 ID，不新建预算。'),
                actual_image_inspection=False,
-               note='仅像素候选导航；层级筛选不删除原始证据。matching_by_level 是 parent 筛选前的整个查询区间数量；weak 数仅计保留项。省略范围是全索引包络，不表示逐秒缺失。用同场 visual-packet 预算取图。')
+               note='仅像素候选导航；层级筛选不删除原始证据。matching_by_level 是 parent 筛选前的整个查询区间数量；weak 数仅计保留项。遗漏数量与 time_range 属于全索引，不表示逐秒缺失。用同场 visual-packet 预算取图。')
     if image_stats:
         with timings.measure('existing_image_stats'):
             hints, measured = _candidate_image_hints(path, records[offset:offset+limit], start, end)
@@ -693,7 +727,7 @@ def read_overview(path, *, bins=32):
                           sum(owns(at) for at in weak_starts), len(quotes),
                           sum(n.get('transcript_omitted',0)>0 for n in overlapping),
                           sum(n.get('input_summary',{}).get('gap_count',0)>0 for n in overlapping),
-                          bool(omitted and omitted[1]>=left and omitted[0]<=right)])
+                          bool(_omission_windows(index['stats'].get('detector',{}),left,right)[1])])
         value = dict(version=VERSION, kind='visual-candidate-overview', index=str(path),
                      session_id=index['session_id'], revision=index['revision'], range=index['range'],
                      coverage=index['coverage'],

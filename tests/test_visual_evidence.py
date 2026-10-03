@@ -346,6 +346,37 @@ class EvidencePlanTests(unittest.TestCase):
         self.assertEqual(json.loads(output.getvalue())['data']['total_matching'],2)
         self.assertEqual(evidence._hash(path),digest)
 
+    def test_loss_windows_and_sparse_weak_ids_do_not_rewrite_index_or_budget(self):
+        path=Path(self.value['index'])
+        index=evidence._load(path)
+        index['nodes']=[dict(id='motion',kind='motion',start=0,end=3,frames=[],
+                            motion_observations=[dict(kind='change',start=.5,end=.7,frames=[],
+                                                      observation_ordinal=19)])]
+        index['coverage']['node_index_complete']=False
+        detector=index['stats']['detector']
+        detector.update(omitted_nodes=0,omitted_weak_motion_observations=12,
+                        omitted_time_range=[.2,2.8],
+                        omission_bins=[dict(start=.2,end=.4,major_nodes=0,weak_observations=5),
+                                       dict(start=2.5,end=2.8,major_nodes=0,weak_observations=7)])
+        path.write_text(json.dumps(index),encoding='utf-8')
+        before={p:evidence._hash(p) for p in self.root.rglob('*.json')}
+        result=visual.read_candidates(path,start=.5,end=1,level='weak')
+        self.assertEqual(result['rows'][0][0],'motion/w19')
+        self.assertFalse(result['omissions']['overlaps_query'])
+        self.assertFalse(result['node_index_complete'])
+        self.assertEqual(result['follow_up']['ranges'],[])
+        result=visual.read_candidates(path,start=2.6,end=2.9,level='primary')
+        self.assertEqual(result['omissions']['basis'],'time_bin_envelopes')
+        self.assertEqual(result['follow_up']['ranges'],[dict(start=2.6,end=2.8)])
+        self.assertFalse(result['follow_up']['automatic'])
+        self.assertEqual(before,{p:evidence._hash(p) for p in self.root.rglob('*.json')})
+        detector.pop('omission_bins')  # Old indexes cannot infer local absence.
+        path.write_text(json.dumps(index),encoding='utf-8')
+        legacy=visual.read_candidates(path,start=.5,end=1,level='weak')
+        self.assertEqual(legacy['omissions']['basis'],'legacy_global_envelope')
+        self.assertEqual(legacy['follow_up']['ranges'],[dict(start=.5,end=1)])
+        self.assertEqual(legacy['rows'][0][0],'motion/w19')
+
     def test_compact_candidates_cli_and_limits(self):
         output=io.StringIO()
         with redirect_stdout(output):

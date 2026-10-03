@@ -9,10 +9,79 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+import heapq
 import math
 from typing import Mapping
 
 import numpy as np
+
+
+class _TimeSpreadBuffer:
+    """Bounded streaming samples: thin the densest time neighborhoods first.
+
+    The first and latest observed endpoints survive. This is pixel navigation,
+    not semantic selection. Parent dictionaries share only retained payloads.
+    Lazy heap entries are periodically rebuilt to keep memory O(limit).
+    """
+
+    def __init__(self, limit, on_omit):
+        self.limit, self.on_omit = limit, on_omit
+        self.entries, self.heap = {}, []
+        self.head = self.tail = None
+        self.serial = 0
+
+    def _score(self, key):
+        if key is None or key not in self.entries:
+            return
+        item = self.entries[key]
+        item['version'] += 1
+        left, right = item['left'], item['right']
+        if left is not None and right is not None:
+            span = self.entries[right]['row']['end'] - self.entries[left]['row']['end']
+            heapq.heappush(self.heap, (span, key, item['version']))
+
+    def add(self, row, parent):
+        self.serial += 1
+        key = self.serial
+        parent[key] = row
+        self.entries[key] = dict(row=row, parent=parent, left=self.tail, right=None, version=0)
+        previous = self.tail
+        if previous is None:
+            self.head = key
+        else:
+            self.entries[previous]['right'] = key
+        self.tail = key
+        self._score(previous)
+        if len(self.entries) > self.limit:
+            while self.heap:
+                _, victim, version = heapq.heappop(self.heap)
+                if victim in self.entries and self.entries[victim]['version'] == version:
+                    self.remove(victim)
+                    break
+        self._bound_heap()
+
+    def remove(self, key):
+        item = self.entries.pop(key)
+        left, right = item['left'], item['right']
+        item['parent'].pop(key)
+        if left is None:
+            self.head = right
+        else:
+            self.entries[left]['right'] = right
+        if right is None:
+            self.tail = left
+        else:
+            self.entries[right]['left'] = left
+        self._score(left)
+        self._score(right)
+        self.on_omit(item['row'])
+        self._bound_heap()
+
+    def _bound_heap(self):
+        if len(self.heap) > 4 * self.limit:
+            self.heap.clear()
+            for key in self.entries:
+                self._score(key)
 
 
 @dataclass(frozen=True)
@@ -82,8 +151,10 @@ class VisualChangeDetector:
         self._motion_frame_count = 0
         self._local_count = 0
         self._weak_count = 0
-        self._weak_retained = 0
         self._weak_omitted = 0
+        self._weak_buffer = _TimeSpreadBuffer(config.max_nodes, self._omit_weak)
+        self._omission_bins = {}
+        self._omission_bin_seconds = 30.0
         self._last_motion_time = None
         self._pending_local = None
         self._coalesced_local = 0
@@ -111,7 +182,7 @@ class VisualChangeDetector:
                 "peak_score": 0.0, "last_signal": timestamp, "signals": 0,
                 "frames": 0, "regions": np.zeros_like(reference["tiles"], dtype=bool),
                 "metrics": self._empty_metrics(), "quiet_since": None, "quiet_image": None,
-                "motion_observations": [],
+                "motion_observations": {}, "weak_observation_count": 0,
             }
         if self._active is not None:
             self._record_event(timestamp, adjacent, reference)
@@ -152,6 +223,10 @@ class VisualChangeDetector:
         self._nodes.sort(key=lambda node: (node["start"], node["end"]))
         for number, node in enumerate(self._nodes, 1):
             node["id"] = f"visual-{number:05d}"
+            if 'motion_observations' in node:
+                node['motion_observations'] = list(node['motion_observations'].values())
+                node['omitted_weak_observations'] = (node['weak_observation_count'] -
+                                                     len(node['motion_observations']))
         retained_weak = sum(len(node.get("motion_observations", [])) for node in self._nodes)
         omitted_weak = self._weak_count - retained_weak
         stats = {
@@ -168,6 +243,9 @@ class VisualChangeDetector:
             "truncated": bool(self._omitted or omitted_weak),
             "omitted_nodes": self._omitted,
             "omitted_time_range": self._omitted_span,
+            "omission_bins": [self._omission_bins[k] for k in sorted(self._omission_bins)],
+            "omission_bin_seconds": self._omission_bin_seconds,
+            "omission_bin_basis": "omitted observation end; each row is a time envelope, not continuous loss",
             "node_index_complete": not bool(self._omitted or omitted_weak),
             "all_supplied_frames_analyzed": True,
             "motion_episodes": self._motion_count,
@@ -178,6 +256,7 @@ class VisualChangeDetector:
             "retained_weak_motion_observations": retained_weak,
             "omitted_weak_motion_observations": omitted_weak,
             "motion_observation_index_complete": not bool(omitted_weak),
+            "weak_retention_policy": "time_spread_smallest_neighbor_span_v1",
             "local_evidence_policy": "strict_stable_regions_get_nodes; weaker_pixels_stay_in_motion_observations",
             "coalescing": "continuous_pixel_activity_into_motion_intervals",
             "coverage_basis": "supplied_frames_only; no claim about decoder omissions",
@@ -332,12 +411,9 @@ class VisualChangeDetector:
                     observation["reason"] = "weak_local_stability_during_motion"
                     observation["image_priority"] = "low"
                     self._weak_count += 1
-                    if self._weak_retained < self.config.max_nodes:
-                        self._active["motion_observations"].append(observation)
-                        self._weak_retained += 1
-                    else:
-                        self._weak_omitted += 1
-                        self._record_omitted_span(observation)
+                    self._active['weak_observation_count'] += 1
+                    observation['observation_ordinal'] = self._active['weak_observation_count']
+                    self._weak_buffer.add(observation, self._active['motion_observations'])
                     self._copy_tiles(self._weak_reference, frame, weak)
         duration = timestamp - self._strict_since
         mature = duration >= self.config.local_stability_seconds
@@ -439,6 +515,7 @@ class VisualChangeDetector:
             "metrics": active["metrics"], "changed_regions": self._regions(active["regions"]),
             "reason": reason,
             "motion_observations": active["motion_observations"],
+            "weak_observation_count": active['weak_observation_count'],
             "image_priority": "low" if kind == "motion" else "normal",
         })
         self._active = None
@@ -474,13 +551,42 @@ class VisualChangeDetector:
         else:
             self._omitted += 1
             self._record_omitted_span(node)
+            # A dropped parent cannot expose its children. Release their slots
+            # and account for them once, in addition to the parent omission.
+            for key in list(node.get('motion_observations', {})):
+                self._weak_buffer.remove(key)
 
-    def _record_omitted_span(self, node):
+    def _omit_weak(self, node):
+        self._weak_omitted += 1
+        self._record_omitted_span(node, weak=True)
+
+    def _record_omitted_span(self, node, weak=False):
         if self._omitted_span is None:
             self._omitted_span = [node["start"], node["end"]]
         else:
             self._omitted_span[0] = min(self._omitted_span[0], node["start"])
             self._omitted_span[1] = max(self._omitted_span[1], node["end"])
+        key = int(node['end'] // self._omission_bin_seconds)
+        row = dict(start=node['start'], end=node['end'],
+                   major_nodes=int(not weak), weak_observations=int(weak))
+        self._merge_omission_bin(self._omission_bins, key, row)
+        while len(self._omission_bins) > 128:
+            merged = {}
+            for key, row in self._omission_bins.items():
+                self._merge_omission_bin(merged, key // 2, row)
+            self._omission_bins = merged
+            self._omission_bin_seconds *= 2
+
+    @staticmethod
+    def _merge_omission_bin(bins, key, row):
+        if key not in bins:
+            bins[key] = dict(row)
+        else:
+            old = bins[key]
+            old['start'] = min(old['start'], row['start'])
+            old['end'] = max(old['end'], row['end'])
+            for count in ('major_nodes', 'weak_observations'):
+                old[count] += row[count]
 
     def _regions(self, mask):
         """Connected grid cells become approximate normalized bounding boxes."""

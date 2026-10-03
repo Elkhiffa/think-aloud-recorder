@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from visual_change import VisualChangeConfig, VisualChangeDetector
+from visual_change import VisualChangeConfig, VisualChangeDetector, _TimeSpreadBuffer
 
 
 def plain(value=24, height=96, width=192):
@@ -207,6 +207,57 @@ class VisualChangeTests(unittest.TestCase):
         self.assertTrue(stats["truncated"])
         self.assertIsNotNone(stats["omitted_time_range"])
         self.assertEqual(stats["frames_analyzed"], len(sequence))
+
+        weak = [row for node in result['nodes'] for row in node.get('motion_observations', [])]
+        unlimited = run(sequence)
+        all_weak = [row for node in unlimited['nodes'] for row in node.get('motion_observations', [])]
+        self.assertEqual(weak[0]['end'], all_weak[0]['end'])
+        self.assertEqual(weak[-1]['end'], all_weak[-1]['end'])
+        self.assertGreater(weak[-1]['observation_ordinal'], len(weak))
+        bins = stats['omission_bins']
+        self.assertEqual(sum(b['weak_observations'] for b in bins), stats['omitted_weak_motion_observations'])
+        self.assertEqual(sum(b['major_nodes'] for b in bins), stats['omitted_nodes'])
+
+    def test_temporal_buffer_spreads_bursts_and_keeps_sparse_later_observations(self):
+        omitted, parents = [], [{}, {}]
+        buffer = _TimeSpreadBuffer(40, omitted.append)
+        times = [i / 100 for i in range(1000)] + [20 + i * 5 for i in range(30)]
+        for i, at in enumerate(times):
+            buffer.add(dict(start=at-.001, end=at, observation_ordinal=i+1), parents[i >= 1000])
+            self.assertLessEqual(len(buffer.entries), 40)
+            self.assertLessEqual(len(buffer.heap), 160)
+        retained = [row['end'] for parent in parents for row in parent.values()]
+        self.assertEqual(len(retained), 40)
+        self.assertEqual(len(omitted), len(times)-40)
+        self.assertIn(times[0], retained)
+        self.assertIn(times[-1], retained)
+        self.assertGreaterEqual(len(parents[1]), 28)
+        self.assertTrue(all(any(left <= t < left+40 for t in retained) for left in (0,40,80,120)))
+        for key in list(parents[0]):
+            buffer.remove(key)
+        self.assertFalse(parents[0])
+        buffer.add(dict(start=180, end=180), parents[1])
+        self.assertEqual(len(buffer.entries), len(parents[1]))
+
+    def test_omission_accounting_stays_bounded_with_dropped_parents(self):
+        detector = VisualChangeDetector(dict(max_nodes=2))
+        detector.feed(0, plain())
+        parent = {}
+        for i in range(1000):
+            detector._weak_count += 1
+            detector._weak_buffer.add(dict(start=i*60, end=i*60+1), parent)
+        # The initial context consumes the non-tail slot; this parent is lost.
+        detector._append_context(0, 0, 0, 0)
+        detector._append_node(dict(start=0, end=60000, motion_observations=parent))
+        self.assertFalse(parent)
+        self.assertFalse(detector._weak_buffer.entries)
+        result = detector.finish(60001)
+        stats = result['stats']
+        self.assertEqual(stats['omitted_weak_motion_observations'], 1000)
+        self.assertEqual(sum(b['weak_observations'] for b in stats['omission_bins']), 1000)
+        self.assertEqual(sum(b['major_nodes'] for b in stats['omission_bins']), stats['omitted_nodes'])
+        self.assertLessEqual(len(stats['omission_bins']), 128)
+        self.assertEqual(stats['omitted_time_range'], [0, 60000])
 
     def test_small_sensor_noise_stays_below_threshold(self):
         rng = np.random.default_rng(91)
