@@ -546,7 +546,7 @@
   function speakerTag(id){const tag=document.createElement('span');tag.className='speaker-tag';tag.dataset.speakerId=Number.isInteger(id)?String(id):'';tag.textContent=speakerLabel(id);tag.hidden=!tag.textContent;tag.classList.toggle('is-recorder',Number.isInteger(id)&&data.speakers?.selected_id===id);return tag;}
   function renderSpeakerSummary(){
     const info=data.speakers;$('speakerSummary').hidden=!info?.available;
-    if(info?.available)$('recorderLabel').textContent=info.selected_id===null?'记录者未指定':`记录者：说话人 ${info.selected_id} · ${info.source==='manual'?'已确认':info.confidence==='recommended'?'自动推荐':'自动推荐，待核对'}`;
+    if(info?.available){$('recorderLabel').textContent='记录者：'+(info.selected_id===null?'未指定':info.source==='auto'?'默认':`说话人 ${info.selected_id}`);$('speakerSummary').title=info.selected_id===null?'尚未指定记录者，点击查看说明并选择。':`${info.source==='auto'?'默认推荐':'手动选择'}说话人 ${info.selected_id}，点击查看说明或修改。`;}
     document.querySelectorAll('.speaker-tag[data-speaker-id]').forEach(tag=>{const id=tag.dataset.speakerId===''?null:Number(tag.dataset.speakerId);tag.textContent=speakerLabel(id);tag.hidden=!tag.textContent;tag.classList.toggle('is-recorder',id!==null&&data.speakers?.selected_id===id);});
   }
   function buildTranscript(){lines.replaceChildren();nodes=segments.map((segment,index)=>{
@@ -568,7 +568,7 @@
     $('currentQuoteText').textContent=segment?.text||(transcription==='pending'?'转写完成后，原话会显示在这里。':transcription==='failed'?'转写未完成，可继续回看录像。':'当前没有原话。');
     $('currentQuoteTime').hidden=!segment;
     if(segment){$('currentQuoteTime').textContent=formatTime(segment.start);$('currentQuoteTime').onclick=()=>seek(segment.start);}
-    const tag=$('currentQuoteSpeaker');tag.textContent=segment?speakerLabel(segment.speaker_id):'';tag.hidden=!tag.textContent;tag.classList.toggle('is-recorder',!!segment&&Number.isInteger(segment.speaker_id)&&data.speakers?.selected_id===segment.speaker_id);
+    const tag=$('currentQuoteSpeaker');tag.textContent=segment?speakerLabel(segment.speaker_id):'';$('currentQuoteSpeakerControl').hidden=!tag.textContent;tag.classList.toggle('is-recorder',!!segment&&Number.isInteger(segment.speaker_id)&&data.speakers?.selected_id===segment.speaker_id);
     $('currentQuoteText').parentElement.scrollTop=0;
   }
   function sync(){syncCurrentQuote();const index=activeSegment(segments,video.currentTime);if(index===current)return;nodes[current]?.classList.remove('active');nodes[current]?.removeAttribute('aria-current');current=index;nodes[current]?.classList.add('active');nodes[current]?.setAttribute('aria-current','true');scrollCurrent();}
@@ -607,11 +607,15 @@
   speakerAudio.addEventListener('timeupdate',()=>{if(speakerSampleEnd&&speakerAudio.currentTime>=speakerSampleEnd)speakerAudio.pause();});
   speakerDialog.addEventListener('close',stopSpeakerSample);
   $('closeSpeakers').onclick=()=>speakerDialog.close();
-  $('speakerSummary').onclick=()=>{
+  function openSpeakerDialog(){
     const info=data.speakers;if(!info?.available)return;speakerIdentity=info.transcript_id;
     $('speakerError').hidden=true;$('speakerChoices').replaceChildren();
+    const selected=info.speakers.find(s=>s.speaker_id===info.selected_id);
+    const share=Number.isFinite(selected?.speech_share)?`${Math.round(selected.speech_share*100)}%`:'尚未统计';
+    $('speakerCurrent').textContent=info.selected_id===null?'当前未指定记录者。':`当前记录者：说话人 ${info.selected_id} · 讲述占比 ${share}${Number.isFinite(selected?.speech_seconds)?`（${formatTime(selected.speech_seconds)}）`:''}。占比基于已区分说话人的讲述时长。`;
     $('speakerReason').textContent=({duration_and_level:'已结合讲述时长和典型音量推荐。',ambiguous_speakers:'候选人的表现接近，请试听核对。',insufficient_audio:'音量依据不足，请试听并指定记录者。',too_little_speech:'可比较的讲述太少，请手动选择。',unmeasured:'这份转写保留了编号，但没有音量统计，可手动指定。'})[info.reason]||'请试听后核对记录者。';
     $('speakerSaveScope').textContent=data.desktop?'选择会保存在本场次；重新转写后，编号会重新核对。':'离线页面的修改仅用于本次回看；请在记录器中打开以保存。';
+    $('speakerPreprocessHint').hidden=!data.desktop;
     const levels=info.speakers.map(s=>s.median_dbfs).filter(Number.isFinite),loudest=levels.length?Math.max(...levels):null;
     for(const speaker of [...info.speakers,{speaker_id:null}]){
       const row=document.createElement('div');row.className='speaker-choice';const label=document.createElement('label'),radio=document.createElement('input'),copy=document.createElement('span'),name=document.createElement('strong');
@@ -628,14 +632,15 @@
       $('speakerChoices').append(row);
     }
     speakerDialog.showModal();
-  };
+  }
+  $('speakerSummary').onclick=openSpeakerDialog;$('currentQuoteSpeakerControl').onclick=openSpeakerDialog;
   async function saveSpeaker(automatic){
     if(speakerBusy)return;const chosen=$('speakerChoices').querySelector('input:checked');if(!automatic&&!chosen)return;
     speakerBusy=true;$('saveSpeaker').disabled=true;$('autoSpeaker').disabled=true;
     try{
       const id=automatic||chosen.value==='none'?null:Number(chosen.value);
       if(data.desktop)data.speakers=await native('set_recorder_speaker',id,speakerIdentity,automatic);
-      else{if(data.speakers.transcript_id!==speakerIdentity)throw new Error('逐字稿已更新，请重新选择。');data.speakers={...data.speakers,selected_id:automatic?data.speakers.suggested_id:id,source:automatic?'auto':'manual'};}
+      else{if(data.speakers.transcript_id!==speakerIdentity)throw new Error('逐字稿已更新，请重新选择。');if(automatic||id!==data.speakers.selected_id)data.speakers={...data.speakers,selected_id:automatic?data.speakers.suggested_id:id,source:automatic?'auto':'manual'};}
       renderSpeakerSummary();syncCurrentQuote();speakerDialog.close();status(data.desktop?'':'已应用到本次回看；离线页面不保存设置。');
     }catch(error){$('speakerError').textContent=error.message;$('speakerError').hidden=false;}
     finally{speakerBusy=false;$('saveSpeaker').disabled=false;$('autoSpeaker').disabled=false;}
@@ -747,7 +752,7 @@
     function inputMessage(){if(source.state==='disabled'&&source.error?.includes('旧场次'))return '旧场次没有操作记录';if(source.state==='complete'&&!source.intervals.length&&source.gaps.some(gap=>gap.discarded_events))return '本片段未保存有效操作记录';return ({missing:'此场次没有操作记录',disabled:'此场次未启用操作记录',failed:'操作记录采集失败',unavailable:'操作记录文件不可用',invalid:'操作记录文件不可用',interrupted:'操作记录未完整保存',pending:'操作记录正在保存',recording:'操作记录正在保存'}[source.state]||'');}
     function gapName(gap){return gap.preparation?'录制准备':({focus:'已切出目标程序',focus_lost:'已切出目标程序',disconnect:'设备连接中断',device_disconnected:'设备连接中断',error:'采集异常'}[gap.type]||'采集缺口');}
     function seekKeep(time,followPlayback=true){if(!video.readyState)return;const limit=Number.isFinite(video.duration)?video.duration:duration();video.currentTime=Math.max(0,Math.min(limit,time));setFollow(followPlayback);render(followPlayback);}
-    function setTab(tab){if(tab==='transcript'&&$('transcriptTab').disabled)return;if(tab==='events'&&$('eventsTab').hidden)return;state.tab=tab;$('inputTab').setAttribute('aria-selected',String(tab==='inputs'));$('transcriptTab').setAttribute('aria-selected',String(tab==='transcript'));$('eventsTab').setAttribute('aria-selected',String(tab==='events'));$('inputTimelinePanel').hidden=tab!=='inputs';lines.hidden=tab!=='transcript';$('transcriptSearch').hidden=tab!=='transcript';$('experienceEvents').hidden=tab!=='events';$('follow').hidden=tab==='events';$('empty').hidden=tab!=='transcript'||nodes.some(node=>!node.hidden);closeQuote();if(tab==='transcript')scrollCurrent();else if(tab==='inputs')render(true);}
+    function setTab(tab){if(tab==='transcript'&&$('transcriptTab').disabled)return;if(tab==='events'&&$('eventsTab').hidden)return;state.tab=tab;$('inputTab').setAttribute('aria-selected',String(tab==='inputs'));$('transcriptTab').setAttribute('aria-selected',String(tab==='transcript'));$('eventsTab').setAttribute('aria-selected',String(tab==='events'));$('inputTimelinePanel').hidden=tab!=='inputs';lines.hidden=tab!=='transcript';$('transcriptTools').hidden=tab!=='transcript';$('transcriptSearch').hidden=tab!=='transcript';$('experienceEvents').hidden=tab!=='events';$('follow').hidden=tab==='events';$('empty').hidden=tab!=='transcript'||nodes.some(node=>!node.hidden);closeQuote();if(tab==='transcript')scrollCurrent();else if(tab==='inputs')render(true);}
     $('inputTab').onclick=()=>setTab('inputs');$('transcriptTab').onclick=()=>setTab('transcript');$('eventsTab').onclick=()=>setTab('events');
     for(const button of [$('inputTab'),$('transcriptTab'),$('eventsTab')])button.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const tabs=[$('inputTab'),$('transcriptTab'),$('eventsTab')].filter(tab=>!tab.hidden&&!tab.disabled),i=tabs.indexOf(button);const next=event.key==='Home'?tabs[0]:event.key==='End'?tabs.at(-1):tabs[(i+(event.key==='ArrowLeft'?-1:1)+tabs.length)%tabs.length];if(next){next.click();next.focus();}}});
     const eventDialog=$('eventDialog'),eventForm=$('eventForm');let editingEvent=null,eventSaving=false;
@@ -998,7 +1003,13 @@
       windowLabels.querySelectorAll('.timeline-window-label').forEach(label=>{const start=Number(label.dataset.start),end=Number(label.dataset.end);label.firstElementChild.style.transform=`translateY(${Math.max(0,Math.min((end-start)*state.scale-16,(state.viewStart-start)*state.scale+10))}px)`;});
       const direction=playheadDirection(time,state.viewStart,span);
       returnToPlayhead.hidden=direction===0;returnToPlayhead.dataset.direction=direction<0?'above':'below';returnToPlayhead.setAttribute('aria-label',`返回当前播放位置（${direction<0?'上方':'下方'}），恢复跟随`);
-      $('timelinePlayhead').hidden=direction!==0;$('timelinePlayhead').style.top=Math.max(0,Math.min(height-1,(time-state.viewStart)*state.scale))+'px';$('timelinePlayhead').querySelector('time').textContent=clock(time);
+      // A thin line on fractional device pixels can shimmer at slow zoom.
+      // Keep it on its own layer and snap the viewport coordinate, including
+      // fractional pane offsets introduced by Windows display scaling.
+      const head=$('timelinePlayhead'),dpr=root.devicePixelRatio||1,origin=timeline.getBoundingClientRect().top;
+      const localY=Math.max(0,Math.min(height-2,(time-state.viewStart)*state.scale));
+      const headY=Math.round((origin+localY)*dpr)/dpr-origin;
+      head.hidden=direction!==0;head.style.transform=`translate3d(0,${headY}px,0)`;head.querySelector('time').textContent=clock(time);
       $('timelineInputs').querySelectorAll('button').forEach(button=>{
         const item=displayed.get(button.dataset.inputId),start=item.start,end=item.end;
         const sample=inputSampleAt(item,time),inBand=start<=time&&time<end;

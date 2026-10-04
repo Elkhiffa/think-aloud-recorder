@@ -465,7 +465,7 @@ class ReviewAPI:
         try:
             from recorder import read, write
             from session_metadata import metadata_lock
-            from speaker_roles import transcript_id, valid_speaker
+            from speaker_roles import speaker_payload, transcript_id, valid_speaker
             if type(automatic) is not bool or (speaker_id is not None and not valid_speaker(speaker_id)):
                 raise ValueError('请选择有效的说话人。')
             with metadata_lock(self._folder):
@@ -479,6 +479,12 @@ class ReviewAPI:
                 if not ids or (speaker_id is not None and speaker_id not in ids):
                     raise ValueError('当前转写中没有这位说话人。')
                 meta=read(path)
+                current=speaker_payload(self._folder, meta, segments)
+                # Saving an unchanged selection must not convert the default
+                # recommendation into a manual override or invalidate analysis.
+                if (automatic and current['source']=='auto' or
+                        not automatic and speaker_id==current['selected_id']):
+                    return {'ok':True,'data':current}
                 meta['recorder_speaker']=None if automatic else dict(
                     transcript_id=identity,speaker_id=speaker_id,source='manual',updated_at=time.time())
                 write(path,meta)

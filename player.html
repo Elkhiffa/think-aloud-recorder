@@ -39,8 +39,8 @@
       </div>
       <div id="reviewCompanion" class="review-companion">
       <section id="currentQuotePanel" class="current-quote-panel" aria-label="随播放显示的原话">
-        <div class="current-quote-heading"><h2 id="currentQuoteLabel">原话</h2><button id="currentQuoteTime" type="button" title="回到这句原话" hidden></button></div>
-        <div class="current-quote-body"><span id="currentQuoteSpeaker" class="speaker-tag" hidden></span><p id="currentQuoteText"></p></div>
+        <div class="current-quote-heading"><div class="current-quote-title"><h2 id="currentQuoteLabel">原话</h2><button id="currentQuoteSpeakerControl" class="speaker-summary speaker-chip" type="button" hidden aria-label="记录者设置与说明" aria-haspopup="dialog" aria-controls="speakerDialog"><span id="currentQuoteSpeaker" class="speaker-tag"></span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 16v.01"/></svg></button></div><button id="currentQuoteTime" type="button" title="回到这句原话" hidden></button></div>
+        <div class="current-quote-body"><p id="currentQuoteText"></p></div>
       </section>
       <section id="inputPanel" class="input-panel" aria-label="最近操作">
         <div class="input-heading"><h2>最近操作</h2><div class="input-modes" aria-label="操作显示方式"><button data-input-mode="keys" aria-pressed="true">最近按键</button><button data-input-mode="device" aria-pressed="false">设备图</button><button data-input-mode="collapsed" aria-pressed="false">收起</button></div></div>
@@ -58,9 +58,11 @@
     <aside id="transcriptPane" class="transcript" aria-label="口述逐字稿">
       <div class="transcript-heading"><div class="review-tabs" role="tablist" aria-label="回看记录"><button id="inputTab" role="tab" aria-selected="true" aria-controls="inputTimelinePanel">操作时间轴</button><button id="transcriptTab" role="tab" aria-selected="false" aria-controls="lines">原话</button><button id="eventsTab" role="tab" aria-selected="false" aria-controls="experienceEvents" hidden>体验事件</button></div><button id="follow" aria-pressed="true">跟随播放：开</button></div>
       <p id="preprocessingNotice" class="preprocessing-notice" role="status" hidden></p>
-      <button id="speakerSummary" class="speaker-summary" hidden aria-haspopup="dialog" aria-controls="speakerDialog"><span id="recorderLabel"></span><span>修改</span></button>
       <section id="inputTimelinePanel" class="input-timeline-panel" role="tabpanel" aria-labelledby="inputTab"><div class="timeline-column-headings"><span title="滚轮调整时间轴缩放">时间</span><span>原话</span><span>方向</span><span>指向</span><span>按键</span></div><div id="inputTimeline" class="input-timeline" tabindex="0" aria-label="操作时间轴，点击时间刻度或空白处定位，纵向拖动调整进度；内容区滚轮仅浏览记录，不改变播放进度，时间刻度区滚轮调整缩放"><div id="timelineTicks" class="timeline-ticks"></div><div id="timelineSpeech" class="timeline-speech"></div><div id="timelineInputs" class="timeline-inputs"></div><div id="timelineGaps" class="timeline-gaps"></div><div id="timelinePlayhead" class="timeline-playhead"><time></time></div></div><div class="timeline-footer"><label id="inputScopeLabel" hidden><span class="sr-only">显示操作范围</span><select id="inputScope" aria-label="显示操作范围"><option value="all">全部操作</option><option value="foreground">仅游戏前台</option></select></label><span id="timelineState"></span><span id="timelineScale" title="时间刻度区滚轮缩放"></span></div></section>
-      <label id="transcriptSearch" class="search-label" hidden><span class="sr-only">搜索逐字稿</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="搜索逐字稿" autocomplete="off"><span id="lineCount"></span></label>
+      <div id="transcriptTools" class="transcript-tools" hidden>
+        <label id="transcriptSearch" class="search-label"><span class="sr-only">搜索逐字稿</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="搜索逐字稿" autocomplete="off"><span id="lineCount"></span></label>
+        <button id="speakerSummary" class="speaker-summary" type="button" hidden aria-label="记录者设置与说明" aria-haspopup="dialog" aria-controls="speakerDialog"><span id="recorderLabel"></span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 16v.01"/></svg></button>
+      </div>
       <p class="sr-only" id="transcriptHint">点击原话定位视频。自动转写的文字可能需要校对。</p>
       <div id="lines" tabindex="0" role="tabpanel" aria-labelledby="transcriptTab" aria-label="逐字稿列表" aria-describedby="transcriptHint" title="点击原话，播放对应的视频" hidden></div>
       <p id="empty" hidden>没有匹配的原话。</p>
@@ -87,10 +89,12 @@
     <audio id="speakerAudio" preload="none"></audio>
     <form id="speakerForm">
       <div class="speaker-dialog-heading"><h2 id="speakerTitle">谁是记录者</h2><button type="button" id="closeSpeakers" aria-label="关闭说话人设置">×</button></div>
-      <p id="speakerExplanation">优先参考讲述时长，再参考麦克风中的典型音量。自动推荐可能有误，试听后可以修改。</p>
+      <p id="speakerExplanation">默认根据讲述时长和麦克风中的典型音量推荐记录者，通常无需修改。如果认错了人，可以试听后重新选择。</p>
+      <p id="speakerCurrent" class="speaker-current"></p>
       <p id="speakerReason" class="speaker-reason"></p>
       <fieldset id="speakerChoices"><legend class="sr-only">选择记录者</legend></fieldset>
       <p id="speakerSaveScope" class="speaker-reason"></p>
+      <p id="speakerPreprocessHint" class="speaker-reason">更换记录者后，已有体验事件会保留，但需要让 agent 重新预处理，才能按新的记录者分析原话。未更改选择直接保存，不会触发重新预处理。</p>
       <p id="speakerError" role="alert" hidden></p>
       <div class="speaker-dialog-actions"><button id="autoSpeaker" type="button">恢复自动</button><button id="saveSpeaker" type="submit">保存选择</button></div>
     </form>

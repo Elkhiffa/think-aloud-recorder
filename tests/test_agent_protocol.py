@@ -593,6 +593,29 @@ class AgentProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):agent.claim(self.folder,'new')
         self.assertEqual(agent.preprocessing_status(self.folder)['state'],'stale')
 
+    def test_unchanged_recorder_selection_preserves_material_and_completed_analysis(self):
+        from speaker_roles import transcript_id
+        recorder.write(self.folder/'录像.whisper.json',dict(segments=self.segments,speaker_analysis=dict(
+            version=1,transcript_id=transcript_id(self.segments),suggested_id=0,
+            confidence='recommended',reason='duration_and_level',speakers=[])))
+        self.manifest=agent.publish_ready(self.folder)
+        self.complete()
+        api=ReviewAPI(self.folder,{})
+        def snapshot():
+            return {p.name:(p.read_bytes(),p.stat().st_mtime_ns) for p in self.folder.iterdir() if p.is_file()}
+        before=snapshot()
+        for ident,automatic in [(0,False),(None,True),(0,False)]:
+            result=api.set_recorder_speaker(ident,transcript_id(self.segments),automatic)
+            self.assertTrue(result['ok'],result)
+            self.assertEqual(result['data']['source'],'auto')
+            self.assertEqual(agent.preprocessing_status(self.folder)['state'],'complete')
+            self.assertEqual(snapshot(),before)
+        self.assertTrue(api.set_recorder_speaker(1,transcript_id(self.segments))['ok'])
+        self.assertEqual(agent.preprocessing_status(self.folder)['state'],'stale')
+        before=snapshot()
+        self.assertTrue(api.set_recorder_speaker(1,transcript_id(self.segments))['ok'])
+        self.assertEqual(snapshot(),before)
+
     def test_invalid_evidence_and_inferences_are_rejected_without_commit(self):
         tests=[]
         for change in (
