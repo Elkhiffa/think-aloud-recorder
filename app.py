@@ -43,6 +43,29 @@ def main():
         return run_window(root)
 
 
+def main_window_options(webview):
+    """A narrow, taller library window, bounded by the actual monitor work area."""
+    options = dict(width=920, height=1040, min_size=(720, 600))
+    try:
+        screen = list(webview.screens)[0]
+        width, height = screen.width, screen.height
+        frame = getattr(screen, 'frame', None)
+        for name, current in (('Width', width), ('Height', height)):
+            value = getattr(frame, name, None)
+            if type(value) is int and 320 <= value <= current:
+                if name == 'Width':
+                    width = value
+                else:
+                    height = value
+        if type(width) is int and type(height) is int and width >= 360 and height >= 400:
+            available_width, available_height = width - 32, height - 48
+            options.update(width=min(920, available_width), height=min(1040, available_height),
+                           min_size=(min(720, available_width), min(600, available_height)), screen=screen)
+    except Exception:
+        pass
+    return options
+
+
 def run_window(root):
     import webview
     from desktop_service import DesktopService
@@ -50,7 +73,7 @@ def run_window(root):
     service = DesktopService(root)
     window = webview.create_window(
         'Think Aloud · 体验记录器', url=(root / 'ui' / 'index.html').as_uri(),
-        js_api=DesktopAPI(service), width=1240, height=960, min_size=(820, 620),
+        js_api=DesktopAPI(service), **main_window_options(webview),
         frameless=False, background_color='#fcfaf5', text_select=True,
     )
     from window_manager import WindowManager

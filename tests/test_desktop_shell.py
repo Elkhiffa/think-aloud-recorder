@@ -3,6 +3,7 @@ import threading
 from contextlib import nullcontext
 import unittest
 from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
 import app
 from pathlib import Path
@@ -51,11 +52,32 @@ class DesktopShellTests(unittest.TestCase):
             acknowledge.assert_called_once_with(root)
         kwargs = webview.create_window.call_args.kwargs
         self.assertTrue(kwargs['url'].startswith('file:///'))
-        self.assertEqual(kwargs['min_size'], (820, 620))
+        self.assertEqual(kwargs['min_size'], (720, 600))
         self.assertFalse(kwargs['frameless'])
         self.assertEqual(webview.start.call_args.kwargs['gui'], 'edgechromium')
         service_module.DesktopService.return_value.set_window.assert_called_once_with(window)
         service_module.DesktopService.return_value.shutdown.assert_called_once_with()
+
+    def test_initial_window_fits_monitor_work_area(self):
+        for size, work_area, expected in [
+            ((3440, 1440), (3440, 1392), (920, 1040)),
+            ((1366, 768), (1366, 728), (920, 680)),
+            ((800, 600), (800, 552), (768, 504)),
+        ]:
+            with self.subTest(size=size):
+                screen = SimpleNamespace(width=size[0], height=size[1],
+                                         frame=SimpleNamespace(Width=work_area[0], Height=work_area[1]))
+                options = app.main_window_options(SimpleNamespace(screens=[screen]))
+                self.assertEqual((options['width'], options['height']), expected)
+                self.assertLessEqual(options['min_size'][0], options['width'])
+                self.assertLessEqual(options['min_size'][1], options['height'])
+                self.assertIs(options['screen'], screen)
+        class UnavailableScreens:
+            @property
+            def screens(self):
+                raise RuntimeError('monitor lookup unavailable')
+        self.assertEqual(app.main_window_options(UnavailableScreens()),
+                         dict(width=920, height=1040, min_size=(720, 600)))
 
 
 if __name__ == '__main__':

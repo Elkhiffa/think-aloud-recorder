@@ -44,7 +44,9 @@ const server=http.createServer((req,res)=>{
   }
   await state('silent',{quiet_seconds:121});await page.waitForFunction(()=>document.querySelector('#homeStatus').classList.contains('microphone-warning'));
   assert.match(await page.locator('#homeStatus').textContent(),/2 分钟/);
-  assert.equal(await page.locator('.capture-time-row #microphoneMonitor').count(),1);
+  const timer=await page.locator('#recordingTime').boundingBox(),button=await page.locator('#recordButton').boundingBox(),meter=await page.locator('#microphoneMonitor').boundingBox();
+  assert.ok(timer.y+timer.height<=button.y && button.y+button.height<=meter.y);
+  assert.equal(meter.x,button.x);assert.equal(meter.width,button.width);
   await page.screenshot({path:path.join(out,'recording-silent.png')});
   for(const [width,height] of [[820,620],[3440,1440],[390,640]]){
    await page.setViewportSize({width,height});

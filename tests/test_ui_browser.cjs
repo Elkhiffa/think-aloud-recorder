@@ -271,20 +271,25 @@ async function homeChecks(context, origin) {
     assert.match(await page.locator('#backgroundSummary').innerText(), /整理中/);
     assert.equal((await calls(page, 'start_recording')).length, 0);
   });
-  await check('short title, project with event count, then wrapping content details',async()=>{
+  await check('compact session metadata, full-width content and on-demand preprocessing count',async()=>{
     const row=page.locator('.session-row').nth(1);
     assert.match(await row.locator('.session-title-row strong').textContent(),/^清河探索与初次止戈/);
-    assert.match(await row.locator('.session-subtitle').textContent(),/示例游戏.*预处理 8 个事件/);
+    assert.match(await row.locator('.session-meta').textContent(),/示例游戏/);
+    assert.equal(await row.locator('.preprocessing-badge').count(),0);
     assert.match(await row.locator('.session-content').textContent(),/萌宠争锋/);
-    const title=await row.locator('.session-title-row strong').boundingBox(),sub=await row.locator('.session-subtitle').boundingBox(),details=await row.locator('.session-content').boundingBox();
+    const title=await row.locator('.session-title-row strong').boundingBox(),sub=await row.locator('.session-meta').boundingBox(),details=await row.locator('.session-content').boundingBox();
     assert.ok(title.y<sub.y&&sub.y<details.y);
     assert.equal(await row.locator('.session-content').evaluate(el=>getComputedStyle(el).whiteSpace),'normal');
+    closeEnough(details.width,(await row.locator('.session-main').boundingBox()).width,'activity details use full row width');
+    await row.locator('.session-toggle').click();
+    assert.match(await row.locator('.session-detail').textContent(),/预处理 8 个事件/);
+    await row.locator('.session-toggle').click();
     await screen(page,'session-hierarchy');
   });
   await check('equal home headings and aligned 48 px capture controls', async () => {
     const headings = await page.locator('#homeTitle,.session-heading h2').evaluateAll(nodes => nodes.map(node => ({ size: getComputedStyle(node).fontSize, weight: getComputedStyle(node).fontWeight })));
     assert.equal(headings.length, 2); assert.deepEqual(headings[0], headings[1]);
-    const rects = await Promise.all(['#presetSelect', '#settingsButton', '#recordButton'].map(selector => box(page, selector)));
+    const rects = await Promise.all(['#presetSelect', '#newPresetButton', '#settingsButton', '#recordButton'].map(selector => box(page, selector)));
     rects.forEach(rect => { closeEnough(rect.height, 48, 'capture control height'); closeEnough(rect.y + rect.height / 2, rects[0].y + rects[0].height / 2, 'capture control alignment'); });
     await noHorizontalOverflow(page); return { headings, rects };
   });
@@ -319,20 +324,20 @@ async function homeChecks(context, origin) {
       await page.waitForFunction(() => !document.querySelector('#recordButton').disabled);
     }
   });
-  await check('home recovery duplicates are absent and the full address hot area ends at the gear', async () => {
+  await check('quiet header help and library folder access inside preset settings', async () => {
     assert.equal(await page.locator('#recoveryActions,#recheckButton,#fixSettingsButton').count(), 0);
-    const address = await box(page, '#openVault'), gear = await box(page, '#settingsButton');
-    closeEnough(address.x + address.width, gear.x + gear.width, 'address right edge equals gear');
-    const background = await page.locator('#openVault').evaluate(node => getComputedStyle(node).backgroundColor);
-    assert.notEqual(background, 'rgba(0, 0, 0, 0)'); assert.notEqual(background, 'transparent');
-    await page.locator('#openVault').click({ position: { x: address.width - 8, y: address.height / 2 } });
-    assert.equal((await calls(page, 'open_folder')).length, 1, 'right edge of address is an active folder button');
+    assert.equal(await page.locator('.header-actions #methodButton').count(),1);
+    assert.equal(await page.locator('#openVault').isVisible(),false);
+    await page.locator('#settingsButton').click();await page.locator('[data-step="3"]').click();
+    await page.locator('#openVault').click();
+    assert.equal((await calls(page,'open_folder')).length,1);
+    await page.locator('#wizardCancel').click();
   });
-  for (const viewport of [{ width: 1240, height: 900 }, { width: 820, height: 620 }]) {
+  for (const viewport of [{ width: 920, height: 1040 }, { width: 720, height: 620 }]) {
     for (const requestedTheme of ['light', 'dark']) {
       await check(`stable home geometry across wrapped error and checking states (${requestedTheme} ${viewport.width})`, async () => {
         await page.setViewportSize(viewport); await theme(page, requestedTheme);
-        const selectors = ['#recordButton', '#presetSelect', '#settingsButton', '#openVault', '.session-section'];
+        const selectors = ['#recordButton', '#presetSelect', '#settingsButton', '#newPresetButton', '.session-section'];
         const baseline = Object.fromEntries(await Promise.all(selectors.map(async selector => [selector, await box(page, selector)])));
         const states = [
           { name: 'ready', readiness: snapshot().readiness },
@@ -372,19 +377,27 @@ async function homeChecks(context, origin) {
     }
   }
   await page.setViewportSize({ width: 1240, height: 900 }); await theme(page, 'light');
-  await check('compact home wraps complete long storage paths', async () => {
-    await page.setViewportSize({ width: 820, height: 620 });
-    const longPath = 'D:\\synthetic-only\\' + '很长的示例项目名称和归档位置\\'.repeat(8) + 'think-aloud-database';
+  await check('long storage paths stay accessible without consuming home space', async () => {
+    await page.setViewportSize({ width: 920, height: 1040 });
+    const longPath = 'F:/synthetic-only/' + '很长的示例项目名称和归档位置/'.repeat(8) + 'think-aloud-database';
+    const before=await box(page,'#capturePanel');
     await patchSnapshot(page, { config: { ...snapshot().config, vault: longPath } });
-    await page.waitForFunction(value => document.querySelector('#savedLocation').textContent.endsWith(value), longPath);
-    const text = await page.locator('#savedLocation').evaluate(node => ({ text: node.textContent, height: node.getBoundingClientRect().height, line: parseFloat(getComputedStyle(node).lineHeight), scroll: node.scrollWidth, width: node.clientWidth, overflow: getComputedStyle(node).textOverflow }));
-    assert.equal(text.text, '保存到 ' + longPath); assert.ok(text.height > text.line * 1.5, 'long path wraps to multiple lines');
-    assert.ok(text.scroll <= text.width + 1, 'wrapped path must not overflow'); assert.notEqual(text.overflow, 'ellipsis');
-    await noHorizontalOverflow(page); await assertInsideViewport(page, '#recordButton');
-    await screen(page, 'home-long-path-820x620');
-    await patchSnapshot(page, { config: snapshot().config });
-    await page.waitForFunction(() => document.querySelector('#savedLocation').textContent.endsWith('synthetic-only\\think-aloud-database'));
-    await screen(page, 'home-light-820x620'); await theme(page, 'dark'); await screen(page, 'home-dark-820x620'); await theme(page, 'light');
+    await page.waitForFunction(value=>document.querySelector('#openVault').title===value,longPath);
+    assert.deepEqual(await box(page,'#capturePanel'),before);
+    assert.equal(await page.locator('#openVault').isVisible(),false);
+    await screen(page,'home-light-920x1040');
+    await theme(page,'dark');await screen(page,'home-dark-920x1040');await theme(page,'light');
+    await page.locator('#settingsButton').click();await page.locator('[data-step="3"]').click();
+    assert.equal(await page.locator('#vault').inputValue(),longPath);
+    assert.equal(await page.locator('#openVault').getAttribute('title'),longPath);
+    await assertInsideViewport(page,'#wizardNext');await noHorizontalOverflow(page);
+    await page.locator('#wizardCancel').click();
+    await patchSnapshot(page,{config:snapshot().config});
+    for (const width of [720,390]) {
+      await page.setViewportSize({width,height:620});
+      await noHorizontalOverflow(page);await assertInsideViewport(page,'#recordButton');
+      await screen(page,`home-light-${width}x620`);
+    }
     await page.setViewportSize({ width: 1240, height: 900 });
   });
   await check('new preset has four steps; detected devices require no manual refresh', async () => {

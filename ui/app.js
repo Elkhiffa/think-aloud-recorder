@@ -111,9 +111,9 @@ function renderHome(){
  const errors=Array.isArray(r.errors)?r.errors:[];
  let label='请选择或新建录制预设',title='记录体验',subtitle='边体验，边说出你此刻的想法。',button='开始录制';
  if(recording){
-  label=a.status||'正在录制';title=formatTime(a.elapsed_seconds);subtitle=store.saved.game||'正在记录这次体验';
+  label=/中断|异常|失败/.test(a.status||'')?a.status:'';
   if(microphoneWarning)label=(/中断|异常/.test(label)?label+'；':'')+'超过 2 分钟未检测到麦克风声音';
-  button=store.saved.transcription_provider==='later'?'结束并保存':'结束并转写';
+  button=store.saved.transcription_provider==='later'?'结束并保存':'结束并整理';
  }else if(foreground){
   label=a.status||'正在处理';button=a.kind==='starting'?'正在开始…':a.kind==='saving'?'正在保存…':'正在处理…';
  }else if(!store.connected)label='正在连接记录器';
@@ -132,19 +132,21 @@ function renderHome(){
  }
  // Readiness and its blockers replace each other inside ONE above-button slot.
  // Keep the service's start/stop authority; presentation never enables capture.
- $('#homeTitle').classList.toggle('is-timer',recording);
+ $('#capturePanel').classList.toggle('is-recording',recording);
+ setText('recordingTime',recording?formatTime(a.elapsed_seconds):'00:00:00');show('recordingTime',recording);
  setText('homeTitle',title);setText('homeSubtitle',subtitle);
  setText('homeStatus',blockers.length?'':label);
  $('#homeStatus').className='capture-label'+(recording?' recording':!closing&&!checking&&!store.requestPending&&r.ready&&store.connected?' ready':'');
  $('#homeStatus').classList.toggle('microphone-warning',recording&&microphoneWarning);
  const blockerText=blockers.join('\n'),changed=$('#blockers').textContent!==blockerText;
  show('homeStatus',!blockers.length);setText('blockers',blockerText);show('blockers',!!blockers.length);
+ show('statusSlot',!!label||!!blockers.length);
  if(changed)$('#statusSlot').scrollTop=0;
  $('#statusSlot').tabIndex=$('#statusSlot').scrollHeight>$('#statusSlot').clientHeight?0:-1;
  setText('recordButtonText',button);$('#recordButton').classList.toggle('stopping',recording);
  show('jobDetail',cancelPending||closing||foreground&&!!a.detail);
  setText('jobDetail',cancelPending?'更新助手尚未确认取消，请打开顶部“版本与更新”重试取消。':closing?'正在保存并等待现有整理完成，完成后此窗口会自动关闭。':foreground?a.detail:'');
- setText('savedLocation',store.activeId&&store.saved.vault?'保存到 '+store.saved.vault:'尚未选择保存位置');
+ setText('savedLocation','打开当前资料库');
  $('#openVault').title=store.saved.vault||'';
 }
 function showMicrophone(data={state:'connecting',level:0}){
@@ -316,15 +318,15 @@ function sessionTitle(s){return s.title||s.session_name||s.game||s.id;}
 function canReview(s){return s.can_review===true||(s.can_review!==false&&sessionKind(s)==='ready');}
 
 function sessionKind(s){if(store.sessionJob(s.id))return 'processing';const status=String(s.state||'');if(s.error||/失败|错误|failed|error/i.test(status))return 'failed';if(/待整理|待转写|pending|recorded|saved/i.test(status))return 'pending';if(/可回看|完成|就绪|ready|done|complete/i.test(status))return 'ready';return 'other';}
-function sessionDetail(s){return '<div class="session-detail">'+(s.error?'<p class="error-text">'+escapeHTML(s.error)+'</p>':'')+(s.warning?'<p>'+escapeHTML(s.warning)+'</p>':'')+'<p>'+escapeHTML(s.path||'')+'</p><div class="button-row">'+[['review','打开回看'],['process','重新整理'],['raw','原始录像'],['folder','资料文件夹'],['export','导出场次'],['recover','恢复云端任务']].map(([action,label])=>`<button class="text-button" data-session-action="${action}" data-id="${escapeHTML(s.id)}">${label}</button>`).join('')+'</div></div>';}
+function preprocessingLabel(s){return s.preprocessing?.state==='complete'&&Number.isInteger(s.preprocessing.events)?`预处理 ${s.preprocessing.events} 个事件`:s.preprocessing?.label||'';}
+function sessionDetail(s){const analysis=preprocessingLabel(s);return '<div class="session-detail">'+(analysis?'<p class="preprocessing-badge">'+escapeHTML(analysis)+'</p>':'')+(s.error?'<p class="error-text">'+escapeHTML(s.error)+'</p>':'')+(s.warning?'<p>'+escapeHTML(s.warning)+'</p>':'')+'<p>'+escapeHTML(s.path||'')+'</p><div class="button-row">'+[['review','打开回看'],['process','重新整理'],['raw','原始录像'],['folder','资料文件夹'],['export','导出场次'],['recover','恢复云端任务']].map(([action,label])=>`<button class="text-button" data-session-action="${action}" data-id="${escapeHTML(s.id)}">${label}</button>`).join('')+'</div></div>';}
 function sessionRow(s){
  const kind=sessionKind(s),job=store.sessionJob(s.id),state=job?(job.state==='queued'?'等待整理':'后台整理'):s.state||'状态未知';
- const progress=job?(job.state==='queued'?'已保存，等待前面的场次整理完成。':job.detail||'正在整理，仍可继续录制。'):'';
+ const progress=job?(job.state==='queued'?'等待整理，前面的场次完成后继续。':job.detail||'正在整理，仍可继续录制。'):kind!=='ready'?state:'';
  const title=sessionTitle(s),ident=escapeHTML(s.id);
- const eventLabel=s.preprocessing?.state==='complete'&&Number.isInteger(s.preprocessing.events)?`预处理 ${s.preprocessing.events} 个事件`:s.preprocessing?.label||'';
- const preprocessing=eventLabel?`<span class="preprocessing-badge" title="${escapeHTML(s.preprocessing.reason||s.preprocessing.label||'外部会话提供的整理结果；录制和回看始终独立可用。')}">${escapeHTML(eventLabel)}</span>`:'';
+ const analysis=preprocessingLabel(s),attention=analysis&&['processing','stale','failed','error','invalid'].includes(s.preprocessing?.state);
  const rename=`<button class="session-rename" data-session-action="rename" data-id="${ident}" aria-label="编辑片段名称：${escapeHTML(title)}" title="编辑片段名称"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14Z"/></svg></button>`;
- return `<article class="session-row"><div class="session-main"><div class="session-name"><div class="session-title-row"><strong>${escapeHTML(title)}${s.test?' <span class="test-tag">合成测试</span>':''}</strong>${rename}</div><div class="session-subtitle"><span class="session-game">${escapeHTML(s.game||'')}</span>${preprocessing}</div>${s.activity_details?`<p class="session-content">${escapeHTML(s.activity_details)}</p>`:''}<p class="session-meta"><span>${escapeHTML(formatDate(s.created))}</span><span class="session-duration"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>${escapeHTML(formatTime(s.duration))}</span></p>${progress?`<p class="session-progress">${escapeHTML(progress)}</p>`:''}</div><span class="session-state ${kind}">${escapeHTML(state)}</span>${canReview(s)?`<button class="session-quick" data-session-action="review" data-id="${ident}">${icon('play')}回看</button>`:['pending','failed'].includes(kind)?`<button class="session-quick" data-session-action="process" data-id="${ident}">${kind==='failed'?'重试':'整理'}</button>`:''}<button class="session-toggle" data-detail="${ident}" aria-expanded="${expandedSession===s.id}" aria-label="${expandedSession===s.id?'收起':'展开'}${escapeHTML(title)}详情">${icon('chevron')}</button></div>${expandedSession===s.id?sessionDetail(s):''}</article>`;
+ return `<article class="session-row"><div class="session-main"><div class="session-name"><div class="session-title-row"><strong>${escapeHTML(title)}${s.test?' <span class="test-tag">合成测试</span>':''}</strong>${rename}</div><p class="session-meta"><span class="session-game">${escapeHTML(s.game||'')}</span><span class="session-date">${escapeHTML(formatDate(s.created))}</span><span class="session-duration"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>${escapeHTML(formatTime(s.duration))}</span></p>${progress?`<p class="session-progress ${kind}">${escapeHTML(progress)}</p>`:''}${attention?`<p class="session-progress preprocessing-badge" title="${escapeHTML(s.preprocessing.reason||'')}">${escapeHTML(analysis)}</p>`:''}</div><div class="session-actions">${canReview(s)?`<button class="session-quick" data-session-action="review" data-id="${ident}">${icon('play')}回看</button>`:['pending','failed'].includes(kind)?`<button class="session-quick" data-session-action="process" data-id="${ident}">${kind==='failed'?'重试':'整理'}</button>`:''}<button class="session-toggle" data-detail="${ident}" aria-expanded="${expandedSession===s.id}" aria-label="${expandedSession===s.id?'收起':'展开'}${escapeHTML(title)}详情">${icon('chevron')}</button></div>${s.activity_details?`<p class="session-content">${escapeHTML(s.activity_details)}</p>`:''}</div>${expandedSession===s.id?sessionDetail(s):''}</article>`;
 }
 function renameSession(s){
  showDialog('编辑片段名称',`<p class="field-note">${escapeHTML(s.game||'')} · ${escapeHTML(formatDate(s.created))}</p><label for="sessionName">片段名称</label><input id="sessionName" maxlength="4096" autocomplete="off" value="${escapeHTML(s.session_name||'')}" placeholder="例如：通道入口、首次使用背包"><p class="field-note">留空恢复默认名称。预设名称与保存位置不变。</p><p id="sessionNameError" class="error-text" role="alert"></p>`,[{label:'保存',primary:true,run:async()=>{

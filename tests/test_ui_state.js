@@ -105,7 +105,8 @@ test('external preprocessing badges never change recording state or disable revi
   const f=await fixture(snapshot({sessions}));
   for(const s of sessions){assert.equal(f.run(`sessionKind(store.snapshot.sessions.find(s=>s.id==='${s.id}'))`),'ready');assert.equal(f.run(`sessionActionBlocked('${s.id}','review')`),false);}
   const html=f.elements.get('sessionList').innerHTML;
-  assert.equal((html.match(/class="preprocessing-badge"/g)||[]).length,4);
+  assert.equal((html.match(/class="session-progress preprocessing-badge"/g)||[]).length,3);
+  assert.match(f.run("sessionDetail(store.snapshot.sessions.find(s=>s.id==='agent-2'))"), /外部 &lt;整理&gt;/);
   assert.equal((html.match(/data-session-action="review"/g)||[]).length,5);
   assert.match(html,/外部 &lt;整理&gt;/);assert.equal((html.match(/<strong>原始名称/g)||[]).length,5);
 });
@@ -270,13 +271,13 @@ test('background progress and failures stay on their session without replacing c
     background_jobs:[{id:'job-a',session_id:'a',state:'running',detail:'Uploading A'}],
     sessions:[{id:'a',game:'A',state:'转写中'},{id:'b',game:'B',state:'录制中'}]});
   const f=await fixture(initial);
-  assert.equal(f.elements.get('recordButton').disabled,false);assert.equal(f.elements.get('recordButtonText').textContent,'结束并转写');
-  assert.equal(f.elements.get('homeTitle').textContent,'00:00:18');assert.equal(f.elements.get('jobDetail').textContent,'');
+  assert.equal(f.elements.get('recordButton').disabled,false);assert.equal(f.elements.get('recordButtonText').textContent,'结束并整理');
+  assert.equal(f.elements.get('recordingTime').textContent,'00:00:18');assert.equal(f.elements.get('jobDetail').textContent,'');
   f.data.snapshot.background_jobs[0].detail='<Waiting for cloud>';await f.run('poll()');
   assert.ok(f.elements.get('sessionList').innerHTML.includes('&lt;Waiting for cloud&gt;'));
   f.data.snapshot.background_jobs=[];f.data.snapshot.sessions[0]={id:'a',game:'A',state:'失败',error:'Cloud failure'};await f.run('poll()');
   assert.equal(f.elements.get('blockers').textContent,'');assert.equal(f.elements.get('recordButton').disabled,false);
-  assert.equal(f.elements.get('homeTitle').textContent,'00:00:18');assert.equal(f.elements.get('backgroundSummary').textContent,'');
+  assert.equal(f.elements.get('recordingTime').textContent,'00:00:18');assert.equal(f.elements.get('backgroundSummary').textContent,'');
   assert.ok(f.elements.get('sessionList').innerHTML.includes('重试'));
   f.elements.get('recordButton').onclick();await settle();assert.ok(f.calls.some(call=>call.name==='stop_recording'));
 });
