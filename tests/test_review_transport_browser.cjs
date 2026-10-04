@@ -57,7 +57,7 @@ async function main(){
      if(g.companion.width>700)assert.ok(Math.abs(g.quote.top-g.input.top)<1);else assert.ok(g.input.top>=g.quote.bottom);
      await page.screenshot({path:path.join(output,`review-${viewport.width}.png`)});results.push(g);
    }
-   await page.setViewportSize({width:1280,height:800});await settle();await page.locator('#themeButton').click();await page.screenshot({path:path.join(output,'review-dark.png')});
+   await page.setViewportSize({width:1280,height:800});await settle();await page.locator('#themeButton').click();await page.waitForTimeout(300);await page.screenshot({path:path.join(output,'review-dark.png')});
    const quote=page.locator('[data-quote="0"]');await quote.hover();await page.waitForFunction(()=>!document.querySelector('#quotePopover').hidden);assert.equal(await page.locator('#quoteText').textContent(),data.segments[0].text);
    return results;
  });
