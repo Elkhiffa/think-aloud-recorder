@@ -357,6 +357,32 @@ class ReviewAPI:
         with _LAYOUT_LOCK:
             return {'ok': True, 'data': self._read_layout()}
 
+    def get_playback_preferences(self):
+        values = {'double_click_fullscreen': True}
+        if self._layout_path is not None:
+            with _LAYOUT_LOCK:
+                try:
+                    saved = json.loads(self._layout_path.with_name('review-playback.json').read_text(encoding='utf-8'))
+                    if isinstance(saved, dict) and type(saved.get('double_click_fullscreen')) is bool:
+                        values['double_click_fullscreen'] = saved['double_click_fullscreen']
+                except (OSError, ValueError):
+                    pass
+        return {'ok': True, 'data': values}
+
+    def save_playback_preferences(self, double_click_fullscreen):
+        try:
+            if type(double_click_fullscreen) is not bool:
+                raise ValueError('双击全屏设置无效。')
+            if self._layout_path is None:
+                raise ValueError('回看设置保存位置尚未就绪。')
+            from recorder import write
+            with _LAYOUT_LOCK:
+                write(self._layout_path.with_name('review-playback.json'),
+                      {'double_click_fullscreen': double_click_fullscreen})
+            return {'ok': True}
+        except Exception as error:
+            return {'ok': False, 'error': str(error)}
+
     def save_layout(self, axis, ratio):
         try:
             if axis not in ('columns', 'rows') or not self._valid_ratio(ratio):

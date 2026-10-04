@@ -265,7 +265,7 @@
   function closeFileActions(restoreFocus=false){fileActions.hidden=true;fileActionsToggle.setAttribute('aria-expanded','false');if(restoreFocus)fileActionsToggle.focus();}
   function positionFileActions(){
     if(fileActions.hidden)return;
-    const anchor=copySplit.getBoundingClientRect(),margin=10,gap=8;
+    const anchor=copySplit.getBoundingClientRect(),margin=16,gap=8;
     const above=Math.max(0,anchor.top-gap-margin),below=Math.max(0,root.innerHeight-anchor.bottom-gap-margin);
     const opensAbove=above>=below;
     fileActions.style.maxHeight=Math.max(above,below)+'px';
@@ -309,6 +309,7 @@
   const videoPane=$('videoPane'),textPane=$('transcriptPane'),videoSlot=videoPane.querySelector('.video-slot');
   let showOriginalFrame=false;
   const currentVideoFrame=()=>videoFrame(data.video_display,video.videoWidth,video.videoHeight,showOriginalFrame);
+  const playbackBarHeight=()=>videoSlot.querySelector('.plyr__controls')?.getBoundingClientRect().height||80;
   function positionVideo(){
     const wrapper=video.closest('.plyr__video-wrapper');
     if(!wrapper)return;
@@ -348,10 +349,11 @@
     videoSlot.classList.toggle('source-aspect',hasSource);
     if(!hasSource){videoSlot.style.removeProperty('width');videoSlot.style.removeProperty('height');return;}
     const rect=videoPane.getBoundingClientRect();
-    const height=Math.max(0,rect.height-fixedHeight(videoPane,videoSlot));
+    const height=Math.max(0,rect.height-fixedHeight(videoPane,videoSlot)-playbackBarHeight());
     const width=Math.max(0,rect.width-horizontalInsets(videoPane));
     const fittedWidth=Math.min(width,height*aspect);
-    videoSlot.style.width=fittedWidth+'px';videoSlot.style.height=fittedWidth/aspect+'px';
+    videoSlot.style.width=width+'px';videoSlot.style.height=(fittedWidth/aspect+playbackBarHeight())+'px';
+    const wrapper=video.closest('.plyr__video-wrapper');if(wrapper)wrapper.style.width=fittedWidth+'px';
     positionVideo();
   }
   function renderSplit(){
@@ -359,20 +361,25 @@
     const before=number(vertical?style.paddingTop:style.paddingLeft),after=number(vertical?style.paddingBottom:style.paddingRight);
     const divider=number(style.getPropertyValue('--splitter-size'));
     const available=Math.max(0,(vertical?rect.height:rect.width)-before-after-divider);
-    const textMin=Math.max(280,textPane.querySelector('.review-tabs').scrollWidth+$('follow').offsetWidth+horizontalInsets(textPane)+12);
+    const textMin=Math.max(280,textPane.querySelector('.review-tabs').scrollWidth+$('follow').offsetWidth+horizontalInsets(textPane)+8);
     if(!vertical){
       if(columnWidth===null)columnWidth=available*.74;
       if(!touched.has(mode)){
         const source=currentVideoFrame();
         const fit=sourceFit({available,height:videoPane.clientHeight,videoWidth:source.width,videoHeight:source.height,
-          chromeHeight:fixedHeight(videoPane,videoSlot),chromeWidth:horizontalInsets(videoPane),textMin});
+          chromeHeight:fixedHeight(videoPane,videoSlot)+playbackBarHeight(),chromeWidth:horizontalInsets(videoPane),videoMin:320,textMin});
         // An untouched layout can recover its target size when the window
         // grows. A manual divider adjustment keeps the user's chosen width.
         if(fit)columnWidth=fit.width;
       }
     }
-    let bounds=splitBounds(available,vertical?fixedHeight(videoPane,videoSlot)+72:240,
-      vertical?fixedHeight(textPane,lines)+32:textMin,vertical?shares[mode]:columnWidth/available);
+    if(vertical&&!touched.has(mode)){
+      const source=currentVideoFrame(),aspect=source.width/source.height;
+      if(Number.isFinite(aspect)&&aspect>0)shares.rows=(videoPane.clientWidth/aspect+fixedHeight(videoPane,videoSlot)+playbackBarHeight())/available;
+    }
+    const flexibleText=!$('inputTimelinePanel').hidden?$('inputTimelinePanel'):!$('experienceEvents').hidden?$('experienceEvents'):lines;
+    let bounds=splitBounds(available,vertical?fixedHeight(videoPane,videoSlot)+playbackBarHeight()+96:320,
+      vertical?fixedHeight(textPane,flexibleText)+80:textMin,vertical?shares[mode]:columnWidth/available);
     if(!vertical){columnWidth=available*bounds.value;shares[mode]=bounds.value;}
     applySplit(bounds.value);sizeVideoSlot();
     splitter.setAttribute('aria-orientation',vertical?'horizontal':'vertical');
@@ -439,22 +446,71 @@
     if(!m.vertical)columnWidth=shares[m.mode]*m.available;renderSplit();saveShare(m.mode);
   });
   const layoutObserver=new ResizeObserver(scheduleSplit);
-  for(const element of [layout,$('inputPanel'),videoPane.querySelector('.file-card'),textPane.querySelector('.transcript-heading')])layoutObserver.observe(element);
+  for(const element of [layout,$('reviewCompanion'),videoPane.querySelector('.file-card'),textPane.querySelector('.transcript-heading')])layoutObserver.observe(element);
   stacked.addEventListener('change',()=>{finishDrag();scheduleSplit();});
   renderSplit();
   if(!data.desktop||root.pywebview?.api)loadShares();
   root.addEventListener('pywebviewready',loadShares);
   const player=new Plyr(video,{
-    controls:['play-large','rewind','play','fast-forward','progress','current-time','duration','mute','volume','settings','fullscreen'],
-    seekTime:15,keyboard:{focused:false,global:false},autopause:false,
-    loadSprite:false,iconUrl:'',blankVideo:'',settings:['speed'],
-    speed:{selected:1,options:[0.5,0.75,1,1.25,1.5,2]},
+    controls:['play','progress','current-time','duration','mute','volume','fullscreen'],
+    seekTime:15,keyboard:{focused:false,global:false},autopause:false,hideControls:false,clickToPlay:false,
+    listeners:{fullscreen:event=>event.type!=='dblclick'},
+    loadSprite:false,iconUrl:'',blankVideo:'',settings:[],
+    speed:{selected:1,options:[0.5,0.75,0.9,1,1.25,1.5,2,2.5,3]},
     i18n:{play:'播放',pause:'暂停',rewind:'后退 {seektime} 秒',fastForward:'前进 {seektime} 秒',seek:'定位',
       currentTime:'当前时间',duration:'总时长',volume:'音量',mute:'静音',unmute:'取消静音',settings:'设置',
       speed:'播放速度',normal:'正常',enterFullscreen:'全屏',exitFullscreen:'退出全屏'}
   });
   // Expose only the player for desktop smoke diagnostics, never native service state.
   root.reviewPlayer=player;
+  installPlaybackControls();
+  function installPlaybackControls(){
+    const controls=videoSlot.querySelector('.plyr__controls'),wrapper=videoSlot.querySelector('.plyr__video-wrapper');
+    let doubleClickFullscreen=true,preferenceTouched=false,clickTimer=null,clickStartPaused=null;
+    const preferenceKey='think-aloud-playback-v1';
+    try{const saved=JSON.parse(localStorage.getItem(preferenceKey));if(typeof saved?.double_click_fullscreen==='boolean')doubleClickFullscreen=saved.double_click_fullscreen;}catch(_){}
+    const speed=document.createElement('div');speed.className='playback-menu';
+    speed.innerHTML='<button id="playbackSpeed" class="plyr__control playback-speed" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="playbackSpeedMenu">倍速</button><div id="playbackSpeedMenu" class="playback-popup" role="menu" aria-label="播放速度" hidden></div>';
+    const settings=document.createElement('div');settings.className='playback-menu';
+    settings.innerHTML='<button id="playbackSettings" class="plyr__control" type="button" aria-label="播放设置" aria-haspopup="menu" aria-expanded="false" aria-controls="playbackSettingsMenu"><svg aria-hidden="true"><use href="#plyr-settings"></use></svg></button><div id="playbackSettingsMenu" class="playback-popup" role="menu" aria-label="播放设置" hidden><button id="doubleClickFullscreen" type="button" role="menuitemcheckbox" aria-checked="true"><span>双击全屏</span><span class="setting-check" aria-hidden="true">✓</span></button></div>';
+    controls.insertBefore(speed,controls.querySelector('[data-plyr=fullscreen]'));
+    controls.insertBefore(settings,controls.querySelector('[data-plyr=fullscreen]'));
+    function closeMenus(){for(const holder of [speed,settings]){holder.querySelector('[role=menu]').hidden=true;holder.firstElementChild.setAttribute('aria-expanded','false');}}
+    function openMenu(holder){const menu=holder.querySelector('[role=menu]'),open=menu.hidden;closeMenus();if(open){const anchor=holder.getBoundingClientRect(),above=anchor.top-16,below=root.innerHeight-anchor.bottom-16,up=above>=below;menu.style.maxHeight=Math.max(40,Math.min(360,up?above:below))+'px';menu.style.top=up?'auto':'calc(100% + 8px)';menu.style.bottom=up?'calc(100% + 8px)':'auto';menu.hidden=false;holder.firstElementChild.setAttribute('aria-expanded','true');}}
+    for(const holder of [speed,settings]){
+      holder.firstElementChild.onclick=()=>openMenu(holder);
+      holder.addEventListener('keydown',event=>{
+        const menu=holder.querySelector('[role=menu]'),items=[...menu.querySelectorAll('button')];
+        if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeMenus();holder.firstElementChild.focus();}
+        else if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){
+          event.preventDefault();event.stopPropagation();if(menu.hidden)openMenu(holder);
+          const i=items.indexOf(document.activeElement),next=event.key==='Home'?0:event.key==='End'?items.length-1:i<0?(event.key==='ArrowDown'?0:items.length-1):(i+(event.key==='ArrowDown'?1:-1)+items.length)%items.length;
+          items[next]?.focus();
+        }
+      });
+      holder.addEventListener('focusout',event=>{if(!holder.contains(event.relatedTarget))closeMenus();});
+    }
+    for(const rate of [3,2.5,2,1.5,1.25,1,.9,.75,.5]){
+      const button=document.createElement('button');button.type='button';button.role='menuitemradio';button.dataset.rate=String(rate);button.textContent=rate.toFixed(rate===.75||rate===1.25?2:1)+'×';
+      button.onclick=()=>{player.speed=rate;closeMenus();$('playbackSpeed').focus();};$('playbackSpeedMenu').append(button);
+    }
+    function updateSpeed(){const rate=player.speed;$('playbackSpeed').textContent=rate===1?'倍速':rate+'×';$('playbackSpeed').setAttribute('aria-label','播放速度 '+rate+' 倍');for(const button of speed.querySelectorAll('[data-rate]'))button.setAttribute('aria-checked',String(Number(button.dataset.rate)===rate));}
+    function updatePreference(){$('doubleClickFullscreen').setAttribute('aria-checked',String(doubleClickFullscreen));}
+    $('doubleClickFullscreen').onclick=async()=>{
+      preferenceTouched=true;doubleClickFullscreen=!doubleClickFullscreen;updatePreference();
+      try{localStorage.setItem(preferenceKey,JSON.stringify({double_click_fullscreen:doubleClickFullscreen}));}catch(_){}
+      if(data.desktop&&root.pywebview?.api?.save_playback_preferences){try{await native('save_playback_preferences',doubleClickFullscreen);}catch(error){status(error.message,true);}}
+    };
+    async function loadPreference(){if(!data.desktop||!root.pywebview?.api?.get_playback_preferences)return;try{const saved=await native('get_playback_preferences');if(!preferenceTouched&&typeof saved.double_click_fullscreen==='boolean'){doubleClickFullscreen=saved.double_click_fullscreen;updatePreference();}}catch(_){} }
+    root.addEventListener('pywebviewready',loadPreference);loadPreference();updatePreference();updateSpeed();video.addEventListener('ratechange',updateSpeed);
+    // One double-click is one action. Defer the single click so it cannot
+    // play then pause (or alter playback while entering fullscreen).
+    wrapper.addEventListener('click',event=>{if(event.button!==0)return;root.clearTimeout(clickTimer);if(event.detail>1)return;clickStartPaused=video.paused;clickTimer=root.setTimeout(()=>{clickTimer=null;player.togglePlay(clickStartPaused)?.catch(()=>{});},280);});
+    wrapper.addEventListener('dblclick',event=>{event.preventDefault();event.stopPropagation();root.clearTimeout(clickTimer);clickTimer=null;const wasPaused=clickStartPaused??video.paused;if(doubleClickFullscreen){player.togglePlay(!wasPaused)?.catch(()=>{});player.fullscreen.toggle();}else player.togglePlay(wasPaused)?.catch(()=>{});clickStartPaused=null;});
+    document.addEventListener('pointerdown',event=>{if(!speed.contains(event.target)&&!settings.contains(event.target))closeMenus();});
+    root.addEventListener('pagehide',()=>root.clearTimeout(clickTimer));
+    layoutObserver.observe(controls);scheduleSplit();
+  }
   const videoObserver=new ResizeObserver(positionVideo);
   videoObserver.observe(video.closest('.plyr__video-wrapper'));
   video.addEventListener('loadedmetadata',()=>{
@@ -473,7 +529,7 @@
   document.addEventListener('keydown',event=>{
     if(event.altKey||event.ctrlKey||event.metaKey||event.isComposing)return;
     if(event.target.classList?.contains('timeline-horizontal-scroll'))return;
-    if(event.target.closest('input:not([type="range"]),textarea,select,[contenteditable="true"],[role="separator"],.file-card,.review-header,.copy-split,.file-actions,.input-heading,.review-tabs,.quote-popover,.alignment-panel,.speaker-dialog,.speaker-summary,.experience-events button,.experience-events summary'))return;
+    if(event.target.closest('input:not([type="range"]),textarea,select,[contenteditable="true"],[role="separator"],.file-card,.review-header,.copy-split,.file-actions,.input-heading,.review-tabs,.quote-popover,.alignment-panel,.speaker-dialog,.speaker-summary,.playback-menu,.current-quote-heading button,.experience-events button,.experience-events summary'))return;
     if(![' ','ArrowLeft','ArrowRight'].includes(event.key))return;
     event.preventDefault();event.stopImmediatePropagation();
     if(event.key===' '){if(!event.repeat)player.togglePlay();}
@@ -502,7 +558,20 @@
   });current=-1;filter();sync();renderSpeakerSummary();}
   function setFollow(value){follow=value;$('follow').textContent=value?'跟随播放：开':'恢复跟随';$('follow').setAttribute('aria-pressed',String(value));inputUI?.setFollow(value);if(value)scrollCurrent();}
   function scrollCurrent(){const node=nodes[current];if(!follow||lines.hidden||!node||node.hidden)return;const top=node.offsetTop-lines.offsetTop-(lines.clientHeight-node.clientHeight)/2;lines.scrollTo({top:Math.max(0,top),behavior:'smooth'});}
-  function sync(){const index=activeSegment(segments,video.currentTime);if(index===current)return;nodes[current]?.classList.remove('active');nodes[current]?.removeAttribute('aria-current');current=index;nodes[current]?.classList.add('active');nodes[current]?.setAttribute('aria-current','true');scrollCurrent();}
+  let quoteSignature='';
+  function syncCurrentQuote(){
+    const at=video.currentTime,active=activeSegment(segments,at);let index=active;
+    if(index<0){let lo=0,hi=segments.length;while(lo<hi){const mid=(lo+hi)>>>1;if(segments[mid].end<=at)lo=mid+1;else hi=mid;}index=lo-1;}
+    const segment=segments[index],transcription=data.transcription?.state||'ready';
+    const signature=JSON.stringify([index,active,segment,data.speakers?.selected_id,data.speakers?.source,transcription]);if(signature===quoteSignature)return;quoteSignature=signature;
+    $('currentQuoteLabel').textContent=segment&&active<0?'上一句':'原话';$('currentQuotePanel').classList.toggle('is-previous',active<0);
+    $('currentQuoteText').textContent=segment?.text||(transcription==='pending'?'转写完成后，原话会显示在这里。':transcription==='failed'?'转写未完成，可继续回看录像。':'当前没有原话。');
+    $('currentQuoteTime').hidden=!segment;
+    if(segment){$('currentQuoteTime').textContent=formatTime(segment.start);$('currentQuoteTime').onclick=()=>seek(segment.start);}
+    const tag=$('currentQuoteSpeaker');tag.textContent=segment?speakerLabel(segment.speaker_id):'';tag.hidden=!tag.textContent;tag.classList.toggle('is-recorder',!!segment&&Number.isInteger(segment.speaker_id)&&data.speakers?.selected_id===segment.speaker_id);
+    $('currentQuoteText').parentElement.scrollTop=0;
+  }
+  function sync(){syncCurrentQuote();const index=activeSegment(segments,video.currentTime);if(index===current)return;nodes[current]?.classList.remove('active');nodes[current]?.removeAttribute('aria-current');current=index;nodes[current]?.classList.add('active');nodes[current]?.setAttribute('aria-current','true');scrollCurrent();}
   $('follow').onclick=()=>setFollow(!follow);
   lines.addEventListener('wheel',()=>setFollow(false),{passive:true});
   lines.addEventListener('touchstart',()=>setFollow(false),{passive:true});
@@ -520,7 +589,7 @@
         // Seek once in the existing calibrated video clock, without trimming
         // media, shifting events again or starting playback.
         video.currentTime=start;
-        status('已从准备完成处打开，可拖回查看开头。');
+        status('');
       }
     }
     reportReady();
@@ -567,7 +636,7 @@
       const id=automatic||chosen.value==='none'?null:Number(chosen.value);
       if(data.desktop)data.speakers=await native('set_recorder_speaker',id,speakerIdentity,automatic);
       else{if(data.speakers.transcript_id!==speakerIdentity)throw new Error('逐字稿已更新，请重新选择。');data.speakers={...data.speakers,selected_id:automatic?data.speakers.suggested_id:id,source:automatic?'auto':'manual'};}
-      renderSpeakerSummary();speakerDialog.close();status(data.desktop?'记录者选择已保存。':'已应用到本次回看；离线页面不保存设置。');
+      renderSpeakerSummary();syncCurrentQuote();speakerDialog.close();status(data.desktop?'':'已应用到本次回看；离线页面不保存设置。');
     }catch(error){$('speakerError').textContent=error.message;$('speakerError').hidden=false;}
     finally{speakerBusy=false;$('saveSpeaker').disabled=false;$('autoSpeaker').disabled=false;}
   }
@@ -622,7 +691,7 @@
       for(const key of ['session_name','game','title','activity_details','transcription','inputs','vault_path','speakers','narration','preprocessing'])if(Object.hasOwn(next,key))data[key]=next[key];
       updateTitle();const signature=JSON.stringify(next.segments);
       if(Array.isArray(next.segments)&&signature!==segmentSignature){segments=next.segments;data.segments=segments;segmentSignature=signature;buildTranscript();}
-      renderSpeakerSummary();inputUI.update();
+      renderSpeakerSummary();syncCurrentQuote();inputUI.update();
     }catch(error){$('timelineState').title='暂时无法更新回看状态：'+error.message;}
     finally{snapshotBusy=false;}
   }
@@ -703,7 +772,7 @@
         fields.start=parseEventClock($('eventEditstart').value);fields.end=parseEventClock($('eventEditend').value);
         if(fields.end<fields.start)throw new Error('结束时间不能早于开始时间。');
         eventSaving=true;$('saveEventEdit').disabled=true;
-        data.preprocessing=await native('edit_event',{...editingEvent,fields});updateEvents();eventDialog.close();status('体验事件已保存。');
+        data.preprocessing=await native('edit_event',{...editingEvent,fields});updateEvents();eventDialog.close();status('');
       }catch(problem){error.textContent=problem.message;error.hidden=false;}
       finally{eventSaving=false;$('saveEventEdit').disabled=false;}
     };
@@ -787,7 +856,7 @@
       if(state.mode==='device'&&(key!==state.lastInput||active.some(item=>!item.active)))renderDevice(device,active,time);
       if(key===state.lastInput)return;state.lastInput=key;
       $('inputSource').textContent=source.intervals.length?deviceName(device):'操作记录';
-      $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):active.length?(state.mode==='device'?'按住时高亮 · 松开后 2 秒内渐淡':'按住时高亮 · 松开后保留 2 秒'):'最近 2 秒无操作';
+      $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):active.length?'':'最近 2 秒无操作';
       $('inputState').classList.toggle('is-gap',!!gap);$('inputState').title=message;
       $('currentKeys').hidden=state.mode!=='keys'||!!message;$('deviceView').hidden=state.mode!=='device'||!!message;
       $('currentKeys').innerHTML=active.map(item=>`<div class="current-item" data-recent-id="${escape(item.id)}"><span class="keycap ${item.active?'active':'recent'}">${glyph(item)}</span><span>${escape(/^D[Pp]ad/.test(item.code)?'十字键':item.label||item.code)}${item.value!=null&&item.kind!=='button'?` · ${Math.round(item.value*100)}%`:''}</span></div>`).join('');

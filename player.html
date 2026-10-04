@@ -37,10 +37,16 @@
       <div class="video-slot"><video id="video" controls playsinline preload="metadata"></video>
 
       </div>
+      <div id="reviewCompanion" class="review-companion">
+      <section id="currentQuotePanel" class="current-quote-panel" aria-label="随播放显示的原话">
+        <div class="current-quote-heading"><h2 id="currentQuoteLabel">原话</h2><button id="currentQuoteTime" type="button" title="回到这句原话" hidden></button></div>
+        <div class="current-quote-body"><span id="currentQuoteSpeaker" class="speaker-tag" hidden></span><p id="currentQuoteText"></p></div>
+      </section>
       <section id="inputPanel" class="input-panel" aria-label="最近操作">
         <div class="input-heading"><h2>最近操作</h2><div class="input-modes" aria-label="操作显示方式"><button data-input-mode="keys" aria-pressed="true">最近按键</button><button data-input-mode="device" aria-pressed="false">设备图</button><button data-input-mode="collapsed" aria-pressed="false">收起</button></div></div>
         <div id="inputBody" class="input-body"><div class="input-meta"><span id="inputSource"></span><span id="inputFocusState" hidden></span><label id="deviceSelectLabel" hidden><span class="sr-only">显示设备</span><select id="deviceSelect"><option value="auto">自动切换</option><option value="keyboard">键盘 + 鼠标</option><option value="xbox">Xbox</option><option value="dualsense">DualSense</option></select></label></div><div id="currentKeys" class="current-keys"></div><div id="deviceView" class="device-view" hidden></div><p id="inputState" class="input-state"></p></div>
       </section>
+      </div>
       <div class="file-card">
         <p id="status" role="status">正在加载录像…</p>
       </div>

@@ -91,7 +91,7 @@ async function geometry(page) {
     const rect = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
     const video = document.querySelector('video'), pane = document.querySelector('#videoPane'), layout = document.querySelector('.review-layout');
     const number = value => parseFloat(value) || 0, style = getComputedStyle(layout), paneStyle = getComputedStyle(pane);
-    const slot = rect('.video-slot'), file = rect('.file-card'), input = rect('#inputPanel'), copy = rect('#copySplit');
+    const slot = rect('.video-slot'), picture=rect('.plyr__video-wrapper'), companion=rect('#reviewCompanion'), transport=rect('.plyr__controls'), file = rect('.file-card'), input = rect('#inputPanel'), copy = rect('#copySplit');
     const fileVisible = getComputedStyle(document.querySelector('.file-card')).display !== 'none';
     const pixels=rect('video'),shortClip=getComputedStyle(video).clipPath.match(/[\d.]+/g)?.map(Number)||[0];
     const clip=shortClip.length===1?Array(4).fill(shortClip[0]):shortClip.length===2?[...shortClip,...shortClip]:shortClip.length===3?[...shortClip,shortClip[1]]:shortClip;
@@ -102,17 +102,18 @@ async function geometry(page) {
       source: [video.videoWidth, video.videoHeight], visible, aspect:cropped?data.video_display.width/data.video_display.height:video.videoWidth/video.videoHeight,
       orientation: document.querySelector('#reviewSplitter').getAttribute('aria-orientation'),
       available: layout.getBoundingClientRect().width - number(style.paddingLeft) - number(style.paddingRight) - number(style.getPropertyValue('--splitter-size')),
-      input, copy, header: rect('.review-header'), fileVisible, gap: number(paneStyle.rowGap), objectFit: getComputedStyle(video).objectFit,
-      reservedHeight: input.height + (fileVisible ? file.height : 0) + number(paneStyle.rowGap) * (fileVisible ? 2 : 1),
+      input, picture, companion, transport, copy, header: rect('.review-header'), fileVisible, gap: number(paneStyle.rowGap), objectFit: getComputedStyle(video).objectFit,
+      reservedHeight: companion.height + (fileVisible ? file.height : 0) + number(paneStyle.rowGap) * (fileVisible ? 2 : 1),
       documentScroll: document.scrollingElement.scrollTop, documentWidth: document.documentElement.scrollWidth,
       status: document.querySelector('#status').textContent, lineScroll: document.querySelector('#lines').scrollTop };
   });
 }
 const close = (a, b, label, tolerance = 1) => assert.ok(Math.abs(a - b) <= tolerance, `${label}: ${a} vs ${b}`);
 function ratioCheck(g) {
-  close(g.input.width,g.pane.width,'recent operations retain the chosen column width');assert.ok(g.slot.width<=g.pane.width+1,'player fits left pane');assert.ok(g.slot.height<=g.pane.height-g.reservedHeight+1,'player respects available height');
-  close(g.slot.width/g.slot.height,g.aspect,'slot follows the visible source aspect',.005);
-  close(g.visible.width,g.slot.width,'visible picture fills slot width');close(g.visible.height,g.slot.height,'visible picture fills slot height');
+  close(g.companion.width,g.pane.width,'spoken context and recent operations retain the chosen column width');assert.ok(g.slot.width<=g.pane.width+1,'player fits left pane');assert.ok(g.slot.height<=g.pane.height-g.reservedHeight+1,'player respects available height');
+  close(g.picture.width/g.picture.height,g.aspect,'picture follows the visible source aspect',.005);
+  close(g.visible.width,g.picture.width,'visible picture fills wrapper width');close(g.visible.height,g.picture.height,'visible picture fills wrapper height');
+  assert.ok(g.transport.top>=g.picture.bottom-1,'transport never overlays the footage');
   close(g.slot.y, g.pane.y, 'slot is top-aligned'); assert.equal(g.objectFit, 'contain');
   assert.ok(g.file.bottom <= g.pane.bottom + 1, 'file controls remain in their pane');
   assert.ok(g.input.bottom <= g.pane.bottom + 1, 'operation panel remains within its pane');
@@ -136,7 +137,7 @@ async function openPage(context, source, options = {}) {
       save_layout: async (...args) => { window.__aspectCalls.push({ method: 'save_layout', args }); return { ok: true }; },
       ready: async (...args) => { window.__aspectCalls.push({ method: 'ready', args }); return { ok: true }; }
     } };
-  }, { saved: options.saved || { columns: .24, rows: .54 }, late: options.late || false });
+  }, { saved: options.saved || { columns: .84, rows: .54 }, late: options.late || false });
   await page.goto(`${origin}/review?source=${source}&delay=${options.delay || 0}&portable=${options.portable ? 1 : 0}`, { waitUntil: 'domcontentloaded' });
   if (!options.skipReady) await page.waitForFunction(() => document.querySelector('video').readyState >= 1);
   await settle(page); return page;
@@ -148,7 +149,7 @@ async function run(context) {
       try {
         const g = await geometry(page); assert.deepEqual(g.source, sources[source]); fittedCheck(g);
         assert.ok(g.slot.height>=g.pane.height-g.reservedHeight-1||g.pane.width>=g.available*.65,'video uses the available height or most of the horizontal space');close(g.viewport.width, 1440, 'fixed outer width'); close(g.viewport.height, 900, 'fixed outer height');
-        assert.ok(Math.abs(g.pane.width / g.available - .24) > .02, 'source fit overrides the saved split');
+        assert.ok(Math.abs(g.pane.width / g.available - .84) > .02, 'source fit overrides the saved split');
         await screen(page, `${source}-1240x900`);
         const before = g.slot;
         await page.locator('#lines').hover(); await page.mouse.wheel(0, 500);

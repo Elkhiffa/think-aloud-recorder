@@ -77,7 +77,7 @@ class ReviewTests(unittest.TestCase):
             self.assertFalse(api.open_document('../outside')['ok'])
             self.assertTrue(api.open_document('notes')['ok'])
         self.assertEqual({name for name in dir(api) if not name.startswith('_')},
-                         {'ready', 'open_folder', 'copy_path', 'open_document', 'get_layout', 'save_layout', 'get_snapshot', 'rename_session', 'edit_event', 'set_input_offset', 'set_recorder_speaker'})
+                         {'ready', 'open_folder', 'copy_path', 'open_document', 'get_layout', 'save_layout', 'get_playback_preferences', 'save_playback_preferences', 'get_snapshot', 'rename_session', 'edit_event', 'set_input_offset', 'set_recorder_speaker'})
 
     def test_input_offset_is_per_session_metadata_and_never_rewrites_captured_facts(self):
         recorder.write(self.folder/'input-events.json',dict(version=1,state='complete',duration=10,
@@ -362,6 +362,22 @@ class ReviewTests(unittest.TestCase):
         for axis, value in [('columns', float('nan')), ('rows', True), ('rows', .99), ('../config', .5)]:
             self.assertFalse(first.save_layout(axis, value)['ok'])
         self.assertEqual(reopened.get_layout()['data'], {'columns': .7, 'rows': .45})
+
+    def test_playback_preferences_persist_separately_and_preserve_materials(self):
+        before = {p.name: p.read_bytes() for p in self.folder.iterdir()}
+        preferences = self.root / 'state/review-layout.json'
+        api = ReviewAPI(self.folder, {}, preferences)
+        self.assertTrue(api.get_playback_preferences()['data']['double_click_fullscreen'])
+        self.assertTrue(api.save_playback_preferences(False)['ok'])
+        self.assertTrue(api.save_layout('columns', .7)['ok'])
+        reopened = ReviewAPI(self.folder, {}, preferences)
+        self.assertFalse(reopened.get_playback_preferences()['data']['double_click_fullscreen'])
+        self.assertEqual(reopened.get_layout()['data'], {'columns': .7})
+        for bad in (0, 'false', None, {}, 1):
+            self.assertFalse(reopened.save_playback_preferences(bad)['ok'])
+        preferences.with_name('review-playback.json').write_text('[]', encoding='utf-8')
+        self.assertTrue(reopened.get_playback_preferences()['data']['double_click_fullscreen'])
+        self.assertEqual(before, {p.name: p.read_bytes() for p in self.folder.iterdir()})
 
     def test_corrupt_layout_preferences_do_not_block_review(self):
         preferences = self.root / 'layout.json'
