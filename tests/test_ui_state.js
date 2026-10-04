@@ -8,6 +8,18 @@ const vm = require('node:vm');
 const {State,vocabularyWords,updateView,lastInstallView} = require('../ui/state.js');
 const {matchedWindowValue} = require('../ui/state.js');
 
+test('open drafts retain their vocabulary revision across live agent refreshes',()=>{
+  const state=new State();
+  state.accept({active_preset_id:'one',config:{game:'Synthetic',vocabulary_revision:'before'}});
+  state.openDraft('edit');
+  state.accept({active_preset_id:'one',config:{game:'Synthetic',vocabulary_revision:'after'}});
+  assert.equal(state.presetPayload().expected_vocabulary_revision,'before');
+  state.cancelDraft();state.openDraft('edit');
+  assert.equal(state.presetPayload().expected_vocabulary_revision,'after');
+  state.openDraft('new');
+  assert.equal(state.presetPayload().expected_vocabulary_revision,undefined);
+});
+
 test('saved window may display its unique live match without changing a draft',()=>{
   const old='Game:OldRandom:game.exe',live='Game:NewRandom:game.exe';
   const items=[{itemValue:live,itemEnabled:true}];

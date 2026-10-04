@@ -82,6 +82,16 @@ def frame(folder, at, output):
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Think Aloud 外部预处理接口（本地文件，JSON 输出）')
     commands = parser.add_subparsers(dest='command', required=True)
+    for action in ('status', 'preview', 'apply'):
+        command = commands.add_parser('vocabulary-' + action, help='本机预设词库快照：回读、预览或应用；需要运行中的记录器')
+        command.add_argument('--app-root', default=str(Path(__file__).resolve().parent))
+        if action == 'apply':
+            command.add_argument('--plan', required=True, help='vocabulary-preview 保存的计划 JSON')
+        else:
+            command.add_argument('--preset', required=action == 'preview', help='稳定预设 ID')
+            command.add_argument('--source', action='append', default=[], help='词库目录中的 TXT 文件名；可重复指定')
+            if action == 'preview':
+                command.add_argument('--output', required=True, help='在工作目录保存计划；不覆盖已有文件')
     discovery = commands.add_parser('scan', help='扫描已就绪场次；--publish 为旧场次补发信号')
     discovery.add_argument('database')
     discovery.add_argument('--publish', action='store_true')
@@ -180,7 +190,23 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         name = args.command
-        if name == 'scan':
+        if name.startswith('vocabulary-'):
+            from vocabulary_ipc import request, MAX_MESSAGE
+            action = name.removeprefix('vocabulary-')
+            if action == 'apply':
+                plan = Path(args.plan)
+                if plan.stat().st_size > MAX_MESSAGE:
+                    raise ValueError('计划超过 2 MB。')
+                payload = dict(action=action, plan=json.loads(plan.read_text(encoding='utf-8-sig')))
+            else:
+                payload = dict(action=action, preset_id=args.preset, sources=args.source)
+            result = request(args.app_root, payload)
+            if result.get('ok') and action == 'preview':
+                with Path(args.output).open('x', encoding='utf-8') as output:
+                    json.dump(result['data'], output, ensure_ascii=False, indent=2, allow_nan=False)
+            print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+            return 0 if result.get('ok') else 1
+        elif name == 'scan':
             value = scan(args.database, args.publish, args.include_test)
         elif name == 'visual-nodes':
             from visual_nodes import extract

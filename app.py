@@ -64,10 +64,18 @@ def run_window(root):
     window.events.loaded += service.check_startup_update
     # Explicit renderer prevents silent fallback to the obsolete MSHTML engine.
     webview.settings['ALLOW_FILE_URLS'] = True
+    from vocabulary_ipc import VocabularyServer
+    try:
+        vocabulary_server = VocabularyServer(root, service._vocabulary_request).start()
+    except OSError:
+        # Optional agent integration must not prevent ordinary recording/review.
+        vocabulary_server = None
     try:
         webview.start(gui='edgechromium', debug=False, private_mode=False,
                       storage_path=str(root / 'state' / 'webview'), icon=str(root / 'ui' / 'brand.ico'))
     finally:
+        if vocabulary_server is not None:
+            vocabulary_server.close()
         # The native loop may end before a closed-event worker finishes. Keep
         # the instance lock until verified child cleanup has completed.
         service.shutdown()

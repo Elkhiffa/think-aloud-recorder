@@ -27,6 +27,7 @@ from model_manager import ModelManager
 from portable_config import load_settings, stored_settings, default_vault_path
 from processing import process_isolated
 import secret_store
+import vocabulary_agent
 
 
 PUBLIC_KEYS = ('game', 'vault', 'preset', 'source', 'window', 'monitor', 'mic',
@@ -95,6 +96,8 @@ class DesktopService:
         self._cfg.setdefault('record_inputs', False)
         self._cfg.pop('obsidian_exe', None)
         self._initialize_presets()
+        self._config_file_revision = (vocabulary_agent.file_digest(self.root / 'config.json')
+                                      if (self.root / 'config.json').exists() else None)
         self._model = ModelManager(self.root)
         from updater import UpdateManager
         self._updates = UpdateManager(self.root)
@@ -230,6 +233,7 @@ class DesktopService:
         result['record_inputs'] = self._cfg.get('record_inputs') is True and self._cfg.get('source') == '游戏窗口'
         result['vault'] = str(Path(self._cfg['vault']).resolve())
         result['configured'] = bool(self._cfg.get('configured'))
+        result['vocabulary_revision'] = vocabulary_agent.revision(self._cfg)
         result['games'] = {
             name: {key: deepcopy(values[key]) for key in PRESET_KEYS if key in values}
             for name, values in self._cfg.get('games', {}).items()
@@ -289,6 +293,75 @@ class DesktopService:
     def _persist(self, cfg):
         stored = stored_settings(self.root, deepcopy(cfg))
         recorder.write(self.root / 'config.json', stored)
+        self._config_file_revision = vocabulary_agent.file_digest(self.root / 'config.json')
+
+    def _vocabulary_request(self, payload):
+        """Private agent bridge; UI/recording jobs remain the settings authority."""
+        with self._lock:
+            try:
+                if not isinstance(payload, dict) or payload.get('action') not in ('status', 'preview', 'apply'):
+                    raise vocabulary_agent.VocabularyError('INVALID_REQUEST', '未知的词库操作。')
+                if self._closed.is_set() or self._exit_pending:
+                    raise vocabulary_agent.VocabularyError('APP_CLOSING', '应用正在关闭，请在下次启动后重试。')
+                action = payload['action']
+                allowed = {'action', 'plan'} if action == 'apply' else {'action', 'preset_id', 'sources'}
+                if set(payload) - allowed:
+                    raise vocabulary_agent.VocabularyError('INVALID_REQUEST', '词库请求包含不支持的字段。')
+                if vocabulary_agent.file_digest(self.root / 'config.json') != self._config_file_revision:
+                    raise vocabulary_agent.VocabularyError('CONFIG_CHANGED', '配置文件被外部修改，请重启应用读取后再预览。')
+                ident, sources = payload.get('preset_id'), payload.get('sources', [])
+                if action == 'status':
+                    result = vocabulary_agent.status(self.root, self._cfg, ident, sources)
+                elif action == 'preview':
+                    result, _ = vocabulary_agent.preview(self.root, self._cfg, ident, sources)
+                else:
+                    # Never wait for, cancel, or seize a recorder/OBS operation.
+                    if not self._operation_lock.acquire(blocking=False):
+                        raise vocabulary_agent.VocabularyError('BUSY', '应用正在处理操作，请稍后重试同一计划。')
+                    try:
+                        try:
+                            self._guard()
+                        except RuntimeError as error:
+                            raise vocabulary_agent.VocabularyError('BUSY', str(error)) from error
+                        plan = payload.get('plan')
+                        cfg, changed = vocabulary_agent.apply_plan(self.root, self._cfg, plan)
+                        if changed:
+                            self._persist_vocabulary(cfg, plan['preset_id'])
+                            self._cfg = cfg
+                        # Read the actual saved snapshot back, without returning config/secrets.
+                        ident = plan['preset_id']
+                        saved = recorder.read(self.root / 'config.json')
+                        read_back = vocabulary_agent.describe(saved, ident)
+                        effective = vocabulary_agent.describe(self._cfg, ident)
+                        if read_back != effective:
+                            raise vocabulary_agent.VocabularyError('READBACK_FAILED', '保存后回读不一致，请停止重试并检查安装。')
+                        result = dict(plan_id=plan['plan_id'], changed=changed, saved=read_back,
+                                      effective=effective, applies_to='future_recordings',
+                                      historical_sessions_changed=False, transcription_started=False)
+                    finally:
+                        self._operation_lock.release()
+                return ok(result)
+            except Exception as error:
+                result = self._error(error)
+                result['code'] = getattr(error, 'code', 'VOCABULARY_ERROR')
+                return result
+
+    def _persist_vocabulary(self, cfg, ident):
+        # Preserve the exact stored values for every unrelated setting, including
+        # relative paths; a refresh is not a full settings migration/save.
+        import hashlib
+        import json
+        path = self.root / 'config.json'
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != self._config_file_revision:
+            raise vocabulary_agent.VocabularyError('CONFIG_CHANGED', '配置已被外部修改，请重新启动后预览。')
+        saved = json.loads(raw)
+        for key in vocabulary_agent.FIELDS:
+            saved['presets'][ident][key] = deepcopy(cfg['presets'][ident][key])
+            if ident == cfg.get('active_preset_id'):
+                saved[key] = deepcopy(cfg[key])
+        recorder.write(path, saved)
+        self._config_file_revision = vocabulary_agent.file_digest(path)
 
     def _preset_list(self):
         return [dict(id=ident, name=value.get('name', value.get('game', '')),
@@ -786,6 +859,10 @@ class DesktopService:
         if not isinstance(payload, dict):
             raise ValueError('设置格式不正确。')
         payload = dict(payload)
+        expected = payload.pop('expected_vocabulary_revision', None)
+        current = (base or self._cfg)
+        if expected is not None and expected != vocabulary_agent.revision(current):
+            raise ValueError('词库已被其他操作更新。请先保留手动输入，再关闭并重新打开设置后保存，避免覆盖新词条。')
         confirmed = payload.pop('confirmed_vault', None)
         if confirmed is not None and (not isinstance(confirmed, str) or not Path(confirmed).is_absolute()):
             raise ValueError('资料库复用确认必须对应所选文件夹的绝对路径。')

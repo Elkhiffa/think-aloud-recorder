@@ -59,6 +59,7 @@
     openDraft(mode='edit') {
       this.confirmedVault='';
       this.editingId=mode==='edit'?this.activeId:null;
+      this.draftVocabularyRevision=this.editingId?this.saved.vocabulary_revision:null;
       this.draft=defaults(this.snapshot?.suggested_vault||this.saved.vault||this.snapshot?.default_vault?.path||'');
       if(!this.editingId)this.draft.hotword_files=clone(this.snapshot?.default_hotword_files||[]);
       if(this.editingId) for(const key of FIELDS) if(this.saved[key]!==undefined)this.draft[key]=clone(this.saved[key]);
@@ -77,7 +78,7 @@
     syncVocabulary() { if(this.draft)this.draft.hotwords=vocabularyWords(this.draft).join('\n'); }
     addVocabularyFiles(files) { if(!this.draft)return 0;const ids=new Set(this.draft.hotword_files.map(file=>file.id));let count=0;for(const file of files||[]){if(!ids.has(file.id)){this.draft.hotword_files.push(clone(file));ids.add(file.id);count++;}}this.syncVocabulary();return count; }
     removeVocabularyFile(id) { if(this.draft){this.draft.hotword_files=this.draft.hotword_files.filter(file=>file.id!==id);this.syncVocabulary();} }
-    presetPayload() { if(!this.draft)throw new Error('没有正在编辑的预设。');return {...clone(this.draft),name:this.draft.game.trim(),game:this.draft.game.trim(),...(this.sameVault(this.confirmedVault,this.draft.vault)?{confirmed_vault:this.confirmedVault}:{})}; }
+    presetPayload() { if(!this.draft)throw new Error('没有正在编辑的预设。');return {...clone(this.draft),name:this.draft.game.trim(),game:this.draft.game.trim(),...(this.draftVocabularyRevision?{expected_vocabulary_revision:this.draftVocabularyRevision}:{}),...(this.sameVault(this.confirmedVault,this.draft.vault)?{confirmed_vault:this.confirmedVault}:{})}; }
     startPayload() { return {}; }
     validateStep(step=this.step) {
       const d=this.draft;if(!d)return '请先打开录制设置。';

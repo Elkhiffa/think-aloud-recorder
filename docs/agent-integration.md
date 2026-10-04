@@ -83,3 +83,6 @@ revision 是本地源文件大小/修改时间和相关语义设置的指纹，�
 可维护的预处理 skill 位于源码 `skills/think-aloud-preprocess`，包括方法和具体结果格式。它可单独复制到另一台电脑的 Codex skills 目录；软件包不携带用户技能配置。持续监控由用户明确授权的外部会话承担，本接口不会自行创建会话、定时任务或云端上传。
 
 0.7.1 支持在回看中校准体验事件的起止时间、名称、概述、问题与感受、备注。原 agent 结果保持不变，手动修正独立保存在 `experience-event-edits.json`。下次整理读取 `evidence.manual_corrections` 的字段差异和 diff，并提交当前 `corrections_review` 采纳说明；漏读或并发新修改会阻止覆盖。事件阅读顺序为概述、具体问题、弱化备注、默认收起的证据。
+## 词库衔接
+
+0.7.5 起，已授权补词的外部 agent 可通过运行中应用的 `vocabulary-status`、`vocabulary-preview`、`vocabulary-apply` 刷新指定预设快照。源 TXT 更新不等于预设已生效；完整步骤及冲突处理见 [本机词库接口](vocabulary-agent.md)。该操作不重转写、不改历史场次，也不启动监听任务。

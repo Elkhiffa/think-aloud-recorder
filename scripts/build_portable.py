@@ -34,6 +34,7 @@ ROOT_FILES = (
     'visual_nodes.py', 'visual_change.py', 'visual_evidence.py', 'visual_compare.py', 'player.html', 'requirements-lock.txt',
     'input_capture.py', 'input_capture_windows.py', 'input_capture_devices.py', 'session_metadata.py',
     'updater.py', 'update_installer.py',
+    'vocabulary_agent.py', 'vocabulary_ipc.py', 'docs/vocabulary-agent.md',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md', 'docs/updates.md',
     'scripts/build_portable.py', 'scripts/brand_launcher.py', 'scripts/fetch_runtime.py', 'scripts/fetch_input_runtime.py',
     'scripts/fetch_media_runtime.py',
