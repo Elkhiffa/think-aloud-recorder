@@ -36,7 +36,7 @@ def failure_event(component, error=None):
         detail.update(exception_type=type(error).__name__[:80], message=_safe_error(error)[:1000],
                       frames=[dict(file=Path(frame.filename).name, line=frame.lineno, function=frame.name)
                               for frame in traceback.extract_tb(error.__traceback__)[-12:]])
-        for key in ('errno', 'winerror'):
+        for key in ('errno', 'winerror', 'replace_attempts'):
             value = getattr(error, key, None)
             if type(value) is int: detail[key] = value
     return dict(type='error', diagnostic=detail)
@@ -608,7 +608,29 @@ def _replace_journal(path, value):
                                         separators=(',', ':'), allow_nan=False) + '\n')
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(temp, path)
+    _replace_checkpoint(temp, path)
+
+
+def _replace_checkpoint(temp, path):
+    """Retry only Windows access/sharing conflicts on the same completed file.
+
+    Readers can temporarily deny replacement even when the directory is writable.
+    Never retry the journal append or remove the last committed checkpoint. The
+    routine checkpoint writer holds its serialization lock, not the input lock.
+    Exhaustion keeps the original OS error and the existing failure/gap behavior.
+    """
+    delays = (.01, .02, .04, .08, .16, .32)  # At most 0.63 seconds of backoff.
+    for attempt in range(len(delays) + 1):
+        try:
+            os.replace(temp, path)
+            return
+        except OSError as error:
+            if getattr(error, 'winerror', None) not in (5, 32, 33):
+                raise
+            if attempt == len(delays):
+                error.replace_attempts = attempt + 1
+                raise
+            time.sleep(delays[attempt])
 
 
 def _atomic_json(path, value):
@@ -617,7 +639,7 @@ def _atomic_json(path, value):
         json.dump(value, handle, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
         handle.flush()
         os.fsync(handle.fileno())
-    os.replace(temp, path)
+    _replace_checkpoint(temp, path)
 
 
 def _read_revocation(path):

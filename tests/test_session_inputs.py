@@ -110,6 +110,30 @@ class SessionInputTests(unittest.TestCase):
         client.get_record_status.assert_not_called()
         self.assertIsNone(session._input_clock_anchor)
 
+    def test_journal_failure_does_not_turn_initial_obs_time_into_measured_alignment(self):
+        session = self.session(input_state='recording', input_clock=dict(initial_seconds=.199,
+                                                                       last_verified_seconds=4.199))
+        capture, events = MagicMock(), MagicMock()
+        capture.health.return_value = dict(state='failed', error='操作日志写入失败')
+        capture.stop.return_value = dict(version=1, state='failed', duration=5.199,
+                                         error='操作日志写入失败')
+        session._input_capture = capture
+        session._input_clock_events = events
+        session._input_clock_anchor = (100, .199, .001)
+        session._input_clock_trusted = (104, 4.199, .001)
+        session._input_clock_continuous = True
+        self.assertFalse(session.observe_input_clock(SimpleNamespace(output_duration=5199), 105, 105.002))
+        events.close.assert_called_once()
+        self.assertIsNone(session._input_capture)
+        self.assertFalse(session._input_clock_continuous)
+        self.assertEqual(session.meta['input_state'], 'failed')
+        self.assertEqual(session.meta['input_clock']['initial_seconds'], .199)
+        with patch.object(recorder, 'video_clock_endpoint') as endpoint:
+            session.calibrate_input_clock('synthetic-only.mp4')
+        endpoint.assert_not_called()
+        from review_runtime import input_alignment
+        self.assertEqual(input_alignment(session.meta)['source'], 'uncalibrated')
+
     def test_delayed_listener_start_marks_all_preceding_video_as_startup_gap(self):
         from input_capture import InputRecorder
         session=self.session()
