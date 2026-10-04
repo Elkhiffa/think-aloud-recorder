@@ -293,6 +293,22 @@ async function homeChecks(context, origin) {
     rects.forEach(rect => { closeEnough(rect.height, 48, 'capture control height'); closeEnough(rect.y + rect.height / 2, rects[0].y + rects[0].height / 2, 'capture control alignment'); });
     await noHorizontalOverflow(page); return { headings, rects };
   });
+  await check('dropdown arrow insets match in both themes and native keyboard selection remains available',async()=>{
+    for(const mode of ['light','dark']){
+      await theme(page,mode);
+      const styles=await page.locator('#presetSelect,#filter').evaluateAll(nodes=>nodes.map(node=>{
+        const s=getComputedStyle(node);return {left:s.paddingLeft,right:s.paddingRight,position:s.backgroundPosition,image:s.backgroundImage,appearance:s.appearance};
+      }));
+      styles.forEach(s=>{assert.equal(s.left,'16px');assert.equal(s.right,'48px');assert.equal(s.appearance,'none');assert.match(s.position,/16px/);assert.match(s.image,/svg/);});
+      assert.equal(styles[0].image,styles[1].image);
+    }
+    await theme(page,'light');
+    await page.locator('#filter').focus();await page.keyboard.press('ArrowDown');await page.keyboard.press('Enter');
+    assert.equal(await page.locator('#filter').inputValue(),'ready');
+    await page.locator('#filter').selectOption('processing');
+    assert.equal(await page.locator('#filter').evaluate(n=>n.clientWidth-parseFloat(getComputedStyle(n).paddingLeft)-parseFloat(getComputedStyle(n).paddingRight)>=90),true,'long filter labels fit beside the arrow');
+    await page.locator('#filter').selectOption('all');
+  });
   await check('home is only the product window, with an independently scrolling session list', async () => {
     assert.equal(await page.getByText('原话选中', { exact: true }).count(), 0);
     assert.equal(await page.getByText('窗口未打开', { exact: true }).count(), 0);

@@ -1,7 +1,8 @@
 # Compact main window — 0.7.6
 
-The supplied interaction sketches guide hierarchy and control placement; the existing warm-paper visual identity remains. Main-screen spacing uses the 4/8/16/24/32/40 px scale.
+The supplied interaction sketches guide hierarchy and control placement; the existing warm-paper visual identity remains. Main-screen spacing uses the 4 px and multiples of 8 px scale.
 
+- Native select controls share a 16 px left inset and arrow inset with 48 px of right text reservation. Dark mode and forced-colors keep the arrow visible; native dropdown keyboard behavior remains. Shared main-window dialogs use the same spacing scale.
 - Header owns recording-method help, version/update access and theme.
 - Preset selection, accessible plus and gear buttons, and recording action align at 48 px. Recording time stays above the action and the microphone meter below. Quiet states remain free of microphone prose; the existing two-minute warning remains visible above the action.
 - Project, local date and duration share a metadata row. Activity details use the entire row width and wrap. Completed preprocessing counts and storage paths remain available in expanded details/settings; active jobs and exceptional statuses stay visible.
@@ -11,7 +12,7 @@ The supplied interaction sketches guide hierarchy and control placement; the exi
 
 - Python regression: 757 tests, 754 passed and 3 environment skips.
 - Front-end state/bridge tests: 42 passed.
-- Edge browser acceptance: 50 checks passed, covering primary actions, background processing, session expansion/rename, long paths, preset editor, vocabulary revision safeguards and existing review/update behavior. Main-screen screenshots cover light/dark 920 × 1040 and compact 720 × 620; 390 px reflow remains operable without horizontal overflow.
+- Edge browser acceptance: 51 checks passed, covering primary actions, background processing, session expansion/rename, long paths, preset editor, vocabulary revision safeguards and existing review/update behavior. Main-screen screenshots cover light/dark 920 × 1040 and compact 720 × 620; 390 px reflow remains operable without horizontal overflow.
 - Microphone browser checks pass for signal/quiet/error conditions, two-minute warnings, stable ordinary recording geometry, clock/button/meter order, bridge timeout and session isolation.
 - Real `app.run_window` with an isolated synthetic configuration confirms WebView2 load and no horizontal overflow under this computer's display/text scaling. The desktop screenshot confirms the new arrangement. Manual click verification stopped when the user's screenshot overlay covered the window; browser interaction coverage and the native bridge check remain separate evidence.
 - The native smoke also verifies the preceding vocabulary API change with a separate CLI process, the live UI snapshot and stale-editor rejection. Only synthetic configuration and vocabulary are used; no recording or cloud transcription is initiated.
