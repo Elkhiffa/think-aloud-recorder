@@ -4,7 +4,7 @@ Windows desktop recording and transcription app. Preserve original recordings an
 
 ## Working rules
 - Develop on a dedicated branch in a separate Git worktree. Do not edit the existing private portable installation.
-- Never commit or package runtime configuration, credentials, recordings, transcripts, logs, model weights, or user vocabulary files. Build releases from explicit allowlists.
+- Never commit or package runtime configuration, credentials, recordings, transcripts, logs, model weights, or unapproved user vocabulary files. The two shared plain-text dictionaries documented in `vocabularies/README.md` are explicitly approved for Git; local vocabulary maintenance records and backups remain excluded. Build releases from explicit allowlists.
 - Preserve two-track semantics: track 1 = desktop + microphone playback mix; track 2 = microphone only and sole transcription input.
 - Do not treat process launch as recording/review success. Use OBS status and player readiness acknowledgements.
 - Preserve session locks, recovery, old transcript versions, user notes, and uncertain cloud submission guards.

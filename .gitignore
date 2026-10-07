@@ -11,6 +11,8 @@
 /config.json
 /vocabularies/*
 !/vocabularies/uiux-terms.txt
+!/vocabularies/燕云十六声-合并去重.txt
+!/vocabularies/README.md
 *.lock
 __pycache__/
 *.pyc
