@@ -16,6 +16,7 @@ EXPECTED_EXPORTS = {
     'get_state': [],
     'get_microphone_state': [],
     'refresh_devices': [],
+    'refresh_device_inventory': [],
     'save_settings': ['payload'],
     'save_preset': ['payload', 'preset_id'],
     'select_preset': ['id'],

@@ -177,6 +177,12 @@ async function bridge(page, state = snapshot(), requestedTheme = 'light') {
         fixture.snapshot.device_refresh = { id, state: 'succeeded' };
         return { ok: true, accepted: true, data: { refresh_id: id } };
       }
+      if (method === 'refresh_device_inventory') {
+        const id=`fixture-inventory-${fixture.refreshSequence++}`;
+        if(fixture.refreshSnapshot)Object.assign(fixture.snapshot,JSON.parse(JSON.stringify(fixture.refreshSnapshot)));
+        fixture.snapshot.device_inventory={id,state:fixture.holdInventory?'running':'succeeded',window_selection:fixture.snapshot.device_inventory?.window_selection||fixture.snapshot.readiness?.window_selection};
+        return {ok:true,data:{inventory_id:id}};
+      }
       if (method === 'choose_hotword_files') return { ok: true, data: { files: fixture.imported } };
       if (method === 'get_layout') return { ok: true, data: fixture.layout };
       if (method === 'save_layout') { fixture.layout = { ...fixture.layout, [args[0]]: args[1] }; return { ok: true }; }
@@ -563,13 +569,15 @@ async function deviceSetupChecks(context, origin) {
     const page = await context.newPage(); await page.setViewportSize({ width: scenario.width, height: scenario.height });
     await bridge(page, snapshot({ devices: { window: [], monitor: [], mic: [] }, device_defaults: {} }), scenario.theme);
     await page.goto(origin + '/ui/index.html'); await page.locator('#newPresetButton:not([disabled])').waitFor();
-    await check(`empty devices offer OBS setup, use explicit defaults, and preserve later manual choices (${scenario.theme} ${scenario.width})`, async () => {
+    await check(`explicit first inventory refresh initializes only an untouched new draft (${scenario.theme} ${scenario.width})`, async () => {
       const original = await page.evaluate(() => JSON.stringify(window.__syntheticFixture.snapshot.config));
+      await page.evaluate(()=>{window.__syntheticFixture.holdInventory=true;});
       await page.locator('#newPresetButton').click(); await page.locator('#wizardNext').click();
-      assert.equal(await page.locator('#refreshDevices').innerText(), '设置 OBS');
+      await page.evaluate(()=>{window.__syntheticFixture.snapshot.device_inventory.state='succeeded';return poll();});
+      assert.equal(await page.locator('#refreshDevices').innerText(), '刷新设备');
       assert.equal(await page.evaluate(() => document.activeElement.id), 'game');
       await page.locator('#game').fill('合成 OBS 初始化验证');
-      await page.evaluate(value => { window.__syntheticFixture.refreshSnapshot = value; }, detected);
+      await page.evaluate(value => { window.__syntheticFixture.refreshSnapshot = value;window.__syntheticFixture.holdInventory=false; }, detected);
       await page.locator('#refreshDevices').click();
       await page.waitForFunction(() => document.querySelector('#source').value === '整个显示器' && document.querySelector('#target').value === 'synthetic-primary-display' && document.querySelector('#mic').value === 'default');
       assert.equal(await page.locator('#refreshDevices').innerText(), '刷新设备');
@@ -577,12 +585,13 @@ async function deviceSetupChecks(context, origin) {
       assert.equal(await page.locator('#wizardError').isVisible(), false);
       assert.equal(await page.evaluate(() => JSON.stringify(window.__syntheticFixture.snapshot.config)), original, 'setup initializes only the draft');
       assert.equal((await calls(page, 'save_preset')).length, 0);
-      assert.equal((await calls(page, 'refresh_devices')).length, 1);
+      assert.equal((await calls(page, 'refresh_device_inventory')).length, 2);
+      assert.equal((await calls(page, 'refresh_devices')).length, 0);
       await screen(page, `wizard-obs-defaults-${scenario.theme}-${scenario.width}x${scenario.height}`);
       await page.locator('#target').selectOption('synthetic-secondary-display');
       await page.locator('#mic').selectOption('synthetic-physical-mic');
       await page.locator('#refreshDevices').click();
-      await page.waitForFunction(() => window.__syntheticFixture.calls.filter(call => call.method === 'refresh_devices').length === 2 && !document.querySelector('#refreshDevices').disabled);
+      await page.waitForFunction(() => window.__syntheticFixture.calls.filter(call => call.method === 'refresh_device_inventory').length === 3 && !document.querySelector('#refreshDevices').disabled);
       assert.equal(await page.locator('#target').inputValue(), 'synthetic-secondary-display');
       assert.equal(await page.locator('#mic').inputValue(), 'synthetic-physical-mic');
       assert.equal(await page.evaluate(() => JSON.stringify(window.__syntheticFixture.snapshot.config)), original);
@@ -712,11 +721,11 @@ async function windowSelectionChecks(context, origin) {
     assert.equal((await calls(page, 'save_preset')).length, 0);
   });
   await check('ambiguous matches retain the saved target and never select a candidate automatically', async () => {
-    await patchSnapshot(page, {readiness:{ready:false,checking:false,errors:[{code:'WINDOW_AMBIGUOUS',step:1,message:'检测到多个匹配的游戏窗口，请重新选择。'}],
+    await patchSnapshot(page, {device_inventory:{id:'ambiguous',state:'succeeded',window_selection:{requested:saved,resolved:null,status:'ambiguous'}},readiness:{ready:false,checking:false,errors:[{code:'WINDOW_AMBIGUOUS',step:1,message:'检测到多个匹配的游戏窗口，请重新选择。'}],
       window_selection:{requested:saved,resolved:null,status:'ambiguous'}}});
     await page.locator('#game').click(); await page.evaluate(() => poll());
     assert.equal(await page.locator('#target').inputValue(), saved);
-    assert.match(await page.locator('#target option:checked').innerText(), /当前未找到/);
+    assert.match(await page.locator('#target option:checked').innerText(), /多个匹配/);
     await page.locator('#wizardCancel').click();
     assert.equal(await page.locator('#recordButton').isDisabled(), true);
     assert.match(await page.locator('#blockers').innerText(), /多个匹配/);

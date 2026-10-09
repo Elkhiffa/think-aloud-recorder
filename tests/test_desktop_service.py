@@ -85,6 +85,10 @@ class DesktopServiceTests(unittest.TestCase):
             self.assertFalse(readiness.is_alive(), 'synthetic readiness did not finish')
             if readiness is self.service._readiness_thread:
                 break
+        inventory = self.service._inventory_thread
+        if inventory:
+            inventory.join(5)
+            self.assertFalse(inventory.is_alive(), 'synthetic inventory did not finish')
         worker = self.service._background_thread
         if background and worker:
             worker.join(5)
@@ -1363,14 +1367,18 @@ class DesktopServiceTests(unittest.TestCase):
                          patch.object(bridge.recorder, 'client', side_effect=during_request if operation == 'connect' else None,
                                       return_value=client), \
                          patch.object(self.service, '_probe_obs_devices', side_effect=lambda: self.actual_probe(self.service)), \
-                         patch.object(self.service, '_cache_devices') as cache, \
+                         patch.object(self.service, '_cache_devices', wraps=self.service._cache_devices) as cache, \
                          patch.object(self.service, '_probe_location') as location:
                         state = self.service._run_automatic_readiness()
                     client.create_input.assert_not_called()
                     client.remove_input.assert_not_called()
                     client.get_input_properties_list_property_items.assert_not_called()
                     client.disconnect.assert_called_once_with()
-                    cache.assert_not_called()
+                    # Native evidence completed before this OBS I/O boundary.
+                    # The cancelled OBS probe cannot publish a second result.
+                    cache.assert_called_once()
+                    self.assertIn('inventory_id', cache.call_args.kwargs)
+                    self.assertEqual(self.service._device_inventory['state'], 'succeeded')
                     location.assert_not_called()
                     self.assertFalse(state['ready'])
                     self.assertIsNone(state['checked_at'])
@@ -1447,6 +1455,246 @@ class DesktopServiceTests(unittest.TestCase):
                 self.wait()
             self.assertEqual(self.service._device_refresh['state'], 'succeeded')
             self.assertTrue(self.service._readiness['ready'])
+
+    def test_native_inventory_resolves_saved_window_without_obs_or_persisting_and_cannot_start(self):
+        old, current = 'Game:OldClass:game.exe', 'Game:NewClass:game.exe'
+        self.service._cfg['window'] = old
+        self.devices['window'] = [dict(itemName='Game', itemValue=current, itemEnabled=True)]
+        self.service._devices = dict(mic=[], window=[], monitor=[])
+        self.service._invalidate_device_inventory()
+        self.service._readiness.update(ready=False, checking=False)
+        before = deepcopy(self.service._cfg)
+        with patch.object(self.service, '_main_is_foreground', return_value=False), \
+             patch.object(device_inventory, 'devices', return_value=deepcopy(self.devices)), \
+             patch.object(bridge.recorder, 'client', side_effect=ConnectionRefusedError('offline')) as connect, \
+             patch.object(bridge.recorder, 'devices') as configure, \
+             patch.object(self.service, '_recover') as recover, \
+             patch.object(self.service, '_persist') as persist, \
+             patch.object(self.service, '_probe_obs_devices', side_effect=lambda: self.actual_probe(self.service)), \
+             patch.object(bridge.recorder.Session, 'start') as start:
+            request = self.service.refresh_device_inventory()
+            self.assertTrue(request['ok'], request)
+            self.wait()
+            snapshot = self.service.get_state()['data']
+            inventory = snapshot['device_inventory']
+            self.assertEqual(inventory['id'], request['data']['inventory_id'])
+            self.assertEqual(inventory['state'], 'succeeded')
+            self.assertIsInstance(inventory['checked_at'], float)
+            self.assertEqual(inventory['window_selection']['matched_by'], 'exe_title')
+            self.assertEqual(inventory['window_selection']['resolved'], current)
+            self.assertEqual(snapshot['devices'], self.devices)
+            self.assertFalse(snapshot['readiness']['ready'])
+            connect.assert_not_called()
+            self.assertTrue(self.service.start_recording()['ok'])
+            self.wait()
+            start.assert_not_called()
+            connect.assert_called_once()
+            configure.assert_not_called()
+            recover.assert_not_called()
+            persist.assert_not_called()
+        self.assertEqual(self.service._cfg, before)
+        self.assertEqual(self.service._readiness['errors'][0]['code'], 'OBS_UNAVAILABLE')
+
+    def test_failed_native_inventory_preserves_stale_devices_and_saved_selections(self):
+        before = self.service.get_state()['data']
+        with patch.object(device_inventory, 'devices', side_effect=OSError('synthetic native query failed')):
+            result = self.service.refresh_device_inventory()
+            self.wait()
+        after = self.service.get_state()['data']
+        self.assertEqual(after['device_inventory']['id'], result['data']['inventory_id'])
+        self.assertEqual(after['device_inventory']['state'], 'failed')
+        self.assertIn('synthetic native query failed', after['device_inventory']['error'])
+        self.assertIsNone(after['device_inventory']['window_selection'])
+        self.assertEqual(after['devices'], before['devices'])
+        self.assertEqual(after['device_defaults'], before['device_defaults'])
+        self.assertEqual(after['config'], before['config'])
+
+    def test_native_inventory_success_with_no_window_is_distinct_from_failure(self):
+        with patch.object(device_inventory, 'devices', return_value=dict(mic=[], window=[], monitor=[])):
+            self.assertTrue(self.service.refresh_device_inventory()['ok'])
+            self.wait()
+        inventory = self.service.get_state()['data']['device_inventory']
+        self.assertEqual(inventory['state'], 'succeeded')
+        self.assertEqual(inventory['error'], '')
+        self.assertEqual(inventory['window_selection']['status'], 'missing')
+        self.assertEqual(inventory['window_selection']['requested'], self.config['window'])
+
+    def test_native_inventory_obeys_ownership_close_and_busy_guards(self):
+        before = deepcopy(self.service._device_inventory)
+        for condition in ('active', 'obs_unknown', 'session_unknown', 'busy', 'dialog', 'closing', 'closed'):
+            with self.subTest(condition=condition), patch.object(device_inventory, 'devices') as native:
+                self.service._active = self.session() if condition == 'active' else None
+                self.service._obs_uncertain = condition == 'obs_unknown'
+                self.service._uncertain_ids = {'unknown-session'} if condition == 'session_unknown' else set()
+                self.service._activity['busy'] = condition == 'busy'
+                self.service._dialog_open = condition == 'dialog'
+                self.service._exit_pending = condition == 'closing'
+                if condition == 'closed':
+                    self.service._closed.set()
+                result = self.service.refresh_device_inventory()
+                self.assertFalse(result['ok'], result)
+                native.assert_not_called()
+                self.assertEqual(self.service._device_inventory, before)
+        self.service._closed.clear()
+        self.service._exit_pending = False
+
+    def test_native_inventory_and_snapshot_do_not_wait_for_obs_operation(self):
+        entered, release = threading.Event(), threading.Event()
+        before_activity = deepcopy(self.service._activity)
+        def native(**_kwargs):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return deepcopy(self.devices)
+        with patch.object(device_inventory, 'devices', side_effect=native):
+            try:
+                with self.service._operation_lock:
+                    result = self.service.refresh_device_inventory()
+                    self.assertTrue(result['ok'])
+                    self.assertTrue(entered.wait(2), 'inventory waited for the OBS operation lock')
+                    began = time.monotonic()
+                    state = self.service.get_state()['data']
+                    self.assertLess(time.monotonic() - began, .5)
+                    self.assertEqual(state['device_inventory']['state'], 'running')
+                    self.assertEqual(state['activity'], {**before_activity, 'elapsed_seconds': 0})
+                    repeat = self.service.refresh_device_inventory()
+                    self.assertFalse(repeat['data']['started'])
+                    self.assertEqual(repeat['data']['inventory_id'], result['data']['inventory_id'])
+                    self.service._cache_devices(dict(mic=[], window=[], monitor=[]))
+                    self.assertEqual(self.service._device_inventory, state['device_inventory'])
+            finally:
+                release.set()
+                self.wait()
+        self.assertEqual(self.service._device_inventory['id'], result['data']['inventory_id'])
+        self.assertEqual(self.service._device_inventory['state'], 'succeeded')
+
+    def test_closing_during_native_inventory_does_not_publish_late_result(self):
+        entered, release = threading.Event(), threading.Event()
+        def native(**_kwargs):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return dict(mic=[], window=[], monitor=[])
+        with patch.object(device_inventory, 'devices', side_effect=native):
+            try:
+                self.assertTrue(self.service.refresh_device_inventory()['ok'])
+                self.assertTrue(entered.wait(2))
+                before_devices = deepcopy(self.service._devices)
+                began = time.monotonic()
+                self.assertTrue(self.service.close_allowed())
+                self.assertLess(time.monotonic() - began, .5)
+                self.assertEqual(self.service._device_inventory['state'], 'idle')
+                after_close = deepcopy(self.service._device_inventory)
+            finally:
+                release.set()
+                self.wait()
+        self.assertEqual(self.service._devices, before_devices)
+        self.assertEqual(self.service._device_inventory, after_close)
+
+    def test_aborted_close_does_not_leave_native_inventory_running_or_accept_its_late_result(self):
+        entered, release = threading.Event(), threading.Event()
+        def native(**_kwargs):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return dict(mic=[], window=[], monitor=[])
+        before_devices = deepcopy(self.service._devices)
+        with patch.object(device_inventory, 'devices', side_effect=native), \
+             patch.object(self.service, 'close_allowed', side_effect=RuntimeError('synthetic close cancelled')):
+            try:
+                self.assertTrue(self.service.refresh_device_inventory()['ok'])
+                self.assertTrue(entered.wait(2))
+                with self.assertRaisesRegex(RuntimeError, 'synthetic close cancelled'):
+                    self.service.finish_for_close()
+                self.assertFalse(self.service._exit_pending)
+                self.assertEqual(self.service._device_inventory['state'], 'idle')
+                cancelled = deepcopy(self.service._device_inventory)
+            finally:
+                release.set()
+                self.wait()
+        self.assertEqual(self.service._devices, before_devices)
+        self.assertEqual(self.service._device_inventory, cancelled)
+        self.assertTrue(self.service.refresh_device_inventory()['ok'])
+        self.wait()
+        self.assertEqual(self.service._device_inventory['state'], 'succeeded')
+
+    def test_late_obs_probe_cannot_overwrite_newer_inventory_or_publish_ready(self):
+        entered, release = threading.Event(), threading.Event()
+        def obs_probe():
+            previous = deepcopy(self.devices)
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return previous, None
+        with patch.object(self.service, '_probe_obs_devices', side_effect=obs_probe):
+            try:
+                self.assertTrue(self.service._request_readiness(invalidate=True))
+                self.assertTrue(entered.wait(2))
+                with patch.object(device_inventory, 'devices', return_value=dict(mic=[], window=[], monitor=[])):
+                    self.assertTrue(self.service.refresh_device_inventory()['ok'])
+                    self.service._inventory_thread.join(2)
+                    self.assertFalse(self.service._inventory_thread.is_alive())
+                newest = deepcopy((self.service._devices, self.service._device_inventory))
+                self.assertEqual(newest[1]['window_selection']['status'], 'missing')
+            finally:
+                release.set()
+                self.wait()
+        self.assertEqual((self.service._devices, self.service._device_inventory), newest)
+        self.assertFalse(self.service.get_state()['data']['readiness']['ready'])
+
+    def test_saved_selection_change_invalidates_inflight_native_inventory(self):
+        entered, release = threading.Event(), threading.Event()
+        def native(**_kwargs):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return deepcopy(self.devices)
+        with patch.object(device_inventory, 'devices', side_effect=native), \
+             patch.object(self.service, '_request_readiness', return_value=False):
+            try:
+                self.assertTrue(self.service.refresh_device_inventory()['ok'])
+                self.assertTrue(entered.wait(2))
+                self.assertTrue(self.service.save_settings({'window': 'Other:Class:other.exe'})['ok'])
+                after_save = deepcopy((self.service._devices, self.service._device_inventory))
+            finally:
+                release.set()
+                self.wait()
+        self.assertEqual((self.service._devices, self.service._device_inventory), after_save)
+        self.assertEqual(self.service._device_inventory['state'], 'idle')
+        self.assertEqual(self.service._cfg['window'], 'Other:Class:other.exe')
+
+    def test_automatic_native_query_precedes_obs_launch_and_survives_engine_failure(self):
+        calls = []
+        self.service._startup_launch_attempted = False
+        def native(**_kwargs):
+            calls.append('native')
+            return deepcopy(self.devices)
+        def connect(*args, **kwargs):
+            calls.append('launch' if kwargs.get('launch') else 'connect')
+            raise ConnectionRefusedError('offline')
+        with patch.object(device_inventory, 'devices', side_effect=native), \
+             patch.object(bridge.recorder, 'client', side_effect=connect), \
+             patch.object(self.service, '_probe_obs_devices', side_effect=lambda: self.actual_probe(self.service)):
+            with self.service._operation_lock:
+                state = self.service._run_automatic_readiness()
+        self.assertEqual(calls, ['native', 'launch', 'connect'])
+        self.assertEqual(self.service._device_inventory['state'], 'succeeded')
+        self.assertFalse(state['ready'])
+        self.assertEqual(state['errors'][0]['code'], 'OBS_UNAVAILABLE')
+
+    def test_focus_cancelled_native_query_cannot_publish_or_consume_obs_launch_attempt(self):
+        before = deepcopy(self.service._devices)
+        self.service._startup_launch_attempted = False
+        foreground = {'active': True}
+        def native(**_kwargs):
+            foreground['active'] = False
+            self.service.main_activation_changed()
+            return dict(mic=[], window=[], monitor=[])
+        with patch.object(self.service, '_main_is_foreground', side_effect=lambda: foreground['active']), \
+             patch.object(device_inventory, 'devices', side_effect=native), \
+             patch.object(bridge.recorder, 'client') as connect:
+            with self.service._operation_lock:
+                state = self.service._run_automatic_readiness()
+            connect.assert_not_called()
+        self.assertFalse(state['ready'])
+        self.assertEqual(self.service._devices, before)
+        self.assertEqual(self.service._device_inventory['state'], 'idle')
+        self.assertFalse(self.service._startup_launch_attempted)
 
     def test_changed_window_class_matches_for_readiness_and_actual_start_without_saving(self):
         old, current = 'Game:OldRandom:game.exe', 'Game:NewRandom:game.exe'

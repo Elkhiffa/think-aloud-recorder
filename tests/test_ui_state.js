@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const {State,vocabularyWords,updateView,lastInstallView} = require('../ui/state.js');
-const {matchedWindowValue} = require('../ui/state.js');
+const {matchedWindowValue,inventoryView,savedDeviceLabel} = require('../ui/state.js');
 
 test('open drafts retain their vocabulary revision across live agent refreshes',()=>{
   const state=new State();
@@ -196,8 +196,8 @@ function fakeDOM() {
 }
 async function settle(){for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}
 async function fixture(initial=snapshot()) {
-  const {document,elements}=fakeDOM();const calls=[];const data={snapshot:initial};
-  const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='refresh_devices')return data.refreshResult||{ok:true,data:{started:true,refresh_id:'refresh-1'}};if(name==='choose_directory')return {ok:true,data:{path:data.chosenDirectory||null}};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_preset'){if(data.vaultRace){data.vaultRace=false;data.snapshot.default_vault={...data.snapshot.default_vault,exists:true,is_directory:true,requires_confirmation:true};return {ok:false,code:'VAULT_REUSE_REQUIRED',error:'请确认使用已有资料库。'};}data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
+  const {document,elements}=fakeDOM();const calls=[];const data={snapshot:initial,inventorySequence:0,holdInventory:initial.device_inventory?.state==='idle'};
+  const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='refresh_device_inventory'){if(data.inventoryHandler)return data.inventoryHandler();const id='inventory-'+(++data.inventorySequence);data.snapshot.device_inventory={id,state:data.holdInventory?'running':'succeeded',window_selection:data.snapshot.device_inventory?.window_selection||data.snapshot.readiness?.window_selection};return data.inventoryResult||{ok:true,data:{inventory_id:id}};}if(name==='refresh_devices')return data.refreshResult||{ok:true,data:{started:true,refresh_id:'refresh-1'}};if(name==='choose_directory')return {ok:true,data:{path:data.chosenDirectory||null}};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_preset'){if(data.vaultRace){data.vaultRace=false;data.snapshot.default_vault={...data.snapshot.default_vault,exists:true,is_directory:true,requires_confirmation:true};return {ok:false,code:'VAULT_REUSE_REQUIRED',error:'请确认使用已有资料库。'};}data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
   const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(){return 1;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},performance,console});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/state.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/app.js'),'utf8'),context);
@@ -463,58 +463,130 @@ test('editing a legacy record-only preset requires an explicit choice before sav
   f.elements.get('wizardCancel').onclick();assert.equal(f.run('store.saved.transcription_provider'),'later');
 });
 
-const setupSnapshot=()=>snapshot({devices:{monitor:[],mic:[],window:[]},device_refresh:{id:'',state:'idle'},device_defaults:{monitor:'',mic:''}});
-const detectedDefaults=()=>({
+const setupSnapshot=()=>snapshot({devices:{monitor:[],mic:[],window:[]},device_inventory:{id:'',state:'idle'},device_defaults:{monitor:'',mic:''}});
+const detectedDefaults=(id='inventory-1')=>({
   devices:{window:[],monitor:[{itemName:'Secondary',itemValue:'secondary',itemEnabled:true},{itemName:'Primary',itemValue:'primary',itemEnabled:true}],mic:[{itemName:'Default',itemValue:'default',itemEnabled:true}]},
-  device_defaults:{monitor:'primary',mic:'default'},device_refresh:{id:'refresh-1',state:'succeeded',error:''}
+  device_defaults:{monitor:'primary',mic:'default'},device_inventory:{id,state:'succeeded',error:''}
 });
 
-test('empty-device setup waits for its own completion then selects only verified defaults in the draft',async()=>{
-  const f=await fixture(setupSnapshot());f.elements.get('settingsButton').onclick();
-  assert.equal(f.elements.get('refreshDevices').textContent,'设置 OBS');
-  await f.elements.get('refreshDevices').onclick();
-  assert.equal(f.run('store.draft.source'),'游戏窗口');
+test('inventory metadata is required before an absent saved choice can be called missing',()=>{
+  assert.equal(inventoryView({devices:{window:[],mic:[]}}).state,'idle');
+  assert.equal(inventoryView(snapshot()).state,'cached');
+  for(const state of ['idle','running','failed','succeeded'])assert.equal(inventoryView({device_inventory:{state}}).state,state);
+  assert.equal(savedDeviceLabel('window','Game#3ATitle:OldClass:game.exe'),'Game:Title（game.exe）');
+  assert.equal(savedDeviceLabel('mic','default'),'默认麦克风');
+  assert.equal(savedDeviceLabel('mic','{opaque-guid}'),'已保存的麦克风');
+  assert.equal(savedDeviceLabel('monitor','opaque-display-interface'),'已保存的显示器');
+  assert.equal(savedDeviceLabel('window','opaque-window-id'),'已保存的游戏窗口');
+});
+
+test('opening an existing preset automatically reads inventory without changing saved or draft selections',async()=>{
+  const f=await fixture(setupSnapshot());f.elements.get('settingsButton').onclick();await settle();
+  const original=f.run('JSON.stringify(store.draft)');
+  assert.equal(f.calls.filter(c=>c.name==='refresh_device_inventory').length,1);
+  assert.equal(f.calls.filter(c=>c.name==='refresh_devices').length,0);
+  assert.match(f.elements.get('deviceFeedback').textContent,/正在读取/);
+  assert.equal(f.elements.get('refreshDevices').disabled,true);assert.equal(f.elements.get('refreshDevices').textContent,'正在读取…');
+  await f.elements.get('refreshDevices').onclick();assert.equal(f.calls.filter(c=>c.name==='refresh_device_inventory').length,1);
+  assert.equal(f.elements.get('wizardCancel').disabled,false);assert.equal(f.elements.get('source').disabled,false);
+  assert.match(f.elements.get('target').innerHTML,/未确认/);
+  assert.doesNotMatch(f.elements.get('target').innerHTML,/当前未找到/);
   Object.assign(f.data.snapshot,detectedDefaults());await f.run('poll()');
-  assert.equal(f.run('store.draft.source'),'整个显示器');
-  assert.equal(f.run('store.draft.monitor'),'primary');assert.equal(f.run('store.draft.mic'),'default');
+  assert.equal(f.run('JSON.stringify(store.draft)'),original);
+  assert.match(f.elements.get('target').innerHTML,/当前未找到/);
   assert.equal(f.elements.get('refreshDevices').textContent,'刷新设备');
   assert.equal(f.run('store.saved.source'),'游戏窗口');
   assert.equal(f.calls.some(c=>['save_preset','start_recording'].includes(c.name)),false);
-  f.elements.get('target').value='secondary';f.elements.get('target').onchange();
-  await f.elements.get('refreshDevices').onclick();await f.run('poll()');
-  assert.equal(f.run('store.draft.monitor'),'secondary','ordinary refresh preserves the selected display');
 });
 
-test('setup never guesses defaults or reuses old completion metadata',async()=>{
-  const f=await fixture(setupSnapshot());f.elements.get('settingsButton').onclick();
-  await f.elements.get('refreshDevices').onclick();
-  Object.assign(f.data.snapshot,detectedDefaults(),{device_refresh:{id:'old-refresh',state:'succeeded'}});
-  await f.run('poll()');assert.equal(f.run('store.draft.source'),'游戏窗口');
-  f.data.snapshot.device_refresh={id:'refresh-1',state:'succeeded'};
-  f.data.snapshot.device_defaults={monitor:'missing',mic:'disabled'};
-  f.data.snapshot.devices.mic.push({itemValue:'disabled',itemName:'Disabled',itemEnabled:false});
-  await f.run('poll()');assert.equal(f.run('store.draft.monitor'),'');assert.equal(f.run('store.draft.mic'),'');
-  assert.match(f.elements.get('wizardError').textContent,/手动选择/);
-});
-
-test('late setup results cannot overwrite a reopened draft or a manually edited device choice',async()=>{
-  const f=await fixture(setupSnapshot());f.elements.get('settingsButton').onclick();
-  await f.elements.get('refreshDevices').onclick();f.elements.get('wizardCancel').onclick();
-  f.elements.get('settingsButton').onclick();Object.assign(f.data.snapshot,detectedDefaults());await f.run('poll()');
-  assert.equal(f.run('store.draft.source'),'游戏窗口');
-  Object.assign(f.data.snapshot,setupSnapshot());await f.run('poll()');
-  await f.elements.get('refreshDevices').onclick();
-  const mic=f.elements.get('mic');mic.value='my-manual-choice';mic.listeners.change();
+test('automatic new-draft read never applies defaults; explicit first refresh applies only verified defaults',async()=>{
+  const f=await fixture(setupSnapshot());f.elements.get('newPresetButton').onclick();await settle();
   Object.assign(f.data.snapshot,detectedDefaults());await f.run('poll()');
-  assert.equal(f.run('store.draft.mic'),'my-manual-choice');assert.equal(f.run('store.draft.source'),'游戏窗口');
+  assert.equal(f.run('store.draft.source'),'游戏窗口');assert.equal(f.run('store.draft.mic'),'');
+  f.elements.get('wizardCancel').onclick();Object.assign(f.data.snapshot,setupSnapshot());await f.run('poll()');
+  f.elements.get('newPresetButton').onclick();await settle();f.data.snapshot.device_inventory.state='succeeded';await f.run('poll()');await f.elements.get('refreshDevices').onclick();
+  Object.assign(f.data.snapshot,detectedDefaults('inventory-3'));await f.run('poll()');
+  assert.equal(f.run('store.draft.source'),'整个显示器');assert.equal(f.run('store.draft.monitor'),'primary');assert.equal(f.run('store.draft.mic'),'default');
+  assert.equal(f.run('store.saved.source'),'游戏窗口');
+  f.elements.get('target').value='secondary';f.elements.get('target').onchange();
+  await f.elements.get('refreshDevices').onclick();Object.assign(f.data.snapshot,detectedDefaults('inventory-4'));await f.run('poll()');
+  assert.equal(f.run('store.draft.monitor'),'secondary');
 });
 
-test('failed OBS setup keeps existing draft choices and shows the concrete failure',async()=>{
-  const f=await fixture(setupSnapshot());f.elements.get('settingsButton').onclick();
+test('unverified defaults, superseded results and changed-back device choices never initialize the draft',async()=>{
+  const f=await fixture(setupSnapshot());f.elements.get('newPresetButton').onclick();await settle();
+  f.data.snapshot.device_inventory.state='succeeded';await f.run('poll()');
   await f.elements.get('refreshDevices').onclick();
-  f.data.snapshot.device_refresh={id:'refresh-1',state:'failed',error:'OBS 未能启动'};await f.run('poll()');
+  Object.assign(f.data.snapshot,detectedDefaults('inventory-2'));f.data.snapshot.device_defaults={monitor:'missing',mic:'disabled'};
+  f.data.snapshot.devices.mic.push({itemValue:'disabled',itemName:'Disabled',itemEnabled:false});await f.run('poll()');
+  assert.equal(f.run('store.draft.monitor'),'');assert.equal(f.run('store.draft.mic'),'');assert.match(f.elements.get('wizardError').textContent,/手动选择/);
+  f.elements.get('wizardCancel').onclick();Object.assign(f.data.snapshot,setupSnapshot());await f.run('poll()');
+  f.elements.get('newPresetButton').onclick();await settle();f.data.snapshot.device_inventory.state='succeeded';await f.run('poll()');await f.elements.get('refreshDevices').onclick();
+  const source=f.elements.get('source');source.value='整个显示器';source.listeners.change();source.value='游戏窗口';source.listeners.change();
+  Object.assign(f.data.snapshot,detectedDefaults('inventory-4'));await f.run('poll()');
+  assert.equal(f.run('store.draft.source'),'游戏窗口');assert.equal(f.run('store.draft.mic'),'');
+  assert.equal(f.elements.get('refreshDevices').disabled,false);
+});
+
+test('read failure preserves choices, has concrete retry feedback, and consumes newer inventory ids',async()=>{
+  const f=await fixture(setupSnapshot());f.elements.get('settingsButton').onclick();await settle();
+  f.data.snapshot.device_inventory={id:'newer-inventory',state:'failed',error:'Windows 设备枚举失败'};await f.run('poll()');
+  assert.match(f.elements.get('deviceFeedback').textContent,/Windows 设备枚举失败/);
+  assert.match(f.elements.get('target').innerHTML,/读取失败，未确认/);assert.doesNotMatch(f.elements.get('target').innerHTML,/当前未找到/);
+  assert.equal(f.elements.get('refreshDevices').disabled,false);
+  f.data.inventoryResult={ok:false,error:'读取请求被拒绝'};await f.elements.get('refreshDevices').onclick();
+  assert.match(f.elements.get('deviceFeedback').textContent,/读取请求被拒绝/);assert.equal(f.elements.get('wizardCancel').disabled,false);
   assert.equal(f.run('store.draft.source'),'游戏窗口');assert.equal(f.run('store.draft.mic'),'microphone');
-  assert.match(f.elements.get('wizardError').textContent,/OBS 未能启动/);
+  Object.assign(f.data.snapshot,detectedDefaults('newer-automatic-probe'));await f.run('poll()');
+  assert.doesNotMatch(f.elements.get('deviceFeedback').textContent,/读取请求被拒绝/);
+  assert.match(f.elements.get('target').innerHTML,/当前未找到/);
+});
+
+test('cancelled inventory RPC cannot affect a reopened draft or leave its read state locked',async()=>{
+  const f=await fixture(setupSnapshot());let resolveOld;
+  f.data.inventoryHandler=()=>new Promise(resolve=>resolveOld=resolve);
+  f.elements.get('newPresetButton').onclick();await settle();assert.equal(f.elements.get('wizardCancel').disabled,false);
+  f.elements.get('wizardCancel').onclick();f.data.inventoryHandler=null;
+  f.elements.get('settingsButton').onclick();await settle();
+  resolveOld({ok:true,data:{inventory_id:'late'}});await settle();
+  Object.assign(f.data.snapshot,detectedDefaults('newer'));await f.run('poll()');
+  assert.equal(f.run('store.draft.window'),'game-window');assert.equal(f.run('store.draft.source'),'游戏窗口');
+  assert.equal(f.elements.get('refreshDevices').disabled,false);
+});
+
+test('engine recovery is separately labelled and inventory success cannot enable Start or alter an edit',async()=>{
+  const s=setupSnapshot();s.readiness={ready:false,checking:false,errors:[{code:'OBS_UNAVAILABLE',message:'无法连接录制引擎。'}]};
+  const f=await fixture(s);f.elements.get('settingsButton').onclick();await settle();
+  Object.assign(f.data.snapshot,detectedDefaults());await f.run('poll()');
+  assert.equal(f.elements.get('reconnectEngine').classList.contains('hidden'),false);
+  assert.equal(f.elements.get('recordButton').disabled,true);
+  const original=f.run('JSON.stringify(store.draft)');await f.elements.get('reconnectEngine').onclick();
+  assert.equal(f.calls.filter(c=>c.name==='refresh_devices').length,1);assert.equal(f.run('JSON.stringify(store.draft)'),original);
+  f.data.snapshot.readiness.checking=true;await f.run('poll()');
+  assert.equal(f.elements.get('reconnectEngine').classList.contains('hidden'),true);
+  assert.equal(f.elements.get('engineFeedback').classList.contains('hidden'),true);
+});
+
+test('uncertain recording and failed or stale readiness retain guarded full-check recovery paths',async()=>{
+  for(const [code,label] of [['RECORDING_UNCONFIRMED','重新检查录制状态'],['READINESS_FAILED','重新检查录制条件'],['READINESS_STALE','重新检查录制条件']]){
+    const s=setupSnapshot();s.readiness={ready:false,checking:false,errors:[{code,message:'Synthetic recovery blocker'}]};
+    const f=await fixture(s);f.data.inventoryResult={ok:false,error:'上次录制状态尚未确认。'};
+    f.elements.get('settingsButton').onclick();await settle();
+    assert.equal(f.elements.get('reconnectEngine').classList.contains('hidden'),false);assert.equal(f.elements.get('reconnectEngine').textContent,label);
+    assert.match(f.elements.get('target').innerHTML,/读取失败，未确认/);assert.doesNotMatch(f.elements.get('target').innerHTML,/当前未找到/);
+    assert.equal(f.elements.get('recordButton').disabled,true);
+    const original=f.run('JSON.stringify(store.draft)');await f.elements.get('reconnectEngine').onclick();
+    assert.equal(f.calls.filter(c=>c.name==='refresh_devices').length,1);assert.equal(f.run('JSON.stringify(store.draft)'),original);
+    assert.equal(f.elements.get('recordButton').disabled,true);
+    for(const activity of [{kind:'devices',busy:true},{kind:'recording',busy:false}]){
+      f.data.snapshot.activity=activity;await f.run('poll()');
+      assert.equal(f.elements.get('reconnectEngine').disabled,true);assert.equal(f.elements.get('reconnectEngine').classList.contains('hidden'),true);
+      await f.elements.get('reconnectEngine').onclick();assert.equal(f.calls.filter(c=>c.name==='refresh_devices').length,1);
+      assert.equal(f.elements.get('deviceFields').disabled,activity.kind==='recording');
+    }
+    f.data.snapshot.activity={kind:'idle',busy:false};f.data.snapshot.readiness.checking=true;await f.run('poll()');
+    assert.equal(f.elements.get('reconnectEngine').classList.contains('hidden'),true);assert.equal(f.elements.get('recordButton').disabled,true);
+  }
 });
 
 test('update eligibility fails closed and does not use recording readiness',()=>{

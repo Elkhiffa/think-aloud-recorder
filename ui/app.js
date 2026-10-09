@@ -7,7 +7,7 @@ const providerNames={later:'仅保存录制',local:'在本机转成文字',qwen:
 let pollTask=null,booted=false,firstSetupHandled=false,toastTimer=null,step=1,saving=false,wizardMode='edit';
 let downloadDirectory=null,presetSignature='',deviceSignature='',sessionSignature='',expandedSession=null,vocabularySignature='';
 let dialogGeneration=0,connectionMessage='',lastActivitySignature='',actionContext=null;
-let pendingDeviceSetup=null;
+let deviceInventoryRequest=null;
 let updatePending='',updateError='',updateChannelDirty=false,updateInstallAccepted=false;
 let microphoneRequest=null,microphoneSession=null,microphoneUpdated=0;
 let microphoneQuiet=0,microphoneWarning=false;
@@ -201,7 +201,8 @@ function renderControls(){renderHome();renderUpdates();const locked=!store.conne
  const requestLocked=!store.connected||store.requestPending||saving;const conflict=store.recording||!!store.activity.busy&&store.activity.kind!=='devices';const fieldsLocked=requestLocked||conflict;$('#deviceFields').disabled=fieldsLocked;$('#recordingFields').disabled=fieldsLocked;
  ['game','source','target','mic','preset','language','hotwords','cloudKey'].forEach(id=>$('#'+id).disabled=fieldsLocked);
  $$('[data-provider]').forEach(button=>button.disabled=fieldsLocked);renderInputRecording(fieldsLocked);
- ['chooseVault','chooseHotwordFiles','existingModel','modelLocation','verifyCloud','refreshDevices'].forEach(id=>$('#'+id).disabled=locked||saving);
+ ['chooseVault','chooseHotwordFiles','existingModel','modelLocation','verifyCloud','reconnectEngine'].forEach(id=>$('#'+id).disabled=locked||saving);
+ $('#refreshDevices').disabled=locked||saving||deviceInventory().state==='running';
  $$('[data-remove-vocabulary]').forEach(button=>button.disabled=fieldsLocked);$('#dictionaryDownload').setAttribute('aria-disabled',requestLocked?'true':'false');$('#dictionaryDownload').tabIndex=requestLocked?-1:0;$('#bailianConsole').setAttribute('aria-disabled',requestLocked?'true':'false');$('#bailianConsole').tabIndex=requestLocked?-1:0;
  ['wizardClose','wizardCancel','wizardBack'].forEach(id=>$('#'+id).disabled=store.requestPending||saving);$('#reuseVault').disabled=fieldsLocked||store.snapshot?.default_vault?.is_directory===false;$('#wizardNext').disabled=locked||saving||(step===3&&store.needsVaultConfirmation);$('#wizardBack').classList.toggle('hidden',step===firstWizardStep());setText('wizardNext',saving?'正在保存…':step===3?'保存预设':step===0?'开始设置':'下一步');$$('[data-step]').forEach(b=>b.disabled=store.requestPending||saving);
  const m=store.snapshot?.model||{};$('#downloadModel').disabled=locked||saving||['verifying','ready'].includes(m.state);$('#existingModel').disabled=locked||saving||['downloading','verifying'].includes(m.state);$('#modelLocation').disabled=locked||saving||['downloading','verifying'].includes(m.state);$('#verifyCloud').disabled=locked||saving||!store.snapshot?.capabilities?.cloud_key||!!$('#cloudKey').value.trim();$$('[data-session-action]').forEach(b=>b.disabled=(!store.connected||store.requestPending||store.snapshot?.closing||(!['review','folder','rename'].includes(b.dataset.sessionAction)&&store.busy)||sessionActionBlocked(b.dataset.id,b.dataset.sessionAction)));}
@@ -210,20 +211,39 @@ $('#recordButton').onclick=()=>{if(store.recording)action('stop_recording');else
 $('#openVault').onclick=()=>action('open_folder');
 $('#newPresetButton').onclick=()=>openWizard('new');$('#settingsButton').onclick=()=>openWizard('edit');
 $('#presetSelect').onchange=async event=>{const id=event.target.value;if(!id||id===store.activeId)return;const result=await action('select_preset',[id]);if(!result.ok){presetSignature='';renderPresets();}else{expandedSession=null;sessionSignature='';renderSessions();}};
-function openWizard(mode='edit',requestedStep=null,automatic=false){if(!store.connected||store.requestPending||store.recording||(!automatic&&store.busy))return;wizardMode=mode;pendingDeviceSetup=null;store.openDraft(mode);step=Math.min(3,Math.max(firstWizardStep(),requestedStep??firstWizardStep()));store.step=step;deviceSignature='';vocabularySignature='';downloadDirectory=null;wizardError();$('#cloudKey').value='';setText('cloudFeedback','新密钥在完成设置时保存，取消时清空。');setText('downloadDestination','下载到软件所在文件夹。下载可暂停，关闭设置后会继续。');$('#advancedSettings').open=false;$('#manualWords').open=false;for(const el of $$('[data-draft]'))el.value=String(store.draft[el.dataset.draft]??'');$('#games').innerHTML=store.presets.map(p=>`<option value="${escapeHTML(p.name)}"></option>`).join('');setText('wizardContext',mode==='new'?'新建录制预设':'编辑录制预设');setText('presetDescription',mode==='new'?'为这款游戏保存一套录制设置。':'修改这套预设，下次录制会使用更新后的设置。');show('presetOnce',mode==='new');renderDeviceOptions(true);renderResources();renderVocabulary();renderSummary();renderVaultChoice();setStep(step,false);$('#wizard').showModal();renderControls();focusWizardStep();}
-function cancelWizard(){if(store.requestPending||saving)return;pendingDeviceSetup=null;$('#cloudKey').value='';store.cancelDraft();$('#wizard').close();renderHome();renderControls();}
+function openWizard(mode='edit',requestedStep=null,automatic=false){if(!store.connected||store.requestPending||store.recording||(!automatic&&store.busy))return;wizardMode=mode;deviceInventoryRequest=null;store.openDraft(mode);step=Math.min(3,Math.max(firstWizardStep(),requestedStep??firstWizardStep()));store.step=step;deviceSignature='';vocabularySignature='';downloadDirectory=null;wizardError();$('#cloudKey').value='';setText('cloudFeedback','新密钥在完成设置时保存，取消时清空。');setText('downloadDestination','下载到软件所在文件夹。下载可暂停，关闭设置后会继续。');$('#advancedSettings').open=false;$('#manualWords').open=false;for(const el of $$('[data-draft]'))el.value=String(store.draft[el.dataset.draft]??'');$('#games').innerHTML=store.presets.map(p=>`<option value="${escapeHTML(p.name)}"></option>`).join('');setText('wizardContext',mode==='new'?'新建录制预设':'编辑录制预设');setText('presetDescription',mode==='new'?'为这款游戏保存一套录制设置。':'修改这套预设，下次录制会使用更新后的设置。');show('presetOnce',mode==='new');renderDeviceOptions(true);renderResources();renderVocabulary();renderSummary();renderVaultChoice();setStep(step,false);$('#wizard').showModal();renderControls();focusWizardStep();void refreshDeviceInventory();}
+function cancelWizard(){if(store.requestPending||saving)return;deviceInventoryRequest=null;$('#cloudKey').value='';store.cancelDraft();$('#wizard').close();renderHome();renderControls();}
 $('#wizardClose').onclick=cancelWizard;$('#wizardCancel').onclick=cancelWizard;$('#wizard').addEventListener('cancel',event=>{event.preventDefault();cancelWizard();});
 function setStep(next,focus=true){step=Math.min(3,Math.max(firstWizardStep(),next));store.step=step;for(let i=0;i<=3;i++)show('step'+i,i===step);setText('wizardTitle',['记录方法','游戏与设备','录制与转写','保存位置'][step]);$$('[data-step]').forEach(b=>{const n=Number(b.dataset.step);b.classList.toggle('hidden',n<firstWizardStep());const number=b.querySelector('span');if(number)number.textContent=String(n-firstWizardStep()+1);b.classList.toggle('active',n===step);b.classList.toggle('completed',n<step);if(n===step)b.setAttribute('aria-current','step');else b.removeAttribute('aria-current');});$('#wizardBody').scrollTop=0;renderResources();renderSummary();renderControls();if(focus)focusWizardStep();}
 function focusWizardStep(){const target=step===1?$('#game'):$('#wizardTitle');target.focus({preventScroll:true});}
 function moveStep(next){if(next>step){for(let i=step;i<next;i++){const error=store.validateStep(i);if(error){wizardError(error);return;}}}wizardError();setStep(next);}
 $('#wizardBack').onclick=()=>moveStep(Math.max(firstWizardStep(),step-1));$$('[data-step]').forEach(b=>b.onclick=()=>moveStep(Number(b.dataset.step)));$('#wizardNext').onclick=()=>{if(step<3)moveStep(step+1);else finishWizard();};
-function fieldChanged(element){if(element.id==='source'||element.id==='mic')pendingDeviceSetup=null;store.updateDraft(element.dataset.draft,element.value);if(element.id==='source'){deviceSignature='';renderDeviceOptions(true);renderInputRecording();}if(element.dataset.draft==='hotword_manual')renderVocabulary();renderSummary();}
+function fieldChanged(element){store.updateDraft(element.dataset.draft,element.value);if(element.id==='source'){deviceSignature='';renderDeviceOptions(true);renderInputRecording();}if(element.id==='mic')renderDeviceOptions();if(element.dataset.draft==='hotword_manual')renderVocabulary();renderSummary();}
 $$('[data-draft]').forEach(el=>el.addEventListener(el.tagName==='SELECT'?'change':'input',()=>fieldChanged(el)));
 $('#cloudKey').addEventListener('input',()=>{setText('cloudFeedback',$('#cloudKey').value.trim()?'新密钥将在完成设置时保存。取消会清空输入。':'留空将保留已保存密钥。');renderControls();});
 function deviceItems(kind){return store.snapshot?.devices?.[kind]||[];}
-function matchedDeviceValue(kind,value){return kind==='window'?RecorderState.matchedWindowValue(value,deviceItems(kind),store.snapshot?.readiness?.window_selection):value;}
-function deviceLabel(kind,value){return deviceItems(kind).find(i=>String(i.itemValue)===String(matchedDeviceValue(kind,value)))?.itemName||String(value||'尚未选择');}
-function fillDevice(select,kind,value){if(document.activeElement===select)return false;const current=String(matchedDeviceValue(kind,value)??''),items=deviceItems(kind),exists=items.some(i=>String(i.itemValue)===current);select.innerHTML=(exists?'':`<option value="${escapeHTML(current)}">${current?'已保存的选择（当前未找到）':'请选择'+(kind==='mic'?'麦克风':kind==='monitor'?'显示器':'游戏窗口')}</option>`)+items.map(i=>`<option value="${escapeHTML(i.itemValue)}" ${i.itemEnabled===false?'disabled':''}>${escapeHTML(i.itemName)}${String(i.itemValue)===current&&current!==String(value??'')?'（已匹配当前窗口）':''}</option>`).join('');select.value=current;return true;}
+function deviceInventory(){
+ const request=deviceInventoryRequest;
+ if(request?.draft===store.draft){
+  if(request.requesting)return {state:'running'};
+  if(request.error&&request.initialInventory===inventorySignature())return {state:'failed',error:request.error};
+ }
+ return RecorderState.inventoryView(store.snapshot);
+}
+function matchedDeviceValue(kind,value){const inventory=deviceInventory();return kind==='window'&&['succeeded','cached'].includes(inventory.state)?RecorderState.matchedWindowValue(value,deviceItems(kind),inventory.window_selection):value;}
+function deviceLabel(kind,value){return deviceItems(kind).find(i=>String(i.itemValue)===String(matchedDeviceValue(kind,value)))?.itemName||RecorderState.savedDeviceLabel(kind,value);}
+function fillDevice(select,kind,value){
+ if(document.activeElement===select)return false;
+ const inventory=deviceInventory(),confirmed=inventory.state==='succeeded',selection=inventory.window_selection;
+ const ambiguous=confirmed&&kind==='window'&&selection?.requested===value&&selection.status==='ambiguous';
+ const current=String(matchedDeviceValue(kind,value)??''),items=deviceItems(kind);
+ const exists=!ambiguous&&items.some(i=>String(i.itemValue)===current&&i.itemEnabled!==false);
+ const status={idle:'尚未读取，未确认',running:'正在读取，未确认',failed:'读取失败，未确认',cached:'上次读取，待确认'}[inventory.state];
+ const missing=ambiguous?'多个匹配，请重新选择':confirmed?'当前未找到':status;
+ const placeholder=current?`${deviceLabel(kind,value)}（${missing}）`:'请选择'+(kind==='mic'?'麦克风':kind==='monitor'?'显示器':'游戏窗口');
+ select.innerHTML=(exists?'':`<option value="${escapeHTML(current)}">${escapeHTML(placeholder)}</option>`)+items.filter(i=>exists||String(i.itemValue)!==current).map(i=>`<option value="${escapeHTML(i.itemValue)}" ${i.itemEnabled===false?'disabled':''}>${escapeHTML(i.itemName)}${String(i.itemValue)===current&&current!==String(value??'')?'（已匹配当前窗口）':''}${!confirmed?'（'+status+'）':''}</option>`).join('');
+ select.value=current;return true;
+}
 function renderInputRecording(locked=false){
  const d=store.draft,available=d?.source==='游戏窗口';
  $('#recordInputs').checked=!!d?.record_inputs;
@@ -231,16 +251,53 @@ function renderInputRecording(locked=false){
  setText('inputRecordingHint',available?'录制期间完整记录键鼠和手柄操作，包括切到其他软件时的操作；目标窗口的前后台状态另行保存，回看时可筛选。':'选择“游戏窗口”及目标程序后可启用操作记录。操作只在录制期间采集，结束后停止。');
 }
 $('#recordInputs').onchange=()=>{if(store.draft&&store.draft.source==='游戏窗口'){store.updateDraft('record_inputs',$('#recordInputs').checked);renderSummary();}};
-function renderDeviceOptions(force=false){if(!store.draft)return;const d=store.draft,kind=d.source==='整个显示器'?'monitor':'window';const signature=JSON.stringify([store.snapshot?.devices,store.snapshot?.readiness?.window_selection,kind,d.window,d.monitor,d.mic]);if(force||signature!==deviceSignature){const a=fillDevice($('#target'),kind,d[kind]);const b=fillDevice($('#mic'),'mic',d.mic);if(a&&b)deviceSignature=signature;}setText('targetLabel',kind==='monitor'?'显示器':'游戏窗口');const empty=devicesEmpty();setText('refreshDevices',empty?'设置 OBS':'刷新设备');setText('deviceFeedback',store.activity.kind==='devices'&&store.activity.busy?'正在查找可用窗口和麦克风…':empty?'尚未获取到设备。设置 OBS 后，将选中主显示器和默认麦克风。':'找不到游戏窗口？先打开游戏，再刷新。');}
-$('#target').onchange=()=>{pendingDeviceSetup=null;if(store.draft){store.updateDraft(store.draft.source==='整个显示器'?'monitor':'window',$('#target').value);renderSummary();}};
+function engineRecovery(){
+ if(store.recording||store.busy||store.readiness.checking===true||store.readiness.ready===true)return null;
+ const errors=store.readiness.errors||[];
+ const recovery=[
+  ['RECORDING_UNCONFIRMED','重新检查录制状态','上次录制状态或归属尚未确认。请重新检查，确认前无法开始新录制。'],
+  ['OBS_UNAVAILABLE','重新连接录制引擎','录制引擎尚未就绪，可重新连接并检查录制条件。'],
+  ['OBS_CONFIGURATION','重新连接录制引擎','录制引擎尚未就绪，可重新连接并检查录制条件。'],
+  ['READINESS_FAILED','重新检查录制条件','录制条件检查未完成，请重新检查。'],
+  ['READINESS_STALE','重新检查录制条件','录制条件检查结果已过期，请重新检查。'],
+ ];
+ return recovery.find(([code])=>errors.some(error=>error.code===code))||null;
+}
+function successfulDeviceFeedback(draft,inventory){
+ const kind=draft.source==='整个显示器'?'monitor':'window',targetName=kind==='monitor'?'显示器':'游戏窗口';
+ if(kind==='window'&&draft.window&&inventory.window_selection?.requested===draft.window&&inventory.window_selection.status==='ambiguous')return '检测到多个匹配的游戏窗口，请选择要录制的窗口。';
+ if(devicesEmpty())return '读取完成，当前未找到可用设备。请打开游戏或连接设备后刷新。';
+ const missing=[],unselected=[];
+ for(const [key,name] of [[kind,targetName],['mic','麦克风']]){
+  if(!draft[key])unselected.push(name);
+  else if(!deviceItems(key).some(item=>item.itemEnabled!==false&&String(item.itemValue)===String(matchedDeviceValue(key,draft[key]))))missing.push(key);
+ }
+ if(missing.length){const names=missing.map(key=>key==='mic'?'麦克风':targetName).join('和'),steps=missing.map(key=>key==='window'?'打开游戏':key==='mic'?'连接麦克风':'连接显示器').join('或');return `当前未找到所选${names}，请${steps}后刷新。`;}
+ if(unselected.length)return '读取完成，请选择'+unselected.join('和')+'。';
+ return `已识别当前选择的${targetName}和麦克风。`+(store.editingId?'已保存的预设保持不变。':'');
+}
+function renderDeviceOptions(force=false){
+ if(!store.draft)return;
+ const d=store.draft,kind=d.source==='整个显示器'?'monitor':'window',inventory=deviceInventory();
+ const signature=JSON.stringify([store.snapshot?.devices,inventory,kind,d.window,d.monitor,d.mic]);
+ if(force||signature!==deviceSignature){const a=fillDevice($('#target'),kind,d[kind]);const b=fillDevice($('#mic'),'mic',d.mic);if(a&&b)deviceSignature=signature;}
+ setText('targetLabel',kind==='monitor'?'显示器':'游戏窗口');setText('refreshDevices',inventory.state==='running'?'正在读取…':'刷新设备');
+ const feedback={idle:'尚未读取设备，已保存的选择待确认。',running:'正在读取可用窗口和麦克风，已保存的选择保持不变…',failed:'设备读取失败：'+(inventory.error||'请重试。')+' 已保存的选择尚未确认。',cached:'显示上次读取的设备，请刷新确认当前是否可用。',succeeded:successfulDeviceFeedback(d,inventory)};
+ setText('deviceFeedback',feedback[inventory.state]);
+ const recovery=engineRecovery();
+ show('reconnectEngine',!!recovery);show('engineFeedback',!!recovery);
+ setText('reconnectEngine',recovery?.[1]||'重新连接录制引擎');setText('engineFeedback',recovery?.[2]||'');
+}
+$('#target').onchange=()=>{if(store.draft){store.updateDraft(store.draft.source==='整个显示器'?'monitor':'window',$('#target').value);renderDeviceOptions();renderSummary();}};
 function devicesEmpty(){return ['monitor','window','mic'].every(kind=>!deviceItems(kind).some(item=>item.itemEnabled!==false&&String(item.itemValue??'')));}
 function selectionSignature(draft){return JSON.stringify([draft.source,draft.window,draft.monitor,draft.mic]);}
+function inventorySignature(){const inventory=store.snapshot?.device_inventory;return JSON.stringify([inventory?.id,inventory?.checked_at,inventory?.state]);}
 function completeDeviceSetup(){
- const pending=pendingDeviceSetup;if(!pending)return;
- if(store.draft!==pending.draft||!$('#wizard').open||selectionSignature(store.draft)!==pending.selection){pendingDeviceSetup=null;return;}
- const refresh=store.snapshot?.device_refresh;if(refresh?.id!==pending.id||refresh.state==='running')return;
- pendingDeviceSetup=null;
- if(refresh.state!=='succeeded'){wizardError(refresh.error||'OBS 设置未完成，请重试。');return;}
+ const pending=deviceInventoryRequest;if(!pending?.initialize||pending.requesting)return;
+ if(store.draft!==pending.draft||!$('#wizard').open||store.deviceChoiceRevision!==pending.revision||selectionSignature(store.draft)!==pending.selection){pending.initialize=false;return;}
+ const refresh=store.snapshot?.device_inventory;if(!refresh||!['succeeded','failed'].includes(refresh.state))return;
+ pending.initialize=false;
+ if(refresh.id!==pending.id||refresh.state!=='succeeded'||wizardMode!=='new'||store.editingId||store.draft.window||store.draft.monitor||store.draft.mic)return;
  const defaults=store.snapshot?.device_defaults||{};
  const valid=(kind,value)=>!!value&&deviceItems(kind).some(item=>String(item.itemValue)===String(value)&&item.itemEnabled!==false);
  store.updateDraft('source','整个显示器');
@@ -251,14 +308,23 @@ function completeDeviceSetup(){
  const missing=[];if(!store.draft.monitor)missing.push('主显示器');if(!store.draft.mic)missing.push('默认麦克风');
  wizardError(missing.length?'未能确认'+missing.join('和')+'，请从已获取的设备中手动选择。':'');
 }
-$('#refreshDevices').onclick=async()=>{
- const draft=store.draft,initialize=devicesEmpty(),selection=draft?selectionSignature(draft):'';
- pendingDeviceSetup=null;
- const result=await action('refresh_devices');
- if(initialize&&result.ok&&result.data?.refresh_id&&store.draft===draft&&$('#wizard').open&&selectionSignature(draft)===selection){
-  pendingDeviceSetup={id:result.data.refresh_id,draft,selection};completeDeviceSetup();
- }
-};
+async function refreshDeviceInventory(explicit=false){
+ const draft=store.draft;if(!draft||!store.connected||store.recording)return;
+ if(explicit&&deviceInventory().state==='running')return;
+ const request={draft,requesting:true,id:null,error:'',initialInventory:inventorySignature(),selection:selectionSignature(draft),revision:store.deviceChoiceRevision,
+  initialize:explicit&&wizardMode==='new'&&!store.editingId&&devicesEmpty()&&!draft.window&&!draft.monitor&&!draft.mic&&store.deviceChoiceRevision===0};
+ deviceInventoryRequest=request;deviceSignature='';renderDeviceOptions();renderControls();
+ try{
+  const result=await api('refresh_device_inventory');
+  if(deviceInventoryRequest!==request||store.draft!==draft||!$('#wizard').open)return;
+  if(!result?.inventory_id)throw new Error('尚未确认设备读取结果，请重试。');
+  request.id=result.inventory_id;request.requesting=false;
+  await freshPoll();
+ }catch(error){if(deviceInventoryRequest===request&&store.draft===draft){request.error=error.message||'无法读取设备，请重试。';request.initialize=false;}}
+ finally{if(deviceInventoryRequest===request&&store.draft===draft){request.requesting=false;completeDeviceSetup();renderDeviceOptions();renderControls();}}
+}
+$('#refreshDevices').onclick=()=>refreshDeviceInventory(true);
+$('#reconnectEngine').onclick=()=>{if(store.canConfigure&&engineRecovery())return action('refresh_devices');};
 function chooseProvider(provider,focus=false){
  const button=$$('[data-provider]').find(button=>button.dataset.provider===provider);
  if(!store.draft||!button||button.disabled)return;
