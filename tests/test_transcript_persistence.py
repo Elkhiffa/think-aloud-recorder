@@ -28,11 +28,18 @@ class TranscriptPersistenceTests(unittest.TestCase):
         (self.folder / '复盘.md').write_text('note', encoding='utf-8')
         session = recorder.Session(self.folder)
         generated = {}
+        player_attempts = []
+        replace = recorder.os.replace
 
-        def fail_player(*args):
-            generated.update({name: (self.folder / name).read_bytes()
-                              for name in ('录像.whisper.json', '录像.srt', '逐字稿.md')})
-            raise PermissionError(32, '另一个程序正在使用此文件', '独立回看.html')
+        def fail_player_replace(source, target):
+            if Path(target) == self.folder / '独立回看.html':
+                self.assertGreater(Path(source).stat().st_size, 0)
+                player_attempts.append(Path(source))
+                if not generated:
+                    generated.update({name: (self.folder / name).read_bytes()
+                                      for name in ('录像.whisper.json', '录像.srt', '逐字稿.md')})
+                raise PermissionError(32, '另一个程序正在使用此文件', '独立回看.html')
+            return replace(source, target)
 
         with patch.object(recorder.Session, 'adopt_recording', lambda self: None), \
              patch.object(recorder.Session, 'prepare_video', lambda self, progress: None), \
@@ -41,15 +48,18 @@ class TranscriptPersistenceTests(unittest.TestCase):
              patch('transcription_runtime.profile', lambda settings: dict(provider='local', model='large-v3')), \
              patch('transcription_runtime.resume_profile', lambda path, cache, options, audio: options), \
              patch('speaker_roles.analyze_speakers', lambda path, segments: dict(speakers=[])), \
-             patch('recorder.make_player', side_effect=fail_player) as make_player:
+             patch('recorder.os.replace', side_effect=fail_player_replace), \
+             patch('recorder.time.sleep') as sleep:
             session.process()
-        make_player.assert_called_once()
+        self.assertEqual(len(player_attempts), 40)
+        self.assertEqual(sleep.call_count, 39)
         saved = recorder.read(self.folder / 'session.json')
         self.assertEqual(saved['state'], '可回看')
         self.assertEqual(saved['transcription_state'], 'ready')
         self.assertTrue(saved['review_page_warning'])
         self.assertIsNone(saved.get('error'))
         self.assertEqual({name: (self.folder / name).read_bytes() for name in generated}, generated)
+        self.assertEqual(list(self.folder.glob('*.tmp')), [])
 
     def test_write_permission_error_removes_temporary_file(self):
         """触发路径：资料库放在同步盘或被杀软长时间锁住 → 40 次重试后仍替换失败 → 每次失败在场次目录留下一个 `.tmp`，越积越多且可能被误当成数据。"""

@@ -63,9 +63,13 @@ def context(folder):
 
 
 def project(folder, result, digest):
+    import agent_protocol as p
     value = _read(folder)
+    meta, material, revision, _ = p._identity(folder)
     latest = {row['event_id']: row for row in value['history']
-              if row['base_result_sha256'] == digest and row['source_revision'] == result['revision']}
+              if row['base_result_sha256'] == digest and
+              p._revision_matches(folder, row['source_revision'], meta, material, revision,
+                                  result.get('analysis_context'))}
     result = deepcopy(result)
     for event in result['events']:
         event.update(editable(event))

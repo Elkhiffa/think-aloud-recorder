@@ -452,10 +452,15 @@ class ReviewAPI:
         try:
             if seconds is not None and (not _number(seconds) or abs(seconds) > 30):
                 raise ValueError('操作同步偏移需在 -30 到 30 秒之间。')
-            contained_file(self._folder, 'session.json')
-            from session_metadata import update_metadata
-            meta = update_metadata(self._folder, {'input_offset_seconds': None if seconds is None else round(seconds, 6)})
-            from agent_protocol import try_publish_ready
+            from recorder import read, write
+            from session_metadata import metadata_lock
+            from agent_protocol import preserve_analysis_context, try_publish_ready
+            with metadata_lock(self._folder):
+                path = contained_file(self._folder, 'session.json')
+                meta = read(path)
+                preserve_analysis_context(self._folder, meta)
+                meta['input_offset_seconds'] = None if seconds is None else round(seconds, 6)
+                write(path, meta)
             try_publish_ready(self._folder)
             return {'ok': True, 'data': input_alignment(meta)}
         except Exception as error:
@@ -485,6 +490,8 @@ class ReviewAPI:
                 if (automatic and current['source']=='auto' or
                         not automatic and speaker_id==current['selected_id']):
                     return {'ok':True,'data':current}
+                from agent_protocol import preserve_analysis_context
+                preserve_analysis_context(self._folder, meta)
                 meta['recorder_speaker']=None if automatic else dict(
                     transcript_id=identity,speaker_id=speaker_id,source='manual',updated_at=time.time())
                 write(path,meta)

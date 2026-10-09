@@ -88,6 +88,90 @@ class AgentProtocolTests(unittest.TestCase):
         state=agent.preprocessing_status(self.folder,include_result=True)
         return dict(**state['editing'],event_id='e1',fields=editable(state['result']['events'][0]))
 
+    def test_offset_change_preserves_events_and_manual_edits(self):
+        """触发路径：用户在回看中把操作同步偏移从 1.0 调到 1.2 → 体验事件页签和全部人工校准消失，没有任何提示。"""
+        from event_edits import save
+        self.complete()
+        request = self.edit_request()
+        request['fields']['title'] = '用户手动校准的标题'
+        save(self.folder, request)
+        before = (self.folder / agent.RESULT).read_bytes()
+        response = ReviewAPI(self.folder, {}).set_input_offset(1.2)
+        self.assertTrue(response['ok'], response)
+        state = session_review_payload(self.folder)['preprocessing']
+        self.assertEqual(state['state'], 'complete')
+        self.assertEqual(state['result']['events'][0]['title'], '用户手动校准的标题')
+        self.assertTrue(state['result']['events'][0]['manually_edited'])
+        self.assertEqual(state['result']['events'][0]['evidence'][1]['start'], 3)
+        self.assertEqual(state['result']['analysis_context']['alignment']['offset_seconds'], 1)
+        self.assertIn('同步偏移／记录者已改动', state['notice'])
+        self.assertEqual((self.folder / agent.RESULT).read_bytes(), before)
+
+    def legacy_result(self):
+        legacy = agent._legacy_revision(self.folder)
+        raw = dict(self.candidate(), revision=legacy)
+        recorder.write(self.folder / agent.RESULT, raw)
+        recorder.write(self.folder / agent.READY, dict(self.manifest, revision=legacy))
+        return legacy
+
+    def test_legacy_result_remains_complete_before_settings_change(self):
+        """触发路径：用户升级到新版本 → 打开升级前已整理的场次（真实资料库现有 21 场，全部是旧公式）→ 若只认新公式，全部变成“需重新预处理”。"""
+        self.legacy_result()
+        before = (self.folder / agent.RESULT).read_bytes()
+        state = agent.preprocessing_status(self.folder, include_result=True)
+        self.assertEqual(state['state'], 'complete')
+        self.assertEqual(state['result']['revision'], self.manifest['revision'])
+        self.assertNotIn('notice', state)
+        self.assertNotIn('analysis_context', state['result'])
+        self.assertEqual(agent.claim(self.folder, 'upgraded-worker')['reason'], 'complete')
+        self.assertEqual(agent._ready(self.folder)[2], self.manifest['revision'])
+        self.assertEqual((self.folder / agent.RESULT).read_bytes(), before)
+
+    def test_transcript_change_still_invalidates_analysis(self):
+        """触发路径：用户在场次详情点重新转写 → 逐字稿改变 → 旧整理结果引用的原话已不对应，必须提示需重新预处理。"""
+        self.complete()
+        raw = recorder.read(self.folder / '录像.whisper.json')
+        raw['segments'][0]['text'] = '重新转写后的文字'
+        recorder.write(self.folder / '录像.whisper.json', raw)
+        self.assertEqual(agent.preprocessing_status(self.folder)['state'], 'stale')
+        agent.publish_ready(self.folder)
+        self.assertEqual(agent.preprocessing_status(self.folder)['state'], 'stale')
+
+    def test_legacy_offset_change_preserves_snapshot_and_manual_edits(self):
+        """触发路径：用户升级后 → 在旧场次回看中改同步偏移或记录者 → 旧结果没有 analysis_context → 证据按新当前值解释而越界，整份结果失效。"""
+        import event_edits
+        legacy = self.legacy_result()
+        request = self.edit_request()
+        request['fields']['title'] = '旧场次的人工校准'
+        event_edits.save(self.folder, request)
+        edits = recorder.read(self.folder / event_edits.FILE)
+        edits['history'][0]['source_revision'] = legacy
+        recorder.write(self.folder / event_edits.FILE, edits)
+        before = {name: (self.folder / name).read_bytes() for name in (agent.RESULT, event_edits.FILE)}
+        api = ReviewAPI(self.folder, {})
+        with patch('agent_protocol.try_publish_ready', return_value=False):
+            response = api.set_input_offset(3)
+        self.assertTrue(response['ok'], response)
+        sidecar = recorder.read(self.folder / agent.ANALYSIS_CONTEXT)
+        self.assertEqual(sidecar['result_sha256'], hashlib.sha256(before[agent.RESULT]).hexdigest())
+        self.assertEqual(sidecar['alignment']['offset_seconds'], 1)
+        state = session_review_payload(self.folder)['preprocessing']
+        self.assertEqual(state['state'], 'complete')
+        self.assertEqual(state['result']['events'][0]['title'], '旧场次的人工校准')
+        self.assertTrue(state['result']['events'][0]['manually_edited'])
+        self.assertEqual(state['result']['events'][0]['evidence'][1]['start'], 3)
+        self.assertIn('同步偏移／记录者已改动', state['notice'])
+        self.assertEqual(agent._load(self.folder, agent.READY)['revision'], legacy)
+        self.assertEqual(agent.claim(self.folder, 'upgraded-worker')['reason'], 'complete')
+        self.assertEqual(agent.publish_ready(self.folder)['revision'], self.manifest['revision'])
+        self.assertTrue(api.set_recorder_speaker(1, transcript_id(self.segments))['ok'])
+        state = agent.preprocessing_status(self.folder, include_result=True)
+        self.assertEqual(state['state'], 'complete')
+        self.assertIsNone(state['result']['analysis_context']['recorder_speaker'])
+        self.assertEqual(recorder.read(self.folder / agent.ANALYSIS_CONTEXT), sidecar)
+        for name, content in before.items():
+            self.assertEqual((self.folder / name).read_bytes(), content)
+
     def test_manual_event_edit_preserves_sources_and_exports_projection(self):
         self.complete()
         source={name:(self.folder/name).read_bytes() for name in ('experience-events.json','agent-ready.json','录像.whisper.json','复盘.md')}
@@ -277,7 +361,7 @@ class AgentProtocolTests(unittest.TestCase):
             with self.assertRaises(ValueError):agent.reprocess(self.folder,worker,'重新检查')
         for seconds in (True,59,86401,60.0):
             with self.assertRaises(ValueError):agent.reprocess(self.folder,'worker','重新检查',seconds)
-        update_metadata(self.folder,dict(input_offset_seconds=2))
+        (self.folder / '录像.mp4').write_bytes(b'Synthetic changed source video')
         with self.assertRaises(ValueError):agent.reprocess(self.folder,'worker','素材未重新发布')
         self.assertFalse((self.folder/'agent-history').exists())
         for name,content in before.items():self.assertEqual((self.folder/name).read_bytes(),content)
@@ -322,11 +406,11 @@ class AgentProtocolTests(unittest.TestCase):
 
     def test_reprocess_rejects_unfinished_lease_even_for_older_revision(self):
         self.complete()
-        update_metadata(self.folder,dict(input_offset_seconds=2))
+        (self.folder / '录像.mp4').write_bytes(b'Synthetic changed source video')
         agent.publish_ready(self.folder)
         agent.claim(self.folder,'pending-new-material')
         state=(self.folder/agent.STATE).read_bytes()
-        update_metadata(self.folder,dict(input_offset_seconds=3))
+        (self.folder / '录像.mp4').write_bytes(b'Synthetic changed source video again')
         agent.publish_ready(self.folder)
         self.assertEqual(agent.reprocess(self.folder,'redo-worker','不能抢占旧租约')['reason'],'busy')
         self.assertEqual((self.folder/agent.STATE).read_bytes(),state)
@@ -403,7 +487,7 @@ class AgentProtocolTests(unittest.TestCase):
         rename_session(self.folder,'用户起的名字')
         self.assertEqual(agent.publish_ready(self.folder)['revision'],self.manifest['revision'])
         self.assertEqual(agent.preprocessing_status(self.folder)['state'],'complete')
-        update_metadata(self.folder,dict(input_offset_seconds=2))
+        (self.folder / '录像.mp4').write_bytes(b'Synthetic changed source video')
         self.assertEqual(agent.preprocessing_status(self.folder)['state'],'stale')
         self.manifest=agent.publish_ready(self.folder)
         self.assertEqual(agent.preprocessing_status(self.folder)['state'],'stale')
@@ -528,7 +612,7 @@ class AgentProtocolTests(unittest.TestCase):
             agent.name_activities(self.folder, candidate, apply=True)
         self.assertEqual((self.folder/'session.json').read_bytes(), before)
         candidate = self.activity_candidate()
-        update_metadata(self.folder, {'input_offset_seconds': 2})
+        (self.folder / '录像.mp4').write_bytes(b'Synthetic changed source video')
         agent.publish_ready(self.folder)
         with self.assertRaises(ValueError): agent.name_activities(self.folder, candidate, apply=True)
 
@@ -582,11 +666,12 @@ class AgentProtocolTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn('--file', json.loads(output.getvalue())['error'])
 
-    def test_speaker_and_retranscription_invalidate_without_losing_old_result(self):
+    def test_speaker_preserves_and_retranscription_invalidates_old_result(self):
         self.complete()
         api=ReviewAPI(self.folder,session_review_payload(self.folder))
         self.assertTrue(api.set_recorder_speaker(1,transcript_id(self.segments))['ok'])
-        self.assertEqual(agent.preprocessing_status(self.folder)['state'],'stale')
+        self.assertEqual(agent.preprocessing_status(self.folder)['state'],'complete')
+        self.assertIn('notice',agent.preprocessing_status(self.folder))
         self.assertTrue((self.folder/agent.RESULT).exists())
         updated=recorder.read(self.folder/'录像.whisper.json');updated['segments'][0]['text']='改正后的文字'
         recorder.write(self.folder/'录像.whisper.json',updated)
@@ -611,7 +696,8 @@ class AgentProtocolTests(unittest.TestCase):
             self.assertEqual(agent.preprocessing_status(self.folder)['state'],'complete')
             self.assertEqual(snapshot(),before)
         self.assertTrue(api.set_recorder_speaker(1,transcript_id(self.segments))['ok'])
-        self.assertEqual(agent.preprocessing_status(self.folder)['state'],'stale')
+        self.assertEqual(agent.preprocessing_status(self.folder)['state'],'complete')
+        self.assertIn('notice',agent.preprocessing_status(self.folder))
         before=snapshot()
         self.assertTrue(api.set_recorder_speaker(1,transcript_id(self.segments))['ok'])
         self.assertEqual(snapshot(),before)

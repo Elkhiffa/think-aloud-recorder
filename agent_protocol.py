@@ -21,6 +21,7 @@ VERSION = 1
 READY = 'agent-ready.json'
 STATE = 'agent-state.json'
 RESULT = 'experience-events.json'
+ANALYSIS_CONTEXT = 'analysis-context.json'
 FILES = ('录像.mp4', '口述.flac', '录像.whisper.json',
          'input-events.json', 'input-events.revocation.json')
 MAX_RESULT = 2 * 1024 * 1024
@@ -116,22 +117,75 @@ def _identity(folder, meta=None):
         raise ValueError('场次编号无效。')
     if not _number(duration) or duration <= 0:
         raise ValueError('场次时长无效。')
-    from review_runtime import input_alignment
-    role = meta.get('recorder_speaker')
-    role = {k: role.get(k) for k in ('transcript_id', 'speaker_id', 'source')} if isinstance(role, dict) else None
     sources = _stats(folder, FILES)
     # Conditional to preserve the revisions of unaffected historical sessions.
     corrections = _stats(folder, ('input-events.corrections.json',))
     if corrections['input-events.corrections.json']:
         sources.update(corrections)
     material = dict(version=VERSION, id=ident, game=meta.get('game', ''), duration=duration,
-                    sources=sources, alignment=input_alignment(meta), recorder_speaker=role)
+                    sources=sources)
     revision = hashlib.sha256(json.dumps(material, sort_keys=True, ensure_ascii=False,
                                         allow_nan=False).encode('utf-8')).hexdigest()
     complete = (meta.get('state') == '可回看' and meta.get('transcription_state') in (None, 'ready')
                 and all(sources[name] and sources[name]['bytes'] > 0
                         for name in ('录像.mp4', '录像.whisper.json')))
     return meta, material, revision, complete
+
+
+def _current_analysis_context(meta):
+    from review_runtime import input_alignment
+    role = meta.get('recorder_speaker')
+    role = {k: role.get(k) for k in ('transcript_id', 'speaker_id', 'source')} if isinstance(role, dict) else None
+    return dict(alignment=input_alignment(meta), recorder_speaker=role)
+
+
+def _legacy_revision(folder, meta=None, material=None, analysis_context=None):
+    """Old publications remain readable with their original analysis settings."""
+    if material is None:
+        meta, material, _, _ = _identity(folder, meta)
+    context = analysis_context if analysis_context is not None else _current_analysis_context(meta)
+    return hashlib.sha256(json.dumps(dict(material, **context), sort_keys=True, ensure_ascii=False,
+                                    allow_nan=False).encode('utf-8')).hexdigest()
+
+
+def _analysis_context(folder, value):
+    """Read the embedded snapshot, then the byte-bound upgrade sidecar."""
+    context = value.get('analysis_context')
+    if context is None:
+        # Path 1+4: upgrading an old result must not rewrite its correction-bound bytes.
+        sidecar = _optional_object(folder, ANALYSIS_CONTEXT)
+        if (sidecar and _path(folder, RESULT).is_file()
+                and sidecar.get('result_sha256') == _file_hash(_path(folder, RESULT))
+                and value == _load(folder, RESULT, MAX_RESULT)):
+            context = {key: sidecar.get(key) for key in ('alignment', 'recorder_speaker')}
+    if context is None:
+        return None
+    # Paths 3/4: saved or submitted snapshots determine the evidence time projection.
+    if (not isinstance(context, dict) or not isinstance(context.get('alignment'), dict)
+            or not _number(context['alignment'].get('offset_seconds'))
+            or abs(context['alignment']['offset_seconds']) > 30
+            or context.get('recorder_speaker') is not None and not isinstance(context['recorder_speaker'], dict)):
+        raise ValueError('整理时的同步偏移或记录者快照无效。')
+    alignment = {key: context['alignment'].get(key) for key in
+                 ('offset_seconds', 'source', 'manual_offset_seconds', 'measured_offset_seconds', 'uncertainty_seconds')}
+    role = context.get('recorder_speaker')
+    role = {key: role.get(key) for key in ('transcript_id', 'speaker_id', 'source')} if role is not None else None
+    return dict(alignment=alignment, recorder_speaker=role)
+
+
+def _revision_matches(folder, candidate, meta, material, revision, analysis_context=None):
+    return candidate in (revision, _legacy_revision(folder, meta, material),
+                         _legacy_revision(folder, meta, material, analysis_context))
+
+
+def preserve_analysis_context(folder, meta):
+    """Called under the metadata lock, before a UI setting changes an old result."""
+    raw = _optional_object(folder, RESULT, MAX_RESULT)
+    # Path 1+4: only a matching old revision proves which settings produced this result.
+    if (raw and 'analysis_context' not in raw and raw.get('revision') == _legacy_revision(folder, meta)
+            and _analysis_context(folder, raw) is None):
+        _write(folder, ANALYSIS_CONTEXT, dict(result_sha256=_file_hash(_path(folder, RESULT)),
+                                             **_current_analysis_context(meta)))
 
 
 def _transcript_rows(folder):
@@ -245,19 +299,27 @@ def try_publish_ready(folder):
 def _ready(folder):
     meta, material, revision, complete = _identity(folder)
     manifest = _load(folder, READY)
+    matches = _revision_matches(folder, manifest.get('revision'), meta, material, revision)
+    if not matches:
+        # Path 1+4: optional ready publication can fail after the upgrade snapshot was saved.
+        raw = _optional_object(folder, RESULT, MAX_RESULT)
+        context = _analysis_context(folder, raw)
+        matches = _revision_matches(folder, manifest.get('revision'), meta, material, revision, context)
     if (not complete or manifest.get('version') != VERSION or
-            manifest.get('session_id') != meta['id'] or manifest.get('revision') != revision):
+            manifest.get('session_id') != meta['id'] or not matches):
         raise ValueError('素材已改变或尚未就绪，请重新发布并领取当前版本。')
     return meta, material, revision, manifest
 
 
-def _normalized_inputs(folder, meta, duration):
+def _normalized_inputs(folder, meta, duration, alignment=None):
     from review_runtime import input_payload
     path = _path(folder, 'input-events.json')
     if path.is_file() and path.stat().st_size > 128 * 1024 * 1024:
         return dict(state='failed', intervals=[], gaps=[], window_states=[],
                     error='操作文件过大，接口未展开；不能据此推断没有操作。')
     inputs = input_payload(folder, meta)
+    if alignment is not None:
+        inputs['alignment'] = alignment
     offset = inputs['alignment']['offset_seconds']
     def shift(row, leading=False):
         start = 0 if leading and row['start'] == 0 else row['start'] + offset
@@ -334,7 +396,9 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
         meta, material, revision, _ = _ready(folder)
     if not isinstance(value, dict) or type(value.get('version')) is not int or value['version'] != VERSION:
         raise ValueError('不支持的预处理结果版本。')
-    if value.get('session_id') != meta['id'] or value.get('revision') != revision:
+    analysis_context = _analysis_context(folder, value)
+    if (value.get('session_id') != meta['id'] or
+            not _revision_matches(folder, value.get('revision'), meta, material, revision, analysis_context)):
         raise ValueError('结果不属于当前场次或素材版本。')
     duration = material['duration']
     coverage = value.get('coverage')
@@ -397,7 +461,8 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 if coverage['inputs'] == 'none':
                     raise ValueError('未检查操作记录，不能引用操作证据。')
                 if input_rows is None:
-                    input_rows = {r['id']: r for r in _normalized_inputs(folder, meta, duration)['intervals']}
+                    alignment = analysis_context['alignment'] if analysis_context is not None else None
+                    input_rows = {r['id']: r for r in _normalized_inputs(folder, meta, duration, alignment)['intervals']}
                 source = input_rows.get(item.get('ref')) if isinstance(item.get('ref'), str) else None
                 if source is None:
                     raise ValueError('操作引用不存在或已被撤销。')
@@ -435,12 +500,15 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                                **{text_key: _text(row.get(text_key), 2000, text_key)},
                                reason=_text(row.get('reason'), 2000, '依据')))
         return result
-    return dict(version=VERSION, session_id=meta['id'], revision=revision,
+    result = dict(version=VERSION, session_id=meta['id'], revision=revision,
                 summary=_text(value.get('summary'), 4000, '整理概述'),
                 coverage=dict(video_ranges=ranges, transcript=coverage['transcript'],
                               inputs=coverage['inputs'], limitations=limitations),
                 events=sorted(events, key=lambda e: e['start']),
                 questions=related('questions', 'question', 30), ideas=related('ideas', 'idea', 100))
+    if analysis_context is not None:
+        result['analysis_context'] = analysis_context
+    return result
 
 
 def _lease_seconds(seconds):
@@ -527,7 +595,8 @@ def claim(folder, worker, seconds=1800):
                 (old.get('revision') == revision or old.get('redo'))):
             return dict(claimed=False, reason='busy', revision=revision, expires_at=old['expires_at'])
         try:
-            if result.get('revision') == revision:
+            if _revision_matches(folder, result.get('revision'), meta, material, revision,
+                                 _analysis_context(folder, result)):
                 validate_result(folder, result, meta, material, revision)
                 return dict(claimed=False, reason='complete', revision=revision)
         except (OSError, ValueError, TypeError):
@@ -576,7 +645,9 @@ def _owned(folder, token):
     except (OSError, ValueError):
         result = {}
     receipt = result.get('receipt')
-    if result.get('revision') == revision and isinstance(receipt, dict) and receipt.get('token') == token:
+    if (isinstance(receipt, dict) and receipt.get('token') == token
+            and _revision_matches(folder, result.get('revision'), meta, material, revision,
+                                  _analysis_context(folder, result))):
         raise ValueError('此任务已经提交，不能再次更改。')
     return meta, material, revision, job
 
@@ -608,7 +679,9 @@ def submit(folder, token, value):
         raise ValueError('预处理结果超过 2 MB。')
     with metadata_lock(folder):
         meta, material, revision, job = _owned(folder, token)
-        result = validate_result(folder, value, meta, material, revision)
+        # Path 3: submission uses the program's current settings, never agent-provided ones.
+        candidate = dict(value, analysis_context=_current_analysis_context(meta))
+        result = validate_result(folder, candidate, meta, material, revision)
         from event_edits import reviewed
         correction_review = reviewed(folder, value)
         if correction_review:
@@ -772,11 +845,13 @@ def _status(folder, meta):
         job = {}
     if not has_result and not job:
         return dict(state='none')
-    if not complete or marker.get('revision') != revision or marker.get('version') != VERSION:
+    raw = _load(folder, RESULT, MAX_RESULT) if has_result else {}
+    context = _analysis_context(folder, raw)
+    if (not complete or marker.get('version') != VERSION
+            or not _revision_matches(folder, marker.get('revision'), meta, material, revision, context)):
         return dict(state='stale', label='需重新预处理', reason='素材已更新，旧整理结果已保留。')
     if has_result:
-        raw = _load(folder, RESULT, MAX_RESULT)
-        if raw.get('revision') == revision:
+        if _revision_matches(folder, raw.get('revision'), meta, material, revision, context):
             result = validate_result(folder, raw, meta, material, revision)
             from event_edits import project
             try:
@@ -786,6 +861,8 @@ def _status(folder, meta):
             value = dict(state='complete', label=f'已预处理 · {len(result["events"])} 个事件',
                          events=len(result['events']), questions=len(result['questions']),
                          ideas=len(result['ideas']), result=result, editing=editing)
+            if context is not None and context != _current_analysis_context(meta):
+                value['notice'] = '整理后同步偏移／记录者已改动，事件中的操作时间可能有偏差'
             redo = _reanalysis_status(job, raw)
             if redo:
                 value['reanalysis'] = redo
@@ -805,9 +882,9 @@ def preprocessing_status(folder, meta=None, include_result=False):
     """Bounded cache: polling never re-reads an unchanged large sidecar."""
     try:
         meta, material, revision, complete = _identity(folder, meta)
-        stats = _stats(folder, (READY, STATE, RESULT, 'experience-event-edits.json'))
+        stats = _stats(folder, (READY, STATE, RESULT, 'experience-event-edits.json', ANALYSIS_CONTEXT))
         key = str(Path(folder).resolve())
-        signature = json.dumps([revision, complete, stats], sort_keys=True)
+        signature = json.dumps([revision, complete, _current_analysis_context(meta), stats], sort_keys=True)
         with _CACHE_LOCK:
             cached = _CACHE.get(key)
             if cached and cached[0] == signature and cached[1] > time.time():

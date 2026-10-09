@@ -797,6 +797,7 @@
         (!result.events.length?'<p class="event-empty">本轮没有提取出有充分依据的体验事件。</p>':'')+related('ideas','idea','值得展开的想法')+related('questions','question','可选补充')+
         (result.questions?.length?'<p class="event-footnote">这些问题可以之后补充，不影响本轮预处理完成。</p>':'');
       if(info.editing?.error){const error=document.createElement('p');error.className='event-notes';error.textContent=info.editing.error;panel.prepend(error);}
+      if(info.notice){const message=document.createElement('p');message.className='preprocessing-notice';message.setAttribute('role','status');message.textContent=info.notice;panel.prepend(message);}
       panel.querySelectorAll('[data-edit-event]').forEach(button=>button.onclick=()=>editEvent(result.events.find(event=>event.id===button.dataset.editEvent),info.editing));
       panel.querySelectorAll('[data-event-time]').forEach(button=>button.onclick=()=>seekKeep(Number(button.dataset.eventTime),false));
       panel.querySelectorAll('.event-evidence').forEach(details=>details.addEventListener('toggle',()=>{

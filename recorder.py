@@ -1261,8 +1261,12 @@ def make_player(p, meta, segments):
     from review_runtime import render_player, review_payload
     temporary=p/('独立回看.html.'+uuid.uuid4().hex+'.tmp')
     temporary.write_text(render_player(ROOT, review_payload(p, meta, segments)), encoding='utf-8')
-    for attempt in range(40):
-        try:os.replace(temporary,p/'独立回看.html');return
-        except PermissionError:
-            if attempt==39:raise
-            time.sleep(.05)
+    try:
+        for attempt in range(40):
+            try:os.replace(temporary,p/'独立回看.html');return
+            except PermissionError:
+                if attempt==39:raise
+                time.sleep(.05)
+    finally:
+        # A persistent sync/antivirus lock must not leave a failed review page.
+        temporary.unlink(missing_ok=True)
