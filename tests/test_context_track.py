@@ -18,8 +18,10 @@ class ContextTrackTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.folder = Path(self.temp.name) / 'session'
-        self.folder.mkdir()
+        self.folder = Path(self.temp.name) / '场次' / 'session'
+        self.folder.mkdir(parents=True)
+        (self.folder / 'session.json').write_text(
+            json.dumps(dict(game='合成游戏'), ensure_ascii=False), encoding='utf-8')
         (self.folder / '录像.mp4').write_bytes(b'synthetic-video')
         self.image = SimpleNamespace(shape=(540, 960, 3))
 
@@ -50,7 +52,7 @@ class ContextTrackTests(unittest.TestCase):
         _, track = self.build([[row('粒子乱码', .59), row('道具', .6)]])
         self.assertEqual([item[2] for item in track['frames'][0]['items']], ['道具'])
         self.assertIsNone(track['watermark'])
-        self.assertEqual(track['screens'], [])
+        self.assertEqual(track['screens'], [dict(start=2.5, end=2.5, screen=None, source='ocr')])
 
     def test_compact_merges_adjacent_title_prefixes(self):
         """触发路径：在同一界面停留十几分钟 → 上百帧重复文本塞满 agent 上下文。"""
@@ -88,6 +90,35 @@ class ContextTrackTests(unittest.TestCase):
         self.assertTrue(summary['reused'])
         engine.assert_not_called()
         self.assertEqual(context.load_track(self.folder), track)
+
+    def test_rematch_does_not_call_ocr(self):
+        """触发路径：用户录了 20 场后修订目录 → 只重算界面分段，不应重跑几小时 OCR。"""
+        catalog_path = Path(self.temp.name) / 'game-assets' / '合成游戏' / 'catalog.json'
+        catalog_path.parent.mkdir(parents=True)
+        catalog = dict(version=1, game='合成游戏', screens=[dict(
+            id='bag', name='背包', source='manual', elements=[],
+            match=dict(all_of=['道具'], any_of=[], none_of=[]))])
+        catalog_path.write_text(json.dumps(catalog, ensure_ascii=False), encoding='utf-8')
+        _, before = self.build([[row('道具')], [row('道具')]], times=[12.5, 17.5],
+                               interval=5, start=10, end=20)
+        self.assertEqual(before['screens'], [dict(start=12.5, end=17.5, screen='bag', source='ocr')])
+        catalog['screens'][0].update(id='bag.items', engine_id='inventory.items')
+        catalog_path.write_text(json.dumps(catalog, ensure_ascii=False), encoding='utf-8')
+        with patch.object(context, '_ocr_engine') as engine, patch.object(
+                context, '_sample_frames') as samples:
+            cached = context.build(self.folder, interval=5, start=10, end=20)
+            self.assertTrue(cached['reused'])
+            self.assertEqual(context.load_track(self.folder)['screens'], before['screens'])
+            summary = context.build(self.folder, rematch=True)
+        engine.assert_not_called()
+        samples.assert_not_called()
+        self.assertTrue(summary['rematched'])
+        after = context.load_track(self.folder)
+        self.assertEqual(after['screens'], [dict(start=12.5, end=17.5, screen='bag.items',
+                                                 source='ocr', engine_id='inventory.items')])
+        self.assertEqual({key: value for key, value in after.items() if key != 'screens'},
+                         {key: value for key, value in before.items() if key != 'screens'})
+        self.assertEqual((summary['interval'], summary['start'], summary['end']), (5, 10, 20))
 
 
 if __name__ == '__main__':

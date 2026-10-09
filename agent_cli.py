@@ -102,12 +102,23 @@ def main(argv=None):
     context_build.add_argument('--start', type=float, default=0)
     context_build.add_argument('--end', type=float)
     context_build.add_argument('--output')
+    context_build.add_argument('--rematch', action='store_true', help='按当前界面目录重算分段，不重新 OCR')
     context_read = commands.add_parser('context-read', help='读取指定区间的情景文字；--compact 合并相邻重复标题')
     context_read.add_argument('session')
     context_read.add_argument('--start', type=float)
     context_read.add_argument('--end', type=float)
     context_read.add_argument('--compact', action='store_true')
     context_read.add_argument('--output', help='读取 context-build --output 保存的情景轨道')
+    catalog_validate = commands.add_parser('catalog-validate', help='检查单游戏界面目录格式及重复编号')
+    catalog_validate.add_argument('vault')
+    catalog_validate.add_argument('game')
+    catalog_suggest = commands.add_parser('catalog-suggest', help='只读统计标题区高频文字及出现时间，供人工命名')
+    catalog_suggest.add_argument('session')
+    catalog_suggest.add_argument('--top', type=int, default=30)
+    catalog_hotwords = commands.add_parser('catalog-hotwords', help='导出界面和元素名称、别名为去重 TXT 词表')
+    catalog_hotwords.add_argument('vault')
+    catalog_hotwords.add_argument('game')
+    catalog_hotwords.add_argument('--output', required=True)
     visual = commands.add_parser('visual-nodes', help='本地逐帧检测画面变化；不调用模型，不写入场次')
     visual.add_argument('session')
     visual.add_argument('--output', required=True, help='资料库之外的新输出目录')
@@ -223,11 +234,20 @@ def main(argv=None):
         elif name == 'context-build':
             from context_track import build
             value = build(args.session, interval=args.interval, start=args.start,
-                          end=args.end, output=args.output)
+                          end=args.end, output=args.output, rematch=args.rematch)
         elif name == 'context-read':
             from context_track import read_track
             value = read_track(args.session, start=args.start, end=args.end,
                                compact=args.compact, output=args.output)
+        elif name == 'catalog-validate':
+            from game_catalog import validate
+            value = validate(args.vault, args.game)
+        elif name == 'catalog-suggest':
+            from game_catalog import suggest
+            value = suggest(args.session, args.top)
+        elif name == 'catalog-hotwords':
+            from game_catalog import hotwords
+            value = hotwords(args.vault, args.game, args.output)
         elif name == 'visual-nodes':
             from visual_nodes import extract
             def progress(value):

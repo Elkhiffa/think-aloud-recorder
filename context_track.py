@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 import agent_protocol as protocol
+import game_catalog
 
 TRACK = 'context-track.json'
 _UID = re.compile(r'\bID\s*[:：]\s*(\d+)', re.IGNORECASE)
@@ -87,16 +88,25 @@ def _track_path(folder, output=None):
     return (Path(output) if output is not None else Path(folder)) / TRACK
 
 
-def build(folder, *, interval=5, start=0, end=None, output=None):
+def build(folder, *, interval=5, start=0, end=None, output=None, rematch=False):
     """Build or reuse a track; output redirects derived data outside the session."""
+    folder = Path(folder)
+    path = _track_path(folder, output)
+    # 路径 2：修订目录后 --rematch 仅重算界面分段，保留原抽帧范围。
+    if rematch:
+        track = load_track(folder, output=output)
+        track['screens'] = game_catalog.match_screens(
+            game_catalog.session_catalog(folder), track['frames'])
+        protocol._write(path.parent, path.name, track)
+        return dict(path=str(path.resolve()), frames=len(track['frames']), reused=True,
+                    rematched=True, interval=track['interval'],
+                    start=track.get('start', 0), end=track.get('end'))
     # 路径 2：CLI 的区间/间隔输入必须符合声明的采样范围。
     if not math.isfinite(interval) or not 2 <= interval <= 10:
         raise ValueError('抽帧间隔必须在 2–10 秒之间。')
     if not math.isfinite(start) or start < 0 or (end is not None and
             (not math.isfinite(end) or end <= start)):
         raise ValueError('抽帧范围需满足 0 ≤ start < end。')
-    folder = Path(folder)
-    path = _track_path(folder, output)
     source = _source_video(folder)
     # 路径 2/1：相同视频及采样参数复用；转写、记录者变化不参与有效性。
     if path.is_file():
@@ -113,7 +123,8 @@ def build(folder, *, interval=5, start=0, end=None, output=None):
         frames.append(dict(t=at, items=items))
         watermark = _watermark(items, at, image.shape[0], watermark)
     track = dict(version=1, source_video=source, interval=interval, start=start, end=end,
-                 watermark=watermark, frames=frames, screens=[])
+                 watermark=watermark, frames=frames,
+                 screens=game_catalog.match_screens(game_catalog.session_catalog(folder), frames))
     path.parent.mkdir(parents=True, exist_ok=True)
     protocol._write(path.parent, path.name, track)
     return dict(path=str(path.resolve()), frames=len(frames), reused=False,
