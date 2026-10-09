@@ -96,6 +96,18 @@ def main(argv=None):
     discovery.add_argument('database')
     discovery.add_argument('--publish', action='store_true')
     discovery.add_argument('--include-test', action='store_true')
+    context_build = commands.add_parser('context-build', help='本地 OCR 生成情景轨道；--output 将派生数据写到工作目录')
+    context_build.add_argument('session')
+    context_build.add_argument('--interval', type=float, default=5)
+    context_build.add_argument('--start', type=float, default=0)
+    context_build.add_argument('--end', type=float)
+    context_build.add_argument('--output')
+    context_read = commands.add_parser('context-read', help='读取指定区间的情景文字；--compact 合并相邻重复标题')
+    context_read.add_argument('session')
+    context_read.add_argument('--start', type=float)
+    context_read.add_argument('--end', type=float)
+    context_read.add_argument('--compact', action='store_true')
+    context_read.add_argument('--output', help='读取 context-build --output 保存的情景轨道')
     visual = commands.add_parser('visual-nodes', help='本地逐帧检测画面变化；不调用模型，不写入场次')
     visual.add_argument('session')
     visual.add_argument('--output', required=True, help='资料库之外的新输出目录')
@@ -208,6 +220,14 @@ def main(argv=None):
             return 0 if result.get('ok') else 1
         elif name == 'scan':
             value = scan(args.database, args.publish, args.include_test)
+        elif name == 'context-build':
+            from context_track import build
+            value = build(args.session, interval=args.interval, start=args.start,
+                          end=args.end, output=args.output)
+        elif name == 'context-read':
+            from context_track import read_track
+            value = read_track(args.session, start=args.start, end=args.end,
+                               compact=args.compact, output=args.output)
         elif name == 'visual-nodes':
             from visual_nodes import extract
             def progress(value):
