@@ -25,7 +25,7 @@ def frame(at, text):
 
 class GameCatalogTests(unittest.TestCase):
     def test_match_rules_and_catalog_order(self):
-        """触发路径：命令行命令 → agent_cli.py context-build → 匹配界面目录 → 目录里“背包·道具”和“背包·任务”都含“仓库”等共同字样 → 不加 none_of 和取舍规则就会互相误判。"""
+        """触发路径：目录里“背包·道具”和“背包·任务”都含“仓库”等共同字样 → 不加 none_of 和取舍规则就会互相误判。"""
         data = sample_catalog()
         self.assertEqual(catalog.match_frame(data, frame(0, '仓库 道具'))['id'], 'bag.items')
         self.assertEqual(catalog.match_frame(data, frame(0, '仓库 道具 任务'))['id'], 'bag.quest')
@@ -39,7 +39,7 @@ class GameCatalogTests(unittest.TestCase):
         self.assertEqual(catalog.match_frame(data, frame(0, '仓库 道具 稀有'))['id'], 'bag.same')
 
     def test_adjacent_frames_merge(self):
-        """触发路径：命令行命令 → agent_cli.py context-read → agent 读界面时间轴 → 需要的是区间 → 逐帧列表无法直接给出连续界面区间。"""
+        """触发路径：agent 读界面时间轴时需要的是区间，不是逐帧列表。"""
         spans = catalog.match_screens(sample_catalog(), [
             frame(0, '仓库 道具'), frame(5, '仓库 材料'),
             frame(10, '仓库 任务'), frame(15, '无匹配'), frame(20, '无匹配'),
@@ -53,7 +53,7 @@ class GameCatalogTests(unittest.TestCase):
         ])
 
     def test_validate_rejects_duplicate_ids(self):
-        """触发路径：命令行命令 → agent_cli.py catalog-validate → 手工编辑 JSON 时复制条目 → 忘了改 id → 实例引用指向不明确。"""
+        """触发路径：手工编辑 JSON 时复制条目忘了改 id → 实例引用指向不明确。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = catalog.catalog_path(tmp, '合成游戏')
             path.parent.mkdir(parents=True)
@@ -69,7 +69,7 @@ class GameCatalogTests(unittest.TestCase):
                         catalog.validate(tmp, '合成游戏')
 
     def test_hotwords_deduplicates_names_and_aliases(self):
-        """触发路径：命令行命令 → agent_cli.py catalog-hotwords → 导出名称与别名 → 元素别名之间、别名与名称重复 → 导出的词表出现重复词条。"""
+        """触发路径：元素别名之间、别名与名称重复 → 导出的词表出现重复词条。"""
         with tempfile.TemporaryDirectory() as tmp:
             data = sample_catalog()
             data['screens'][0]['aliases'] = ['道具', '使用']
