@@ -57,6 +57,7 @@
     get needsVaultConfirmation() { return this.defaultVaultSelected&&this.snapshot?.default_vault?.requires_confirmation===true&&!this.sameVault(this.confirmedVault,this.draft.vault); }
     confirmVault() { if(this.draft)this.confirmedVault=this.draft.vault; }
     openDraft(mode='edit') {
+      this.deviceChoiceRevision=0;
       this.confirmedVault='';
       this.editingId=mode==='edit'?this.activeId:null;
       this.draftVocabularyRevision=this.editingId?this.saved.vocabulary_revision:null;
@@ -74,7 +75,7 @@
       return this.draft;
     }
     cancelDraft() { this.draft=null;this.editingId=null;this.step=1;this.confirmedVault=''; }
-    updateDraft(key,value) { if(this.draft&&FIELDS.includes(key)){this.draft[key]=key==='record_inputs'?value===true:value;if(this.draft.source!=='游戏窗口')this.draft.record_inputs=false;if(key==='hotwords')this.draft.hotword_manual=value;if(['hotwords','hotword_files','hotword_manual'].includes(key))this.syncVocabulary();} }
+    updateDraft(key,value) { if(this.draft&&FIELDS.includes(key)){if(['source','window','monitor','mic'].includes(key))this.deviceChoiceRevision++;this.draft[key]=key==='record_inputs'?value===true:value;if(this.draft.source!=='游戏窗口')this.draft.record_inputs=false;if(key==='hotwords')this.draft.hotword_manual=value;if(['hotwords','hotword_files','hotword_manual'].includes(key))this.syncVocabulary();} }
     syncVocabulary() { if(this.draft)this.draft.hotwords=vocabularyWords(this.draft).join('\n'); }
     addVocabularyFiles(files) { if(!this.draft)return 0;const ids=new Set(this.draft.hotword_files.map(file=>file.id));let count=0;for(const file of files||[]){if(!ids.has(file.id)){this.draft.hotword_files.push(clone(file));ids.add(file.id);count++;}}this.syncVocabulary();return count; }
     removeVocabularyFile(id) { if(this.draft){this.draft.hotword_files=this.draft.hotword_files.filter(file=>file.id!==id);this.syncVocabulary();} }
@@ -94,5 +95,22 @@
     const matches=(items||[]).filter(item=>item.itemEnabled===true&&String(item.itemValue)===selection.resolved);
     return matches.length===1?selection.resolved:requested;
   }
-  return {State,FIELDS,defaults,splitWords,vocabularyWords,updateView,lastInstallView,matchedWindowValue};
+  function inventoryView(snapshot) {
+    const inventory=snapshot?.device_inventory;
+    if(inventory&&['idle','running','succeeded','failed'].includes(inventory.state))return inventory;
+    // Older bridges may expose a cached list, but absence of inventory metadata
+    // cannot establish that a missing device was checked in this session.
+    const cached=['window','monitor','mic'].some(kind=>snapshot?.devices?.[kind]?.length);
+    return {state:cached?'cached':'idle',window_selection:snapshot?.readiness?.window_selection};
+  }
+  function savedDeviceLabel(kind,value) {
+    if(!value)return '尚未选择';
+    if(kind==='mic'&&value==='default')return '默认麦克风';
+    if(kind==='window') {
+      const parts=String(value).split(':');
+      if(parts.length===3&&parts.every(Boolean))return parts[0].replace(/#3A/g,':').replace(/#22/g,'#')+'（'+parts[2]+'）';
+    }
+    return '已保存的'+({mic:'麦克风',monitor:'显示器',window:'游戏窗口'}[kind]||'选择');
+  }
+  return {State,FIELDS,defaults,splitWords,vocabularyWords,updateView,lastInstallView,matchedWindowValue,inventoryView,savedDeviceLabel};
 });

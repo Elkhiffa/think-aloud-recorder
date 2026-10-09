@@ -16,12 +16,18 @@ First use opens a four-step setup wizard:
    name as the preset name. Explain that a preset saves the recording settings;
    the same game and devices normally need setup only once. Select it to record,
    use the gear to edit it, or create another preset for a different configuration.
-   Actual devices are loaded. Focus the preset-name input on entering this step,
-   without repeatedly stealing focus during polling. If every device list is
-   empty, label the action “设置 OBS”; only after that explicit refresh succeeds,
-   select the verified primary display and default microphone in the current
-   draft. If either cannot be verified, leave it empty and request manual selection.
-   A subsequent ordinary refresh preserves manual device choices.
+   Opening settings automatically reads actual Windows device identities without
+   requiring OBS setup. Focus the preset-name input on entering this step,
+   without repeatedly stealing focus during polling. Distinguish reading, failed,
+   cached and confirmed missing states; preserve readable saved selections.
+   Only an explicit first refresh of a new, empty, untouched draft may select the
+   verified primary display and default microphone. If either cannot be verified,
+   leave it empty and request manual selection. Automatic reads and all edits of
+   existing presets preserve choices, including after cancel or late completion.
+   Offer engine reconnection or recording-state rechecking separately when actual
+   readiness evidence requires it; an empty device list is not evidence of an
+   engine failure. Unknown recording ownership must retain its full recovery
+   action. Device discovery alone never enables Start recording.
 3. Recording quality and transcription: local model or Qwen as parallel tabs,
    with the local option initially selected for new drafts. Legacy record-only
    presets remain unchanged until explicitly saved; editing one requires selecting

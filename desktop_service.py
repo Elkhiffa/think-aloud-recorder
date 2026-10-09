@@ -58,6 +58,9 @@ class DesktopService:
         self._default_hotword_files = bundled_dictionary_snapshots(self.root)
         self._lock = threading.RLock()
         self._operation_lock = threading.RLock()
+        self._inventory_lock = threading.Lock()
+        self._inventory_thread = None
+        self._inventory_automatic = False
         self._shutdown_lock = threading.Lock()
         self._obs_shutdown_result = None
         self._readiness_thread = None
@@ -89,6 +92,7 @@ class DesktopService:
         self._devices = {'mic': [], 'window': [], 'monitor': []}
         self._device_defaults = {'monitor': '', 'mic': ''}
         self._device_refresh = None
+        self._device_inventory = dict(id=None, state='idle', error='', checked_at=None, window_selection=None)
         self._device_labels = {'mic': {}, 'window': {}, 'monitor': {}}
         self._readiness = dict(ready=False, checking=True, errors=[], checked_at=None)
         self._cfg = load_settings(self.root)
@@ -140,6 +144,8 @@ class DesktopService:
 
     def _defer_readiness(self):
         with self._lock:
+            if self._inventory_automatic:
+                self._invalidate_device_inventory()
             self._readiness.update(ready=False, checking=False, checked_at=None)
             return deepcopy(self._readiness)
 
@@ -150,6 +156,18 @@ class DesktopService:
         self._automatic_readiness.generation = generation
         self._automatic_readiness.foreground_only = True
         try:
+            if not self._automatic_probe_allowed():
+                return self._defer_readiness()
+            # Device identities do not depend on an OBS socket or launch. Keep
+            # this read-only evidence available even when engine setup fails.
+            with self._lock:
+                inventory_id = None
+                if (not self._closed.is_set() and not self._exit_pending and self._active is None
+                        and not self._obs_uncertain and not self._uncertain_ids
+                        and self._device_inventory['state'] != 'running'):
+                    inventory_id = self._begin_device_inventory(automatic=True)
+            if inventory_id:
+                self._read_device_inventory(inventory_id, automatic=True)
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
             self._initialize_obs_once()
@@ -195,7 +213,7 @@ class DesktopService:
         if self._active is not None and not allow_active:
             raise RuntimeError('当前场次仍在录制或等待确认停止，请先结束录制。')
         if (self._uncertain_ids or self._obs_uncertain) and not allow_uncertain and not allow_active:
-            raise RuntimeError('上次录制状态尚未确认。请先刷新设备重新连接 OBS，避免覆盖仍在进行的录制。')
+            raise RuntimeError('上次录制状态尚未确认。请打开录制预设，重新检查录制状态，避免覆盖仍在进行的录制。')
 
     def _launch(self, kind, operation, *, status=None, allow_active=False, allow_uncertain=False):
         with self._lock:
@@ -203,6 +221,7 @@ class DesktopService:
                 self._guard(allow_active, allow_uncertain, allow_closing=kind == 'saving')
             except Exception as error:
                 return self._error(error)
+            self._invalidate_device_inventory(running_only=True)
             self._activity.update(busy=True, kind=kind, status=status or '处理中', detail='')
             self._readiness.update(ready=False)
 
@@ -482,6 +501,7 @@ class DesktopService:
                                activity=activity, devices=deepcopy(self._devices), model=model,
                                device_defaults=deepcopy(self._device_defaults),
                                device_refresh=deepcopy(self._device_refresh),
+                               device_inventory=deepcopy(self._device_inventory),
                                capabilities=dict(cloud_key=self._has_key(),
                                    obs=(self.root / 'tools/obs/bin/64bit/obs64.exe').is_file(),
                                    local_model=model['state'] == 'ready')))
@@ -558,7 +578,7 @@ class DesktopService:
             result['ready'] = False
             result['checking'] = bool(self._readiness_thread and self._readiness_thread.is_alive())
             result['errors'] = [*result['errors'], dict(code='READINESS_STALE', step=1,
-                message='录制条件检查结果已过期，请等待自动确认，或打开录制预设并刷新设备。')]
+                message='录制条件检查结果已过期，请等待自动确认，或打开录制预设并重新检查录制条件。')]
         return result
 
     def _mark_readiness_checking(self, invalidate):
@@ -567,12 +587,86 @@ class DesktopService:
         # A routine refresh keeps a fresh verified success usable. Its worker is
         # still tracked independently; Start always performs another full check.
 
-    def _cache_devices(self, devices):
+    def _invalidate_device_inventory(self, *, running_only=False):
+        """Invalidate a token before changing the saved selection or ownership."""
+        if not running_only or self._device_inventory['state'] == 'running':
+            self._device_inventory = dict(id=None, state='idle', error='', checked_at=None, window_selection=None)
+            self._inventory_automatic = False
+
+    def _begin_device_inventory(self, *, automatic=False):
+        ident = uuid.uuid4().hex
+        self._device_inventory = dict(id=ident, state='running', error='', checked_at=None, window_selection=None)
+        self._inventory_automatic = automatic
+        return ident
+
+    def _check_device_inventory(self, ident, *, automatic):
+        with self._lock:
+            if (self._device_inventory['id'] != ident or self._device_inventory['state'] != 'running'
+                    or self._closed.is_set() or self._exit_pending or self._active is not None
+                    or self._obs_uncertain or self._uncertain_ids):
+                raise _ReadinessPaused('INVENTORY_CANCELLED')
+            if automatic:
+                if not self._automatic_probe_allowed():
+                    raise _ReadinessPaused('READINESS_PAUSED')
+
+    def _read_device_inventory(self, ident, *, automatic=False):
+        import device_inventory
+        def check():
+            self._check_device_inventory(ident, automatic=automatic)
+        try:
+            # Never wait for an OBS operation, and never hold the snapshot lock
+            # while Windows enumerates devices. Queries serialize independently.
+            with self._inventory_lock:
+                check()
+                devices = device_inventory.devices(check=check)
+                check()
+                self._cache_devices(devices, inventory_id=ident, check=check)
+        except _ReadinessPaused:
+            pass
+        except Exception as error:
+            with self._lock:
+                try:
+                    check()
+                except Exception:
+                    return
+                self._device_inventory.update(state='failed', error=self._safe_text(error),
+                                              checked_at=time.time(), window_selection=None)
+                self._inventory_automatic = False
+
+    def refresh_device_inventory(self):
+        """Read native identities only; never connect, recover or configure OBS."""
+        with self._lock:
+            try:
+                self._guard()
+            except Exception as error:
+                return self._error(error)
+            if self._device_inventory['state'] == 'running' and not self._inventory_automatic:
+                return ok(dict(inventory_id=self._device_inventory['id'], started=False))
+            ident = self._begin_device_inventory()
+            self._inventory_thread = threading.Thread(target=self._read_device_inventory, args=(ident,),
+                                                     daemon=True, name='device-inventory')
+            self._inventory_thread.start()
+            return ok(dict(inventory_id=ident, started=True))
+
+    def _cache_devices(self, devices, *, inventory_id=None, check=None, expected_inventory=None):
         try:
             primary_ids = recorder.primary_monitor_ids()
         except Exception:
             primary_ids = ()
         with self._lock:
+            if check:
+                check()
+            if (self._closed.is_set() or self._exit_pending or self._active is not None
+                    or self._obs_uncertain or self._uncertain_ids or not self._automatic_probe_allowed()):
+                return False
+            if expected_inventory is not None and self._device_inventory is not expected_inventory:
+                return False
+            if inventory_id is None:
+                # An explicit request owns its completion token. An older OBS
+                # probe cannot replace it while the native query is pending.
+                if self._device_inventory['state'] == 'running':
+                    return False
+                inventory_id = uuid.uuid4().hex
             self._devices = {key: [{field: item.get(field) for field in ('itemName', 'itemValue', 'itemEnabled')}
                                   for item in devices.get(key, [])] for key in self._devices}
             monitors = {str(item.get('itemValue')).casefold(): item['itemValue']
@@ -587,6 +681,12 @@ class DesktopService:
             for key, items in self._devices.items():
                 for item in items:
                     self._device_labels[key][str(item.get('itemValue'))] = str(item.get('itemName', ''))
+            selection = (recorder.resolve_window_selection(self._cfg.get('window'), self._devices['window'])
+                         if self._cfg.get('source') == '游戏窗口' else None)
+            self._device_inventory = dict(id=inventory_id, state='succeeded', error='',
+                                         checked_at=time.time(), window_selection=selection)
+            self._inventory_automatic = False
+            return True
 
     def _device_label(self, kind, value):
         name = self._device_labels[kind].get(str(value))
@@ -624,9 +724,11 @@ class DesktopService:
                 return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
             if (request(client.get_profile_list).current_profile_name != 'Experience'
                     or request(client.get_scene_collection_list).current_scene_collection_name != 'Experience'):
-                return None, ('OBS_CONFIGURATION', 'OBS 当前不是记录器专用配置，请打开录制预设并刷新设备 / 设置 OBS。')
+                return None, ('OBS_CONFIGURATION', 'OBS 当前不是记录器专用配置，请打开录制预设并重新连接录制引擎。')
             import device_inventory
-            result = device_inventory.devices(check=check)
+            with self._inventory_lock:
+                check()
+                result = device_inventory.devices(check=check)
             if request(client.get_record_status).output_active or request(client.get_stream_status).output_active:
                 return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
             check()
@@ -669,7 +771,7 @@ class DesktopService:
             errors.append(dict(code=code, message=self._safe_text(message), step=step))
         try:
             if blocked:
-                error('RECORDING_UNCONFIRMED', '当前录制尚未结束或归属未确认，请先结束录制。', 1)
+                error('RECORDING_UNCONFIRMED', '当前录制尚未结束或归属未确认。若正在录制，请先结束；若状态不明，请打开预设并重新检查录制状态。', 1)
             if not has_setup:
                 error('SETUP_REQUIRED', '请先完成并保存录制设置。', 1)
             obs_file = self.root / 'tools/obs/bin/64bit/obs64.exe'
@@ -677,6 +779,8 @@ class DesktopService:
                 error('OBS_MISSING', '录制引擎文件缺失，请恢复完整应用文件夹。', 1)
             elif not blocked:
                 try:
+                    with self._lock:
+                        inventory_before_probe = self._device_inventory
                     if devices is None:
                         devices, problem = self._probe_obs_devices()
                         if problem:
@@ -684,7 +788,8 @@ class DesktopService:
                     if not self._automatic_probe_allowed():
                         return self._defer_readiness()
                     if devices is not None:
-                        self._cache_devices(devices)
+                        if self._cache_devices(devices, expected_inventory=inventory_before_probe) is False:
+                            return self._defer_readiness()
                         source = 'window' if cfg.get('source') == '游戏窗口' else 'monitor'
                         for key in (source, 'mic'):
                             value = cfg.get(key)
@@ -707,7 +812,7 @@ class DesktopService:
                                 else:
                                     error('MONITOR_UNAVAILABLE', f'显示器“{label}”未连接或不可用。', 1)
                 except Exception:
-                    error('OBS_UNAVAILABLE', '无法连接录制引擎。请打开录制预设并刷新设备 / 设置 OBS。', 1)
+                    error('OBS_UNAVAILABLE', '无法连接录制引擎。请打开录制预设并重新连接录制引擎。', 1)
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
             provider = cfg.get('transcription_provider', 'later')
@@ -736,7 +841,7 @@ class DesktopService:
                 except Exception:
                     error('OUTPUT_UNAVAILABLE', '保存位置无法访问或写入，请连接保存磁盘，或重新选择可写文件夹。', 3)
         except Exception:
-            error('READINESS_FAILED', '录制条件检查未完成，请等待自动确认，或打开录制预设并刷新设备。', 1)
+            error('READINESS_FAILED', '录制条件检查未完成，请等待自动确认，或打开录制预设并重新检查录制条件。', 1)
         if not has_setup:
             # Onboarding has one actionable next step. Device probing above still
             # populates the wizard, but absent selections are not user errors yet.
@@ -874,6 +979,7 @@ class DesktopService:
         cfg['active_preset_id'] = ident
         self._persist(cfg)
         self._cfg = cfg
+        self._invalidate_device_inventory()
         self._readiness.update(ready=False, checking=True, checked_at=None)
         return self._public_config()
 
@@ -976,6 +1082,7 @@ class DesktopService:
                 cfg['active_preset_id'] = id
                 self._persist(cfg)
                 self._cfg = cfg
+                self._invalidate_device_inventory()
                 self._devices = {'mic': [], 'window': [], 'monitor': []}
                 self._device_defaults = {'monitor': '', 'mic': ''}
                 self._readiness.update(ready=False, checking=True, checked_at=None, errors=[])
@@ -994,7 +1101,7 @@ class DesktopService:
                 self._recover()
                 if self._active is not None:
                     self._update_readiness()
-                    raise RuntimeError('当前场次仍在录制，无法刷新设备；请先结束录制。')
+                    raise RuntimeError('当前场次仍在录制，无法重新设置录制引擎；请先结束录制。')
                 try:
                     result = recorder.devices(progress=self._progress)
                 except Exception:
@@ -1013,7 +1120,7 @@ class DesktopService:
                     self._device_refresh = dict(id=refresh_id, state='failed', error=self._safe_text(error))
                 raise
         with self._lock:
-            result = self._launch('devices', work, status='正在读取设备', allow_uncertain=True)
+            result = self._launch('devices', work, status='正在检查录制引擎', allow_uncertain=True)
             if result['ok']:
                 # The worker needs this same lock before doing any work. Publish
                 # its token atomically with admission; rejected jobs change none.
@@ -1208,7 +1315,7 @@ class DesktopService:
         except (OSError, OBSSDKError, WebSocketException):
             if (session.meta['id'] in self._uncertain_ids or session.meta.get('state') in SUSPECT_STATES
                     or session.meta.get('recording_uncertain')):
-                raise RuntimeError('尚无法确认上次录制已结束。请刷新设备重新连接 OBS，再恢复整理。')
+                raise RuntimeError('尚无法确认上次录制已结束。请打开录制预设，重新检查录制状态，再恢复整理。')
             return
         try:
             if client.get_record_status().output_active:
@@ -1586,6 +1693,7 @@ class DesktopService:
                     if blockers:raise RuntimeError('\n'.join(blockers))
                     if self._updates.snapshot().get('state')!='ready':
                         raise RuntimeError('请先完成更新包下载与校验。')
+                    self._invalidate_device_inventory(running_only=True)
                     self._exit_pending=self._update_installing=True
                     self._update_install_error=None
                     self._update_thread=threading.Thread(target=self._install_update,daemon=False,name='portable-update-close')
@@ -1744,7 +1852,7 @@ class DesktopService:
                                 capture_owner = active if active and active.path.resolve() == owned.path.resolve() else owned
                                 capture_owner.finish_inputs(interrupted=True,error='上次录制或操作采集已中断。')
                                 owned.update(state='失败', recording_uncertain=bool(uncertain),
-                                    error='上次操作中断，原始资料已保留。请恢复整理；连接不明时先刷新设备。')
+                                    error='上次操作中断，原始资料已保留。请恢复整理；状态不明时请先打开预设并重新检查录制状态。')
                                 return True
                             return False
                         interrupted = recover(session) or interrupted
@@ -1753,7 +1861,7 @@ class DesktopService:
                 elif connected:
                     self._uncertain_ids.discard(ident)
             if self._obs_uncertain:
-                self._progress('OBS 曾确认仍在录制，但当前无法确认录制目录。请刷新设备重新连接；暂不允许开始新作业或退出。',
+                self._progress('OBS 曾确认仍在录制，但当前无法确认录制目录。请打开预设并重新检查录制状态；暂不允许开始新作业或退出。',
                                status='录制归属待确认')
             if (self._active is None and not self._uncertain_ids and not self._obs_uncertain
                     and self._activity['status'] in ('检查上次场次', '检查录制状态')):
@@ -1826,7 +1934,9 @@ class DesktopService:
         with self._lock:
             if self._update_installing:
                 allowed=for_update and self._update_commit
-                if allowed:self._closed.set()
+                if allowed:
+                    self._invalidate_device_inventory(running_only=True)
+                    self._closed.set()
                 return allowed
             foreground = self._activity['busy'] and self._activity['kind'] not in ('devices', 'idle')
             blocked = (foreground or self._active is not None or bool(self._uncertain_ids)
@@ -1837,6 +1947,7 @@ class DesktopService:
                 blocked = self._model.wait(timeout=0) is False
             if blocked:
                 return False
+            self._invalidate_device_inventory(running_only=True)
             self._closed.set()
             return True
 
@@ -1875,6 +1986,7 @@ class DesktopService:
                 raise RuntimeError('无法确认录制已停止，请先重新检查录制引擎。')
             if self._dialog_open:
                 raise RuntimeError('请先完成或取消当前文件选择。')
+            self._invalidate_device_inventory(running_only=True)
             self._exit_pending = True
         stop_requested = False
         try:
