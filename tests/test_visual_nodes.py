@@ -310,8 +310,7 @@ class VisualNodesTests(unittest.TestCase):
         self.assertNotIn('原话 </script><img>',json.dumps(overview,ensure_ascii=False))
         self.assertNotIn('nodes',overview)
         self.assertNotIn('private-secret-sentinel',json.dumps(overview))
-        self.meta['input_offset_seconds']=.9
-        self.write('session.json',self.meta)
+        self.write('录像.whisper.json',dict(segments=[]))
         with self.assertRaisesRegex(ValueError,'过期'): visual.read_overview(value['index'])
 
     def test_overview_keeps_empty_bins_and_assigns_boundary_start_once(self):
@@ -359,8 +358,7 @@ class VisualNodesTests(unittest.TestCase):
         (self.folder / '录像.whisper.json').rename(self.root / 'saved-transcript.json')
         value, index = self.extract()
         self.assertTrue(any('尚无逐字稿' in s for s in index['coverage']['notes']))
-        self.meta['input_offset_seconds'] = .7
-        self.write('session.json', self.meta)
+        self.write('录像.whisper.json', dict(segments=[]))
         with self.assertRaisesRegex(ValueError, '过期'):
             visual.read_index(value['index'])
 
@@ -456,8 +454,7 @@ class VisualNodesTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as error:
                 urlopen(Request(base + 'video.mp4', headers={'Range':'bytes=999999999-'}))
             self.assertEqual(error.exception.code, 416)
-            self.meta['input_offset_seconds'] = .9
-            self.write('session.json', self.meta)
+            self.write('录像.whisper.json', dict(segments=[]))
             for route in ('', 'video.mp4'):
                 with self.assertRaises(HTTPError) as error: urlopen(base + route)
                 self.assertEqual(error.exception.code, 409)

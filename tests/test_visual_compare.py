@@ -270,8 +270,7 @@ class CompareTests(unittest.TestCase):
         original=compare._occurrences
         def changed(*args,**kwargs):
             result=original(*args,**kwargs)
-            self.fixture.meta['input_offset_seconds']=.75
-            self.fixture.write('session.json',self.fixture.meta)
+            self.fixture.write('录像.whisper.json',dict(segments=[]))
             return result
         with patch.object(compare,'_occurrences',side_effect=changed):
             with self.assertRaisesRegex(ValueError,'过期'):

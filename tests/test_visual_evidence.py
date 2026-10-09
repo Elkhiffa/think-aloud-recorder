@@ -177,8 +177,7 @@ class EvidencePlanTests(unittest.TestCase):
 
     def test_stale_source_and_changed_index_reject_old_plan_and_receipt(self):
         evidence.packet(self.plan,'first',phase='initial',question='查看')
-        self.fixture.meta['input_offset_seconds']=.9
-        self.fixture.write('session.json',self.fixture.meta)
+        self.fixture.write('录像.whisper.json',dict(segments=[]))
         with self.assertRaisesRegex(ValueError,'过期'):
             evidence.packet(self.plan,'first',phase='initial',question='查看')
 
@@ -192,8 +191,7 @@ class EvidencePlanTests(unittest.TestCase):
         original=evidence._frame
         def changed(video,at):
             result=original(video,at)
-            self.fixture.meta['input_offset_seconds']=.9
-            self.fixture.write('session.json',self.fixture.meta)
+            self.fixture.write('录像.whisper.json',dict(segments=[]))
             return result
         with patch.object(evidence,'_frame',side_effect=changed):
             with self.assertRaisesRegex(ValueError,'过期'):
