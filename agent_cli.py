@@ -119,6 +119,28 @@ def main(argv=None):
     catalog_hotwords.add_argument('vault')
     catalog_hotwords.add_argument('game')
     catalog_hotwords.add_argument('--output', required=True)
+    for action in ('list', 'add', 'update', 'merge'):
+        issue_command = commands.add_parser('issues-' + action, help='管理资料库级议题标签；合并保留结果及校准历史')
+        issue_command.add_argument('vault')
+        if action == 'add':
+            issue_command.add_argument('--title', required=True)
+            issue_command.add_argument('--id')
+            issue_command.add_argument('--status', choices=('candidate', 'confirmed'), default='candidate')
+        elif action == 'update':
+            issue_command.add_argument('id')
+            issue_command.add_argument('--title')
+            issue_command.add_argument('--description')
+            issue_command.add_argument('--status', choices=('candidate', 'confirmed'))
+        elif action == 'merge':
+            issue_command.add_argument('from_id')
+            issue_command.add_argument('into_id')
+    instances_query = commands.add_parser('instances-query', help='按议题、界面或判断类型跨场次筛选已完成结果')
+    instances_query.add_argument('vault')
+    instances_query.add_argument('--issue', action='append')
+    instances_query.add_argument('--screen')
+    instances_query.add_argument('--element')
+    instances_query.add_argument('--kind', choices=('confusion', 'obstacle', 'positive', 'expectation', 'suggestion', 'self_correction', 'observation'))
+    instances_query.add_argument('--session')
     visual = commands.add_parser('visual-nodes', help='本地逐帧检测画面变化；不调用模型，不写入场次')
     visual.add_argument('session')
     visual.add_argument('--output', required=True, help='资料库之外的新输出目录')
@@ -248,6 +270,19 @@ def main(argv=None):
         elif name == 'catalog-hotwords':
             from game_catalog import hotwords
             value = hotwords(args.vault, args.game, args.output)
+        elif name.startswith('issues-'):
+            import issue_registry as issues
+            if name == 'issues-list':
+                value = issues.list_issues(args.vault)
+            elif name == 'issues-add':
+                value = issues.add_issue(args.vault, args.title, args.id, args.status)
+            elif name == 'issues-update':
+                value = issues.update_issue(args.vault, args.id, args.title, args.description, args.status)
+            else:
+                value = issues.merge_issues(args.vault, args.from_id, args.into_id)
+        elif name == 'instances-query':
+            from issue_registry import query_instances
+            value = query_instances(args.vault, args.issue, args.screen, args.element, args.kind, args.session)
         elif name == 'visual-nodes':
             from visual_nodes import extract
             def progress(value):

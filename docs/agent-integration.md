@@ -63,9 +63,77 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 此处路径只是本机示例。公司电脑应使用实际安装位置与资料库。
 
-完成信号不等于已预处理。未领取时不显示“待处理”。外部会话领取后显示“预处理中”；结果有效后显示“已预处理 · N 个事件”；领取过期/失败显示“预处理未完成”。转写、原始操作文件、手动同步或记录者选择变化会使旧结果过期。用户命名、笔记与处理状态不属于 revision，避免回写触发自身重跑。
+完成信号不等于已预处理。未领取时不显示“待处理”。外部会话领取后显示“预处理中”；结果有效后显示“已预处理 · N 个事件”；领取过期/失败显示“预处理未完成”。转写、原始操作等素材文件变化会使旧结果过期。开发版中，手动同步和记录者选择不再改变 revision；已有结果按整理时快照解释，设置变化时在事件页签顶部提示可能的操作时间偏差。用户命名、笔记与处理状态不属于 revision，避免回写触发自身重跑。
 
 revision 是本地源文件大小/修改时间和相关语义设置的指纹，不是内容校验签名。手工替换素材后需正常更新文件修改时间并重新发布。目录移动而保持文件属性时不会无故重新处理。
+
+## 逐字稿优先的开发版接口
+
+以下为当前源码中的开发版功能，不表示现有安装包已包含。就绪信号和领取协议保持 v1，结果文件允许 v1 或 v2。v1 的读取、校验、回看和导出继续可用；本轮不改独立 Skill 方法文档。
+
+### 结果格式 v2
+
+v2 保留 v1 的 session_id、revision、summary、coverage、events、questions、ideas，在顶层增加 `instances`（每场最多 300 条）。下面是单条实例；引用必须来自该场的实际证据与资料库目录：
+
+```json
+{
+  "id": "i01", "event_id": "e02",
+  "said": [{"kind":"quote","ref":"t000012"}, {"kind":"quote_words","ref":"t000016","word_range":[0,5]}],
+  "refers_to": {"start":182.0,"end":247.0,"basis":"retrospective","note":"回顾刚才的界面"},
+  "screen": "bag.items", "elements": ["bag.items.auto_use"],
+  "kind": "confusion", "statement": "记录者对刚才的状态变化不确定。",
+  "issue_tags": ["TA-03"],
+  "evidence": [{"kind":"video","start":226.0,"end":226.0,"observation":"所指按钮仍显示原状态。"}],
+  "confidence": "medium"
+}
+```
+
+`said` 必须有原话引用；其文字、时间和说话人由程序从原始逐字稿展开。`refers_to` 使用录像秒数，范围不能越界；`basis` 为 `same_time|retrospective|unknown`，回顾实例的结束不得晚于最早 `said.start`，可选 note 最多 200 字。`event_id` 必须存在；statement 最多 300 字，不添加原话未表达的判断。kind 为 `confusion|obstacle|positive|expectation|suggestion|self_correction|observation`；confidence 为 `high|medium|low`。补充 evidence 为画面事实，最多 12 条，每条 observation 最多 300 字且位于 coverage 已检查范围。
+
+`issue_tags` 必须已登记；screen 可为 null，elements 可为空。存在游戏目录时，非空 screen/element 引用必须在目录中；目录缺失时跳过目录引用检查。`validate`、`submit`、`status` 均支持 v2，提交和状态返回实例数量。回看在所属事件下显示中文类型、陈述、标签，以及分别定位原话起点和所指起点的“说”“指”按钮。人工校准仍仅作用于事件。
+
+### 分析快照与旧结果
+
+新提交由程序写入 `analysis_context: {alignment, recorder_speaker}`。校验与投影按该快照解释操作证据；当前设置变化只生成 notice。旧公式的 ready、result 和人工校准 source_revision 继续兼容。旧结果没有快照时，回看设置入口在修改前确认旧 revision 与当前上下文一致，然后写 `analysis-context.json: {result_sha256, alignment, recorder_speaker}`；结果原文件不改写，校准摘要绑定保持不变。读取顺序为结果内快照、SHA 匹配的旁车、当前设置。真实素材变化仍使结果过期。
+
+旧 `visual-*` 工具保留原实现；本轮 revision 公式变化会使升级前的视觉索引与计划过期，需要时重建。重建后的索引不再因偏移或记录者变化而过期；这些工具不属于新方法主路径。
+
+### 议题标签与跨场次查询
+
+资料库根目录的 `issues.json` 保存 `{version:1, issues:[{id,title,description,status}]}`。用户编号以 `TA-` 开头；新提候选自动使用 `N-001` 等三位编号且只能以 candidate 创建。确认既有候选使用 `issues-update --status confirmed`。
+
+```text
+issues-list VAULT
+issues-add VAULT --title TITLE [--id ID] [--status candidate|confirmed]
+issues-update VAULT ID [--title TITLE] [--description TEXT] [--status candidate|confirmed]
+issues-merge VAULT FROM_ID INTO_ID
+instances-query VAULT [--issue ID]... [--screen ID] [--element ID] [--kind KIND] [--session ID]
+```
+
+以上均为 `agent_cli.py` 子命令。合并前备份原结果至 `agent-history`；追加绑定新摘要的校准记录，保留原条目，并保留分析快照。完成引用替换后再移除旧标签。资料库写入复用文件锁与原子替换。查询只读取 complete 场次，不建立查询缓存；多个 issue 取任一匹配，其余条件叠加。返回 session_id、instance_id、said_start、refers_start/refers_end、screen、elements、kind、statement、issue_tags，按场次时间、所指起点排序。
+
+### 本地情景轨道与界面目录
+
+开发 runtime 需单独安装 `rapidocr_onnxruntime`；缺失时命令明确返回“OCR 依赖未安装”。本轮未加入安装包或自动后台队列。
+
+```text
+context-build SESSION [--interval 5] [--start SEC] [--end SEC] [--output DIR]
+context-read SESSION [--start SEC] [--end SEC] [--compact] [--output DIR]
+context-build SESSION --rematch [--output DIR]
+catalog-validate VAULT GAME
+catalog-suggest SESSION [--top 30]
+catalog-hotwords VAULT GAME --output FILE
+```
+
+轨道保存在 `context-track.json`，含 source_video（视频大小、mtime_ns）、interval、start/end、watermark、frames 和 screens。每隔 2–10 秒取区间中点附近的真实视频帧，缩放宽 960；items 为 `[中心x,中心y,原文]`，丢弃置信度低于 0.6 的文本。UID、角色名、客户端日期时间均保留；角落水印另提取首次 UID 和每分钟至多一个客户端时间样本。识别不到为 null。OCR 文字仅供定位，误识别仍需看原画面确认。
+
+同视频及同采样参数复用；转写或记录者变化不会重跑 OCR。`--compact` 按标题前 10 字合并相邻帧，每段文字最多 120 字。`--output` 将生成和读取定位到外置工作目录，真实素材冒烟须使用该参数。`--rematch` 只重算 screens，保留帧与水印。
+
+目录位于 `game-assets/GAME/catalog.json`，结构为 `{version:1, game, screens:[{id,name,source,match,elements}]}`。match 包含 all_of、any_of、none_of 字符串数组；全部 all_of、至少一个 any_of（空数组不限）、没有 none_of 时命中。多命中按 all_of+any_of 命中词数排序，并列按目录先后。element 含 id、name、aliases、notes；screen/element 可附 `engine_id`，source 可为 manual、ocr_cluster、engine。相邻同界面观测合并为 start/end/screen，source 恒为 ocr，有对应 engine_id 时保留；区间端点是实际观测帧时间，未命中记为 null。目录由用户或后续工具维护，程序不自动命名或写入目录。
+
+`catalog-suggest` 只统计 y<70 的标题文字及出现时间；`catalog-hotwords` 导出名称与别名去重 TXT，用户通过现有词库功能手动加入预设。
+
+引擎预留文件 `engine-track.json` 的约定为 `{"version":1,"clock":"client|video","offset_seconds":0,"events":[{"t":12.3,"type":"screen_open|screen_close|widget_focus|widget_activate","engine_id":"...","payload":{}}]}`。本轮不解析此文件；判断实例继续引用目录 id，由目录映射 engine_id。
 
 ## 一致性与独立性
 

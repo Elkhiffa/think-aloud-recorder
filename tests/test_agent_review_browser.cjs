@@ -87,6 +87,25 @@ async function main(){
    await page.locator('.event-edit').click();await page.screenshot({path:path.join(out,'event-edit.png')});await page.locator('#cancelEventEdit').click();
  });
  await page.goto(origin+'/ready-portable');await page.locator('#eventsTab').click();assert.equal(await page.locator('.event-edit').count(),0);
+ await check('v2 judgments render and seek said and referred times',async()=>{
+   /** 触发路径：用户在回看窗口打开体验事件 → 阅读判断实例并点击“说”和“指” → 两种时间不同 → 混用时间会定位到错误片段。 */
+   const judgments=structuredClone(excerptReady);
+   judgments.result.version=2;
+   judgments.notice='整理后同步偏移／记录者已改动，事件中的操作时间可能有偏差';
+   judgments.result.instances=[{id:'i01',event_id:'e1',said:[{kind:'quote_words',ref:'t000001',word_range:[3,6],start:8.2,end:8.8,text:'这是后半句。'}],refers_to:{start:3,end:4,basis:'retrospective'},screen:null,elements:[],kind:'confusion',statement:'回顾刚才的按钮状态。',issue_tags:['TA-03'],evidence:[],confidence:'high'}];
+   await page.goto(origin);await page.waitForFunction(()=>document.querySelector('video').readyState>=2);
+   await page.evaluate(value=>window.__snapshot.preprocessing=value,judgments);
+   await page.waitForFunction(()=>document.querySelector('[data-instance-id="i01"]'));
+   await page.locator('#eventsTab').click();
+   const instance=page.locator('[data-instance-id="i01"]');
+   assert.match(await instance.innerText(),/困惑/);assert.match(await instance.innerText(),/回顾刚才的按钮状态/);assert.match(await instance.innerText(),/TA-03/);
+   assert.match(await page.locator('#experienceEvents .preprocessing-notice').innerText(),/同步偏移／记录者已改动/);
+   const times=instance.locator('[data-event-time]');assert.equal(await times.count(),2);
+   await times.nth(0).click();assert.ok(Math.abs(await page.locator('video').evaluate(v=>v.currentTime)-8.2)<.00001);
+   await times.nth(1).click();assert.equal(await page.locator('video').evaluate(v=>v.currentTime),3);
+   assert.equal(await page.locator('video').evaluate(v=>v.paused),true);
+   await page.screenshot({path:path.join(out,'judgment-instances-1440.png')});
+ });
  assert.deepEqual(report.errors,[]);report.pass=true;
 }
 main().catch(error=>{report.error=String(error.stack||error);process.exitCode=1;}).finally(async()=>{fs.writeFileSync(path.join(out,'browser-acceptance.json'),JSON.stringify(report,null,2));if(browser)await browser.close();server.close();console.log(JSON.stringify(report));});

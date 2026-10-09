@@ -394,7 +394,7 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
     """Validate references and return an allowlisted, display-safe projection."""
     if meta is None:
         meta, material, revision, _ = _ready(folder)
-    if not isinstance(value, dict) or type(value.get('version')) is not int or value['version'] != VERSION:
+    if not isinstance(value, dict) or type(value.get('version')) is not int or value['version'] not in (1, 2):
         raise ValueError('不支持的预处理结果版本。')
     analysis_context = _analysis_context(folder, value)
     if (value.get('session_id') != meta['id'] or
@@ -411,6 +411,35 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
     limitations = [_text(s, 1000, '资料限制') for s in _rows(coverage.get('limitations'), 30, '资料限制')]
     transcript = {s['id']: s for s in _transcript(folder, duration)}
     word_rows, word_sources = None, {}
+    def quote_reference(item):
+        nonlocal word_rows
+        if not isinstance(item, dict) or item.get('kind') not in ('quote', 'quote_words'):
+            raise ValueError('判断原话必须引用 quote 或 quote_words。')
+        kind = item['kind']
+        quote = transcript.get(item.get('ref')) if isinstance(item.get('ref'), str) else None
+        if quote is None or coverage['transcript'] == 'none':
+            raise ValueError('原话引用不存在或未检查逐字稿。')
+        ref = dict(kind=kind, ref=quote['id'], start=quote['start'], end=quote['end'], text=quote['text'])
+        if 'speaker_id' in quote:
+            ref['speaker_id'] = quote['speaker_id']
+        if kind == 'quote_words':
+            selected = item.get('word_range')
+            if (not isinstance(selected, list) or len(selected) != 2 or
+                    any(type(index) is not int for index in selected)):
+                raise ValueError('原话节选 word_range 必须是两个原始词序号组成的列表。')
+            if quote['id'] not in word_sources:
+                if word_rows is None:
+                    word_rows = _transcript_rows(folder)
+                word_sources[quote['id']] = _quote_word_source(word_rows, quote['id'], duration)[1]
+            words = word_sources[quote['id']]
+            first, stop = selected
+            if not 0 <= first < stop <= len(words):
+                raise ValueError('原话节选 word_range 超出原始词范围或为空。')
+            selection = words[first:stop]
+            ref.update(word_range=[first, stop], start=min(word['start'] for word in selection),
+                       end=max(word['end'] for word in selection),
+                       text=''.join(word['text'] for word in selection))
+        return ref
     input_rows = None
     events, identifiers, expanded_bytes = [], set(), 0
     for row in _rows(value.get('events'), 300, '体验事件'):
@@ -429,29 +458,7 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 raise ValueError('证据格式无效。')
             kind = item.get('kind')
             if kind in ('quote', 'quote_words'):
-                quote = transcript.get(item.get('ref')) if isinstance(item.get('ref'), str) else None
-                if quote is None or coverage['transcript'] == 'none':
-                    raise ValueError('原话引用不存在或未检查逐字稿。')
-                ref = dict(kind=kind, ref=quote['id'], start=quote['start'], end=quote['end'], text=quote['text'])
-                if 'speaker_id' in quote:
-                    ref['speaker_id'] = quote['speaker_id']
-                if kind == 'quote_words':
-                    selected = item.get('word_range')
-                    if (not isinstance(selected, list) or len(selected) != 2 or
-                            any(type(index) is not int for index in selected)):
-                        raise ValueError('原话节选 word_range 必须是两个原始词序号组成的列表。')
-                    if quote['id'] not in word_sources:
-                        if word_rows is None:
-                            word_rows = _transcript_rows(folder)
-                        word_sources[quote['id']] = _quote_word_source(word_rows, quote['id'], duration)[1]
-                    words = word_sources[quote['id']]
-                    first, stop = selected
-                    if not 0 <= first < stop <= len(words):
-                        raise ValueError('原话节选 word_range 超出原始词范围或为空。')
-                    selection = words[first:stop]
-                    ref.update(word_range=[first, stop], start=min(word['start'] for word in selection),
-                               end=max(word['end'] for word in selection),
-                               text=''.join(word['text'] for word in selection))
+                ref = quote_reference(item)
             elif kind == 'video':
                 ref = dict(kind=kind, **_span(item, duration),
                            text=_text(item.get('observation', item.get('text')), 2000, '画面事实'))
@@ -500,12 +507,76 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                                **{text_key: _text(row.get(text_key), 2000, text_key)},
                                reason=_text(row.get('reason'), 2000, '依据')))
         return result
-    result = dict(version=VERSION, session_id=meta['id'], revision=revision,
+    result = dict(version=value['version'], session_id=meta['id'], revision=revision,
                 summary=_text(value.get('summary'), 4000, '整理概述'),
                 coverage=dict(video_ranges=ranges, transcript=coverage['transcript'],
                               inputs=coverage['inputs'], limitations=limitations),
                 events=sorted(events, key=lambda e: e['start']),
                 questions=related('questions', 'question', 30), ideas=related('ideas', 'idea', 100))
+    if value['version'] == 2:
+        # Path 3: external agents submit judgment references for review and library queries.
+        from issue_registry import read_registry
+        from game_catalog import session_catalog
+        issues = {row['id'] for row in read_registry(Path(folder).resolve().parent.parent)['issues']}
+        catalog = session_catalog(folder)
+        screens = {row['id'] for row in catalog['screens']} if catalog is not None else set()
+        elements = {item['id'] for row in catalog['screens'] for item in row['elements']} if catalog is not None else set()
+        instances, instance_ids = [], set()
+        for row in _rows(value.get('instances'), 300, '判断实例'):
+            if not isinstance(row, dict):
+                raise ValueError('判断实例必须是对象。')
+            ident = _text(row.get('id'), 80, '判断实例编号')
+            if ident in instance_ids:
+                raise ValueError('判断实例编号重复。')
+            instance_ids.add(ident)
+            if not isinstance(row.get('event_id'), str) or row['event_id'] not in identifiers:
+                raise ValueError('判断实例引用的事件不存在。')
+            if not isinstance(row.get('said'), list) or not row['said']:
+                raise ValueError('判断实例至少需要一条说出口的原话。')
+            said = [quote_reference(item) for item in row['said']]
+            target = row.get('refers_to')
+            refers_to = _span(target, duration)
+            if target.get('basis') not in ('same_time', 'retrospective', 'unknown'):
+                raise ValueError('判断实例的所指依据无效。')
+            refers_to['basis'] = target['basis']
+            if 'note' in target:
+                refers_to['note'] = _text(target['note'], 200, '所指说明', empty=True)
+            if target['basis'] == 'retrospective' and refers_to['end'] > min(item['start'] for item in said):
+                raise ValueError('回顾判断的所指时间不能晚于说出口的时间。')
+            screen = row.get('screen')
+            if screen is not None and not isinstance(screen, str):
+                raise ValueError('判断实例的 screen 必须是目录编号或 null。')
+            if catalog is not None and screen and screen not in screens:
+                raise ValueError('判断实例引用的界面不存在。')
+            selected_elements, tags = row.get('elements'), row.get('issue_tags')
+            if not isinstance(selected_elements, list) or any(not isinstance(item, str) for item in selected_elements):
+                raise ValueError('判断实例的 elements 必须是目录编号列表。')
+            if catalog is not None and any(item not in elements for item in selected_elements):
+                raise ValueError('判断实例引用的元素不存在。')
+            if not isinstance(tags, list) or any(not isinstance(tag, str) or tag not in issues for tag in tags):
+                raise ValueError('判断实例引用的议题标签不存在。')
+            if row.get('kind') not in ('confusion', 'obstacle', 'positive', 'expectation', 'suggestion',
+                                       'self_correction', 'observation'):
+                raise ValueError('判断实例类型无效。')
+            if row.get('confidence') not in ('high', 'medium', 'low'):
+                raise ValueError('判断实例的 confidence 必须是 high、medium 或 low。')
+            refs = []
+            for item in _rows(row.get('evidence'), 12, '判断实例证据'):
+                if not isinstance(item, dict) or item.get('kind') != 'video':
+                    raise ValueError('判断实例的补充证据必须是 video。')
+                ref = dict(kind='video', **_span(item, duration),
+                           observation=_text(item.get('observation'), 300, '判断实例画面事实'))
+                if not any(checked['start'] <= ref['start'] and checked['end'] >= ref['end'] for checked in ranges):
+                    raise ValueError('画面证据不在已检查范围内。')
+                refs.append(ref)
+            expanded_bytes += len(json.dumps(said + refs, ensure_ascii=False).encode('utf-8'))
+            if expanded_bytes > MAX_RESULT:
+                raise ValueError('展开证据超过 2 MB，请减少重复引用。')
+            instances.append(dict(id=ident, event_id=row['event_id'], said=said, refers_to=refers_to,
+                                  screen=screen, elements=list(selected_elements), kind=row['kind'],
+                                  statement=_text(row.get('statement'), 300, '判断陈述'), issue_tags=list(tags),
+                                  evidence=refs, confidence=row['confidence']))
+        result['instances'] = instances
     if analysis_context is not None:
         result['analysis_context'] = analysis_context
     return result
@@ -697,7 +768,7 @@ def submit(folder, token, value):
             raise ValueError('展开证据后的结果超过 2 MB，请减少重复引用。')
         _write(folder, RESULT, result)
         return dict(state='complete', revision=revision, events=len(result['events']),
-                    questions=len(result['questions']), ideas=len(result['ideas']))
+                    questions=len(result['questions']), ideas=len(result['ideas']), instances=len(result.get('instances', [])))
 
 
 def _activity_name_source(folder):
@@ -860,7 +931,7 @@ def _status(folder, meta):
                 editing = dict(error='手动校准记录无法读取，暂时显示原整理结果；校准文件已保留。')
             value = dict(state='complete', label=f'已预处理 · {len(result["events"])} 个事件',
                          events=len(result['events']), questions=len(result['questions']),
-                         ideas=len(result['ideas']), result=result, editing=editing)
+                         ideas=len(result['ideas']), instances=len(result.get('instances', [])), result=result, editing=editing)
             if context is not None and context != _current_analysis_context(meta):
                 value['notice'] = '整理后同步偏移／记录者已改动，事件中的操作时间可能有偏差'
             redo = _reanalysis_status(job, raw)
