@@ -97,12 +97,19 @@ def session_settings(cfg):
 def read(p): return json.loads(Path(p).read_text(encoding='utf-8'))
 def write(p,data):
     p=Path(p);p.parent.mkdir(parents=True,exist_ok=True)
-    tmp=p.with_name(p.name+'.'+uuid.uuid4().hex+'.tmp');tmp.write_text(json.dumps(data,ensure_ascii=False,indent=2),encoding='utf-8')
-    for attempt in range(40):
-        try:os.replace(tmp,p);return
-        except PermissionError:
-            if attempt==39:raise
-            time.sleep(.05)
+    tmp=p.with_name(p.name+'.'+uuid.uuid4().hex+'.tmp')
+    with tmp.open('w',encoding='utf-8') as output:
+        output.write(json.dumps(data,ensure_ascii=False,indent=2))
+        output.flush();os.fsync(output.fileno())
+    try:
+        for attempt in range(40):
+            try:os.replace(tmp,p);return
+            except PermissionError:
+                if attempt==39:raise
+                time.sleep(.05)
+    finally:
+        # A persistent sync/antivirus lock must not accumulate failed writes.
+        tmp.unlink(missing_ok=True)
 def config():
     from portable_config import load_settings
     return load_settings(ROOT)
@@ -1064,6 +1071,7 @@ class Session:
             # The old bytes were archived by process() before retranscription.
             # A corrupt old transcript must not prevent generating a successor.
             transcript=[]
+        self.update(step='生成回看页')
         make_player(p,self.meta,transcript)
     @session_lock
     def process(self,progress=lambda text:None,transcription_settings=None):
@@ -1155,10 +1163,14 @@ class Session:
             (p/'场次说明.md').write_text(f'# {self.meta["game"]}\n\n场次 ID：`{self.meta["id"]}`\n\n开始：{self.meta["created"]}\n\n录像时长：{stamp(duration)}\n\n[同步回看](录像.mp4) · [[逐字稿]] · [[复盘]]\n\n引用格式：`{self.meta["id"]} @ 00:12:03.200–00:12:18.500`\n\n原始录像.mkv：音轨1 游戏与口述混音；音轨2 独立口述。\n\n口述.flac 保留录制时间位置；录像.mp4 保留画面与混音，无重编码。\n\n自动逐字稿可能漏字、误识别和不精确分句，请结合原声校对。\n',encoding='utf-8')
             if not (p/'复盘.md').exists():(p/'复盘.md').write_text('# 复盘\n\n## 回看记录\n\n## Insight\n\n## 待验证\n\n',encoding='utf-8')
             warning=warning or ('未识别出语音，请检查原声。' if not all_segments else '')
-            self.update(state='可回看',transcription_state='ready',segments=len(all_segments),completed=datetime.now().astimezone().isoformat(),warning=warning)
-            make_player(p,self.meta,all_segments)
-            # Publish only after all required recording/transcript artifacts and
-            # the portable review are complete. External agents are optional.
+            self.update(state='可回看',transcription_state='ready',segments=len(all_segments),completed=datetime.now().astimezone().isoformat(),warning=warning,step='生成回看页',review_page_warning=None)
+            try:make_player(p,self.meta,all_segments)
+            except Exception as error:
+                # A locked review page does not invalidate the finished transcript.
+                from review_runtime import _safe_error
+                self.update(review_page_warning='回看页暂未生成：'+_safe_error(error)[:160])
+            # The transcript is ready even if the derived review page is locked.
+            # External agents are optional and their publication isolates errors.
             from agent_protocol import try_publish_ready
             try_publish_ready(p)
             progress(warning or '可回看')
@@ -1249,4 +1261,8 @@ def make_player(p, meta, segments):
     from review_runtime import render_player, review_payload
     temporary=p/('独立回看.html.'+uuid.uuid4().hex+'.tmp')
     temporary.write_text(render_player(ROOT, review_payload(p, meta, segments)), encoding='utf-8')
-    os.replace(temporary,p/'独立回看.html')
+    for attempt in range(40):
+        try:os.replace(temporary,p/'独立回看.html');return
+        except PermissionError:
+            if attempt==39:raise
+            time.sleep(.05)
