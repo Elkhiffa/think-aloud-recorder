@@ -465,6 +465,10 @@ def blockers(root):
     for process in psutil.process_iter(['pid','exe','create_time']):
         try:
             executable=process.info.get('exe')
+            # An image on another network share cannot be inside root. Resolving it opens that share,
+            # which blocks for minutes when e.g. a domain logon script's SysVol share is unreachable.
+            drive=os.path.splitdrive(executable or '')[0]
+            if drive.startswith('\\\\') and os.path.normcase(drive)!=os.path.normcase(root.drive):continue
             if executable and Path(executable).resolve().is_relative_to(root) and process_running(process.pid,process.info['create_time']):
                 result.append(process.pid)
         except psutil.NoSuchProcess:continue

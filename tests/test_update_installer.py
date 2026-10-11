@@ -370,6 +370,20 @@ class CompactInstallerTests(unittest.TestCase):
         with patch('psutil.process_iter',return_value=[process]),patch('update_installer.process_running',return_value=True):
             self.assertEqual(blockers(self.root/'app'),[321])
 
+    def test_blockers_skip_other_network_share_without_resolving(self):
+        """触发路径：用户在公司域电脑上点“退出并更新” → 安装助手在记录器退出后检查安装目录内的残留进程 → 组策略登录脚本 logon.exe 正从网络不通的域共享 SysVol 运行 → 检查卡住数分钟，期间不更新、记录器也打不开。"""
+        from types import SimpleNamespace
+        from update_installer import blockers
+        remote=SimpleNamespace(pid=654,info={'exe':r'\\corp.example\SysVol\Policies\Logon\logon.exe','create_time':456})
+        local=SimpleNamespace(pid=321,info={'exe':str(self.root/'Think Aloud.exe'),'create_time':123})
+        resolve=Path.resolve
+        def no_share_access(path,*args,**kwargs):
+            if str(path).startswith('\\\\'):raise AssertionError('blockers opened a network share')
+            return resolve(path,*args,**kwargs)
+        with patch('psutil.process_iter',return_value=[remote,local]),patch('update_installer.process_running',return_value=True),\
+                patch.object(Path,'resolve',no_share_access):
+            self.assertEqual(blockers(self.root/'app'),[321])
+
     def test_layout_migration_requires_separate_entry_before_changes(self):
         flat=fixture(self.base/'flat')
         with self.assertRaisesRegex(UpdateError,'独立迁移入口'):build_plan(flat,self.stage,self.work)
