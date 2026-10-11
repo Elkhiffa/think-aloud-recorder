@@ -1,26 +1,63 @@
-# Experience Recorder
+# Think Aloud Recorder — Agent 指令
 
-Windows desktop recording and transcription app. Preserve original recordings and user notes; only the independent microphone track is transcribed. Native WebView2 windows are the review destination. The application exits after the last window closes.
+开始工作前依次阅读：
+1. `docs/plans/HANDOFF-2026-10-11.md`：当前进度、未完成的审核意见、下一批任务。
+2. `docs/plans/2026-10-09-transcript-first-mvp.md`：开发计划。其中第 1 节的全局规则适用于之后的所有批次。
 
-## Working rules
-- Develop on a dedicated branch in a separate Git worktree. Do not edit the existing private portable installation.
-- Never commit or package runtime configuration, credentials, recordings, transcripts, logs, model weights, or unapproved user vocabulary files. The two shared plain-text dictionaries documented in `vocabularies/README.md` are explicitly approved for Git; local vocabulary maintenance records and backups remain excluded. Build releases from explicit allowlists.
-- Preserve two-track semantics: track 1 = desktop + microphone playback mix; track 2 = microphone only and sole transcription input.
-- Do not treat process launch as recording/review success. Use OBS status and player readiness acknowledgements.
-- Preserve session locks, recovery, old transcript versions, user notes, and uncertain cloud submission guards.
-- Model absence affects transcription only. Local model files are optional and never part of the software archive.
-- No silent cloud uploads, global dependency installs, proxy changes.
-- UI must display actual state; fixtures and synthetic tests must be clearly identified. Never replace live checks with mocked success claims.
-- Validate with `runtime/python.exe -m unittest discover -s tests`, plus targeted real desktop and packaged-app smoke checks. Test recording with synthetic sources only unless the user requests actual capture.
-- All collaborating agents must respect assigned file ownership and preserve other agents' changes.
+## 产品定位（稳定前提）
 
-## Versioning
-- `portable.json.version` is the single default delivery version, starting with `0.6.1` for this sequence. Use plain `X.Y.Z` for new packages and `vX.Y.Z` for new release tags; do not add preview, local, date, or machine suffixes.
-- The same deliverable uses the same version on both development computers, in local installations, and on GitHub. Increment the patch number for the next delivered revision; use a minor increment for a feature milestone. Do not bump for every commit or test build.
-- Keep build dates and source commit identities in separate metadata. Never replace the contents of an already released version or rewrite historical tags/packages. Preserve updater support for historical versions.
-- The builder defaults to the version in its own checkout, not the runtime seed. Release preflight requires the target commit, tag, and package versions to match. An explicit numeric build override is only for controlled fixtures/reconstruction and cannot bypass this release check.
-- A version bump or source push does not publish a Release, install an update, or establish runtime acceptance. Publication and local installation remain separate actions.
+- 面向专业 UX：用低摩擦的方式记录游玩画面和口述，供之后的 AI 和人做分析。工具不内置 agent，也不维护分析报告。工具负责提供原始记录、派生数据（情景轨道、界面目录、判断实例、议题标签），以及高效的回看和跨场次追溯。
+- 优先满足仓库所有者本人的需求：专业 UX，短期内主要记录单一游戏；在此之后再兼容其他 UX，包括新人。质量优先于 token 成本。
+- 分析单位分三层：
+  - 判断实例：分别记录“说出口的时间”和“所指的时刻”，因为事后回顾很常见。
+  - 活动：把实例分组。
+  - 设计议题：资料库级标签，作为筛选场次和片段的元数据，用来跨场次回看。
+- 为引擎和客户端数据预留位置：所有者拥有自家项目的引擎访问权限，界面目录与情景轨道都带有 `source` / `engine_id` 字段。
 
-## Local development location
-- Continue iterations and build artifacts under `F:/CodexHome`; the current worktree is `F:/CodexHome/think-aloud-review`.
-- The user requested `F:/think-aloud-record` as this computer's initial library. Keep that machine-local choice in ignored runtime configuration, not portable archives.
+## 数据不变量
+
+- 保留原始录像和用户笔记。只转写独立的麦克风音轨：track 1 是桌面声音与麦克风的混合回放，track 2 是纯麦克风，也是唯一的转写输入。
+- 进程启动成功不等于录制或回看成功。要以 OBS 状态和播放器就绪回执为准。
+- 保留场次锁、故障恢复、旧版逐字稿、用户笔记，以及云端提交的防重复机制。
+- 缺少模型只影响转写，其他功能照常可用。模型文件永远不进入软件包。
+- 不静默上传到云端，不做全局安装，不改系统代理。
+- 界面必须显示真实状态。测试夹具和合成数据要明确标识，不能用模拟出来的成功代替真实检查。
+- UID、角色名、客户端时间水印**不做遮蔽**。这些数据不公开，而且 QA 和程序 debug 需要带 UID 的记录。
+- 永远不提交运行配置、密钥、录像、逐字稿、日志、模型权重，以及未经授权的个人词库。`vocabularies/README.md` 列出的两份共享词库例外。发布构建使用明确的白名单。
+
+## 开发方式
+
+- 按批次开发。每批完成后按计划 §1.4 的格式报告，然后停止，等待审核。遇到需要决策的问题时，记录下来，跳过依赖这个决策的部分，继续不依赖它的工作。
+- 触发路径先行（计划 §1.2a）：每个新测试、每个新增的防御分支，都要对应五类入口之一的真实路径。写不出路径就不写。
+- 测试纪律：
+  - 迭代过程中只跑相关的测试模块。
+  - 每批结束时跑一次完整单元测试：`runtime/python.exe -B -X utf8 -m unittest discover -s tests`（约 4 分钟，基线 773 项；本分支新增测试后数量会增加）。
+  - 浏览器 `.cjs` 测试只在改动了 `ui/` 或 `player.html` 时才跑，并且只跑与改动相关的那一个。
+  - 原生 WebView2 冒烟、OBS、真实录音、打包检查，只在批次任务明确要求时才做。
+  - 与本次改动无关的既有测试失败，原样报告，不去修。同一个失败修两次仍不通过，就停下来。
+- 不新建 `docs/*-validation.md` 这类验证文档。验证结果写进批次报告。只更新描述了已变更行为的现有文档。
+- 只改任务要求的部分：不顺手重构，不改名，不调整与任务无关的界面和文案。
+- 在独立的 worktree 和专用分支上开发，不在 `main` 上开发。修改前先确认当前分支。
+- 以下操作需要用户明确授权：push、merge、rebase、`reset --hard`、删除文件或 Git 历史、修改 CI 或发布脚本、发布 Release、安装到正在使用的安装版。
+- 真实资料库只允许读取。冒烟和验证产生的文件写到 worktree 的 `work/` 目录（已被 Git 忽略）。
+- 多个 agent 协作时，遵守分配给各自的文件归属，保留其他 agent 的改动。
+
+## 运行环境
+
+- Windows 桌面应用：Python + OBS WebSocket；界面是本地 HTML/CSS/JS，通过 pywebview/WebView2 加载。耗时的转写在独立进程中运行。
+- 开发用 runtime 放在 worktree 的 `runtime/` 下（已被 Git 忽略，是一份完整的 Python 环境副本）。`rapidocr_onnxruntime` 只装在这个开发 runtime 里。不要修改已安装应用的 runtime。
+- 公司电脑上的路径：
+  - worktree：`D:\Think Aloud Development\source\<name>`（当前为 `experience-recorder-judgment-instances`）
+  - 已安装应用：`D:\Think Aloud`
+  - 真实资料库：`D:\think-aloud-database`
+  - 分析与审核材料：`D:\Think Aloud Development\analysis`
+  - 计划：`D:\Think Aloud Development\plans`
+
+  家里电脑的路径不同，以实际情况为准。机器专属的路径写在被 Git 忽略的配置里，不写进代码。
+
+## 版本
+
+- `portable.json.version` 是唯一的默认交付版本号。新包使用纯 `X.Y.Z`，新的发布标签使用 `vX.Y.Z`，不加 preview、local、日期或机器后缀。
+- 同一份交付物在两台开发电脑、本地安装和 GitHub 上使用同一个版本号。下一次交付递增 patch 位；达到功能里程碑时递增 minor 位。不要每个提交或每次测试构建都改版本号。版本号只在用户决定交付时修改。
+- 构建日期和源码提交标识另外保存在元数据里。永远不替换已发布版本的内容，不改写历史标签或历史包，保留对历史版本的更新支持。
+- 版本号升级或推送源码，都不等于发布 Release、安装更新或通过运行验收。发布和本地安装是相互独立的操作。
