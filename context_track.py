@@ -10,6 +10,9 @@ import game_catalog
 TRACK = 'context-track.json'
 _UID = re.compile(r'\bID\s*[:：]\s*(\d+)', re.IGNORECASE)
 _CLIENT_TIME = re.compile(r'\b\d{4}\s+\d{2}:\d{2}\b')
+# 路径 2：OCR 可能把 UID、MMDD、H:MM 连成一串；最短 UID 配合合法月日时分拆开。
+_JOINED = re.compile(r'\bID\s*[:：]\s*(\d+?)\s*((?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))'
+                     r'\s*((?:[01]?\d|2[0-3]):[0-5]\d)', re.IGNORECASE)
 
 
 def _source_video(folder):
@@ -57,7 +60,8 @@ def _items(result):
     items = []
     # 路径 2：空画面与低置信度 OCR 不进入供 agent 读取的情景文字。
     for box, text, confidence in result or []:
-        if confidence < .6:
+        # 路径 4/5：换环境或打包后的 rapidocr 版本可能把置信度返回为字符串。
+        if float(confidence) < .6:
             continue
         x = sum(point[0] for point in box) / len(box)
         y = sum(point[1] for point in box) / len(box)
@@ -71,16 +75,21 @@ def _watermark(items, at, height, watermark):
                if (item[0] <= 240 or item[0] >= 720)
                and (item[1] <= height * .2 or item[1] >= height * .8)]
     text = ' '.join(item[2] for item in sorted(corners, key=lambda item: (item[1], item[0])))
-    uid = _UID.search(text)
+    joined = _JOINED.search(text)
+    uid = joined or _UID.search(text)
     if uid is None:
         return watermark
     if watermark is None:
         watermark = dict(uid=uid.group(1), client_time=[])
-    client_time = _CLIENT_TIME.search(text, uid.end())
-    if client_time is not None:
+    if joined is not None:
+        client_time = joined.group(2) + ' ' + joined.group(3)
+    else:
+        client_time = _CLIENT_TIME.search(text, uid.end())
+        client_time = client_time and client_time.group(0)
+    if client_time:
         samples = watermark['client_time']
         if not samples or int(samples[-1]['t'] // 60) != int(at // 60):
-            samples.append(dict(t=at, text=client_time.group(0)))
+            samples.append(dict(t=at, text=client_time))
     return watermark
 
 

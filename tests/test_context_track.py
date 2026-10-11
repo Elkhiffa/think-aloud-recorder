@@ -47,6 +47,14 @@ class ContextTrackTests(unittest.TestCase):
         self.assertEqual(read['frames'][0]['text'], source)
         self.assertEqual(read['watermark'], track['watermark'])
 
+    def test_joined_uid_date_and_time_are_split(self):
+        """触发路径：用户要把问题连同 UID 和客户端时间发给 QA → 不同分辨率或字体下 OCR 把 UID、日期、时间连成一串 → UID 被识别成 16 位且取不到时间。"""
+        source = 'ID:0156936254092916:28'
+        _, track = self.build([[row(source, x=750, y=500)]])
+        self.assertEqual(track['watermark'], dict(uid='0156936254', client_time=[
+            dict(t=2.5, text='0929 16:28')]))
+        self.assertEqual(track['frames'][0]['items'][0][2], source)
+
     def test_low_confidence_text_is_discarded(self):
         """触发路径：3D 场景、粒子特效被 OCR 成大量乱码 → 情景文字被噪声淹没，agent 读到错误界面。"""
         _, track = self.build([[row('粒子乱码', .59), row('道具', .6)]])
