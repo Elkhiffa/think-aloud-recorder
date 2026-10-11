@@ -35,33 +35,10 @@ class ContextTrackTests(unittest.TestCase):
             summary = context.build(self.folder, **options)
         return summary, context.load_track(self.folder, output=options.get('output'))
 
-    def test_watermark_extracted_and_original_text_retained(self):
-        """触发路径：用户要把某段问题连同 UID 和客户端时间发给 QA/程序 → context-read 必须能直接给出。"""
-        source = 'ID:0156936254 0929 15:16'
-        _, track = self.build([[row(source, x=750, y=500)],
-                               [row('ID:0156936254 0929 15:17', x=750, y=500)],
-                               [row('ID:0156936254 0929 15:18', x=750, y=500)]],
-                              times=[2.5, 7.5, 62.5])
-        self.assertEqual(track['watermark'], dict(uid='0156936254', client_time=[
-            dict(t=2.5, text='0929 15:16'), dict(t=62.5, text='0929 15:18')]))
-        self.assertEqual(track['frames'][0]['items'], [[800.0, 510.0, source]])
-        read = context.read_track(self.folder)
-        self.assertEqual(read['frames'][0]['text'], source)
-        self.assertEqual(read['watermark'], track['watermark'])
-
-    def test_joined_uid_date_and_time_are_split(self):
-        """触发路径：用户要把问题连同 UID 和客户端时间发给 QA → 不同分辨率或字体下 OCR 把 UID、日期、时间连成一串 → UID 被识别成 16 位且取不到时间。"""
-        source = 'ID:0156936254092916:28'
-        _, track = self.build([[row(source, x=750, y=500)]])
-        self.assertEqual(track['watermark'], dict(uid='0156936254', client_time=[
-            dict(t=2.5, text='0929 16:28')]))
-        self.assertEqual(track['frames'][0]['items'][0][2], source)
-
     def test_low_confidence_text_is_discarded(self):
         """触发路径：3D 场景、粒子特效被 OCR 成大量乱码 → 情景文字被噪声淹没，agent 读到错误界面。"""
         _, track = self.build([[row('粒子乱码', .59), row('道具', .6)]])
         self.assertEqual([item[2] for item in track['frames'][0]['items']], ['道具'])
-        self.assertIsNone(track['watermark'])
         self.assertEqual(track['screens'], [dict(start=2.5, end=2.5, screen=None, source='ocr')])
 
     def test_compact_merges_adjacent_title_prefixes(self):

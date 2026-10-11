@@ -2,7 +2,6 @@
 import json
 import math
 from pathlib import Path
-import re
 
 import numpy as np
 
@@ -13,11 +12,6 @@ TRACK = 'context-track.json'
 # Panel edge: brightness step across 3 px, averaged over 9 rows, must exceed 2.5
 # grey levels in the same direction on at least 60% of rows.
 _EDGE_SPAN, _EDGE_ROWS, _EDGE_STEP, _EDGE_COVER = 3, 9, 2.5, .6
-_UID = re.compile(r'\bID\s*[:：]\s*(\d+)', re.IGNORECASE)
-_CLIENT_TIME = re.compile(r'\b\d{4}\s+\d{2}:\d{2}\b')
-# 路径 2：OCR 可能把 UID、MMDD、H:MM 连成一串；最短 UID 配合合法月日时分拆开。
-_JOINED = re.compile(r'\bID\s*[:：]\s*(\d+?)\s*((?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01]))'
-                     r'\s*((?:[01]?\d|2[0-3]):[0-5]\d)', re.IGNORECASE)
 
 
 def _source_video(folder):
@@ -79,30 +73,6 @@ def _items(result):
         y = sum(point[1] for point in box) / len(box)
         items.append([round(float(x), 2), round(float(y), 2), text])
     return items
-
-
-def _watermark(items, at, height, watermark):
-    # 路径 2：角落 UID/客户端时间另行摘取，frames 中仍保留全部原文。
-    corners = [item for item in items
-               if (item[0] <= 240 or item[0] >= 720)
-               and (item[1] <= height * .2 or item[1] >= height * .8)]
-    text = ' '.join(item[2] for item in sorted(corners, key=lambda item: (item[1], item[0])))
-    joined = _JOINED.search(text)
-    uid = joined or _UID.search(text)
-    if uid is None:
-        return watermark
-    if watermark is None:
-        watermark = dict(uid=uid.group(1), client_time=[])
-    if joined is not None:
-        client_time = joined.group(2) + ' ' + joined.group(3)
-    else:
-        client_time = _CLIENT_TIME.search(text, uid.end())
-        client_time = client_time and client_time.group(0)
-    if client_time:
-        samples = watermark['client_time']
-        if not samples or int(samples[-1]['t'] // 60) != int(at // 60):
-            samples.append(dict(t=at, text=client_time))
-    return watermark
 
 
 def _panel_left(image, x_range):
@@ -188,7 +158,7 @@ def build(folder, *, interval=5, title_interval=2, full_interval=10, start=0, en
                         **shown)
     engine = _ocr_engine()
     title_engine = _ocr_engine(title=True) if regions else None
-    frames, watermark, next_full = [], None, start
+    frames, next_full = [], start
     for at, image in _sample_frames(folder / '录像.mp4', params['interval'], start, end):
         frame = dict(t=at)
         if regions:
@@ -201,10 +171,9 @@ def build(folder, *, interval=5, title_interval=2, full_interval=10, start=0, en
                 next_full += full_interval
         result, _ = engine(image)
         frame['items'] = _items(result)
-        watermark = _watermark(frame['items'], at, image.shape[0], watermark)
         frames.append(frame)
     track = dict(version=params.pop('version'), source_video=source, **params,
-                 watermark=watermark, frames=frames,
+                 frames=frames,
                  screens=game_catalog.match_screens(catalog, frames))
     path.parent.mkdir(parents=True, exist_ok=True)
     protocol._write(path.parent, path.name, track)
@@ -258,5 +227,5 @@ def read_track(folder, *, start=None, end=None, compact=False, output=None):
             frames.append(row)
     layers = {key: track[key] for key in ('title_interval', 'full_interval') if key in track}
     return dict(version=track['version'], interval=track['interval'], **layers,
-                source_video=track['source_video'], watermark=track['watermark'],
+                source_video=track['source_video'],
                 frames=frames, screens=track['screens'])
