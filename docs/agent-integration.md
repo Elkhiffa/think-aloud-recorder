@@ -117,7 +117,7 @@ instances-query VAULT [--issue ID]... [--screen ID] [--element ID] [--kind KIND]
 开发 runtime 需单独安装 `rapidocr_onnxruntime`；缺失时命令明确返回“OCR 依赖未安装”。本轮未加入安装包或自动后台队列。
 
 ```text
-context-build SESSION [--interval 5] [--start SEC] [--end SEC] [--output DIR]
+context-build SESSION [--interval 5] [--title-interval 2] [--full-interval 10] [--start SEC] [--end SEC] [--output DIR]
 context-read SESSION [--start SEC] [--end SEC] [--compact] [--output DIR]
 context-build SESSION --rematch [--output DIR]
 catalog-validate VAULT GAME
@@ -127,11 +127,13 @@ catalog-hotwords VAULT GAME --output FILE
 
 轨道保存在 `context-track.json`，含 source_video（视频大小、mtime_ns）、interval、start/end、watermark、frames 和 screens。每隔 2–10 秒取区间中点附近的真实视频帧，缩放宽 960；items 为 `[中心x,中心y,原文]`，丢弃置信度低于 0.6 的文本。UID、角色名、客户端日期时间均保留；角落水印另提取首次 UID 和每分钟至多一个客户端时间样本。识别不到为 null。OCR 文字仅供定位，误识别仍需看原画面确认。
 
-同视频及同采样参数复用；转写或记录者变化不会重跑 OCR。`--compact` 按标题前 10 字合并相邻帧，每段文字最多 120 字。`--output` 将生成和读取定位到外置工作目录，真实素材冒烟须使用该参数。`--rematch` 只重算 screens，保留帧与水印。
+目录有 `title_regions` 时改为两层模式，轨道 version 为 2：每 `--title-interval` 秒（默认 2，可选 1–10）只识别各标题区裁图，每 `--full-interval` 秒（默认 10，不小于标题间隔、不超过 60）在同一格点上做一次整屏识别。每帧带 `titles:[{region,text,x}]`（x 为裁图左边界的归一化坐标），只有整屏帧带 items；顶层另有 title_interval、full_interval 和所用 title_regions，interval 等于标题间隔。水印只从整屏帧提取。没有目录或目录没有 `title_regions` 时保持单层 version 1，只用 `--interval`；两种版本的轨道都可读取。
 
-目录位于 `game-assets/GAME/catalog.json`，结构为 `{version:1, game, screens:[{id,name,source,match,elements}]}`。match 包含 all_of、any_of、none_of 字符串数组；全部 all_of、至少一个 any_of（空数组不限）、没有 none_of 时命中。多命中按 all_of+any_of 命中词数排序，并列按目录先后。element 含 id、name、aliases、notes；screen/element 可附 `engine_id`，source 可为 manual、ocr_cluster、engine。相邻同界面观测合并为 start/end/screen，source 恒为 ocr，有对应 engine_id 时保留；区间端点是实际观测帧时间，未命中记为 null。目录由用户或后续工具维护，程序不自动命名或写入目录。
+同视频及同采样参数复用（两层模式还要求标题区坐标相同）；转写或记录者变化不会重跑 OCR。`--compact` 按标题前 10 字合并相邻帧，两层轨道优先按标题区文字合并，只有标题区且无字的帧略过；每段文字最多 120 字。`--output` 将生成和读取定位到外置工作目录，真实素材冒烟须使用该参数。`--rematch` 只重算 screens，保留帧与水印。
 
-`catalog-suggest` 只统计 y<70 的标题文字及出现时间；`catalog-hotwords` 导出名称与别名去重 TXT，用户通过现有词库功能手动加入预设。
+目录位于 `game-assets/GAME/catalog.json`，结构为 `{version:1, game, screens:[{id,name,source,match,elements}]}`。match 包含 all_of、any_of、none_of 字符串数组；全部 all_of、至少一个 any_of（空数组不限）、没有 none_of 时命中。多命中按 all_of+any_of 命中词数排序，并列按目录先后。element 含 id、name、aliases、notes；screen/element 可附 `engine_id`，source 可为 manual、ocr_cluster、engine。目录顶层可选 `title_regions:[{id,rect:[x,y,w,h],detect?}]`，rect 为 0–1 归一化坐标；`detect:{type:"vertical_edge",x_range:[a,b]}` 在该横向范围内找同方向亮度跳变覆盖行数最多的一列作为面板左边界（至少覆盖 60% 的行），以该列为左边裁出 w×h，找不到时用 rect 原位置。match 可选 `title_any_of`：帧有标题文字时先按标题命中词数选界面，并列按目录先后；未命中再用整屏规则。只识别了标题区的帧若标题未命中，不作判断，既不延长也不打断分段。相邻同界面观测合并为 start/end/screen，source 恒为 ocr，有对应 engine_id 时保留；区间端点是实际观测帧时间，未命中记为 null。目录由用户或后续工具维护，程序不自动命名或写入目录。
+
+`catalog-suggest` 只统计 y<70 的标题文字及出现时间，两层轨道改为统计标题区文字；`catalog-hotwords` 导出名称与别名去重 TXT，用户通过现有词库功能手动加入预设。
 
 引擎预留文件 `engine-track.json` 的约定为 `{"version":1,"clock":"client|video","offset_seconds":0,"events":[{"t":12.3,"type":"screen_open|screen_close|widget_focus|widget_activate","engine_id":"...","payload":{}}]}`。本轮不解析此文件；判断实例继续引用目录 id，由目录映射 engine_id。
 

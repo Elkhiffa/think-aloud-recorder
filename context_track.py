@@ -4,10 +4,15 @@ import math
 from pathlib import Path
 import re
 
+import numpy as np
+
 import agent_protocol as protocol
 import game_catalog
 
 TRACK = 'context-track.json'
+# Panel edge: brightness step across 3 px, averaged over 9 rows, must exceed 2.5
+# grey levels in the same direction on at least 60% of rows.
+_EDGE_SPAN, _EDGE_ROWS, _EDGE_STEP, _EDGE_COVER = 3, 9, 2.5, .6
 _UID = re.compile(r'\bID\s*[:：]\s*(\d+)', re.IGNORECASE)
 _CLIENT_TIME = re.compile(r'\b\d{4}\s+\d{2}:\d{2}\b')
 # 路径 2：OCR 可能把 UID、MMDD、H:MM 连成一串；最短 UID 配合合法月日时分拆开。
@@ -20,13 +25,20 @@ def _source_video(folder):
     return dict(bytes=stat.st_size, mtime_ns=stat.st_mtime_ns)
 
 
-def _ocr_engine():
+def _ocr_engine(title=False):
     # 路径 2：context-build 在未安装本地 OCR 的开发环境中运行。
     try:
         from rapidocr_onnxruntime import RapidOCR
     except ImportError as error:
         raise ValueError('OCR 依赖未安装') from error
-    return RapidOCR()
+    if not title:
+        return RapidOCR()
+    # 路径 2：默认检测把短边放大到 736，约 60 像素高的标题裁图会比整屏还慢；
+    # 标题区改为检测不放大，裁图先做 2 倍插值。cv2 随 rapidocr 安装。
+    import cv2
+    engine = RapidOCR(det_limit_type='max', det_limit_side_len=2000)
+    return lambda image: engine(cv2.resize(image, None, fx=2, fy=2,
+                                           interpolation=cv2.INTER_CUBIC))
 
 
 def _sample_frames(path, interval, start, end):
@@ -93,12 +105,48 @@ def _watermark(items, at, height, watermark):
     return watermark
 
 
+def _panel_left(image, x_range):
+    """Return the column where a same-direction step spans the most rows, or None."""
+    # 路径 2：不同页面的右侧面板宽度不同。面板多为半透明暗底，夜景下与场景只差几级灰度；
+    # 道具格、浮窗的竖线更强却不贯穿全高。因此比较跳变覆盖的行数，而不是梯度大小。
+    gray = image.mean(axis=2)
+    total = np.cumsum(gray[:, _EDGE_SPAN:] - gray[:, :-_EDGE_SPAN], axis=0)
+    step = (total[_EDGE_ROWS:] - total[:-_EDGE_ROWS]) / _EDGE_ROWS
+    cover = np.maximum((step > _EDGE_STEP).mean(axis=0), (step < -_EDGE_STEP).mean(axis=0))
+    width = image.shape[1]
+    low = max(0, int(x_range[0] * width) - _EDGE_SPAN)
+    high = int(x_range[1] * width) - _EDGE_SPAN
+    column = low + int(cover[low:high].argmax())
+    return column + _EDGE_SPAN if cover[column] >= _EDGE_COVER else None
+
+
+def _titles(engine, image, regions):
+    """OCR each title crop; x is the crop's normalized left edge."""
+    height, width = image.shape[:2]
+    titles = []
+    for region in regions:
+        x, y, w, h = region['rect']
+        detect = region.get('detect')
+        if detect is not None:
+            left = _panel_left(image, detect['x_range'])
+            # 路径 2：画面上没有贯穿的面板边界时退回目录给出的原位置。
+            if left is not None:
+                x = left / width
+        left, top = round(x * width), round(y * height)
+        result, _ = engine(image[top:top + round(h * height), left:left + round(w * width)])
+        text = ' '.join(item[2] for item in _items(result))
+        if text:
+            titles.append(dict(region=region['id'], text=text, x=round(x, 4)))
+    return titles
+
+
 def _track_path(folder, output=None):
     return (Path(output) if output is not None else Path(folder)) / TRACK
 
 
-def build(folder, *, interval=5, start=0, end=None, output=None, rematch=False):
-    """Build or reuse a track; output redirects derived data outside the session."""
+def build(folder, *, interval=5, title_interval=2, full_interval=10, start=0, end=None,
+          output=None, rematch=False):
+    """Build or reuse a track; catalog title_regions select dense title + sparse full OCR."""
     folder = Path(folder)
     path = _track_path(folder, output)
     # 路径 2：修订目录后 --rematch 仅重算界面分段，保留原抽帧范围。
@@ -111,33 +159,56 @@ def build(folder, *, interval=5, start=0, end=None, output=None, rematch=False):
                     rematched=True, interval=track['interval'],
                     start=track.get('start', 0), end=track.get('end'))
     # 路径 2：CLI 的区间/间隔输入必须符合声明的采样范围。
-    if not math.isfinite(interval) or not 2 <= interval <= 10:
-        raise ValueError('抽帧间隔必须在 2–10 秒之间。')
     if not math.isfinite(start) or start < 0 or (end is not None and
             (not math.isfinite(end) or end <= start)):
         raise ValueError('抽帧范围需满足 0 ≤ start < end。')
+    catalog = game_catalog.session_catalog(folder)
+    # 路径 4：没有界面目录或目录没有 title_regions 时保持单层 version 1。
+    regions = catalog.get('title_regions') if catalog is not None else None
+    if regions:
+        if not (math.isfinite(title_interval) and math.isfinite(full_interval)
+                and 1 <= title_interval <= 10 and title_interval <= full_interval <= 60):
+            raise ValueError('标题间隔须在 1–10 秒之间，整屏间隔须在标题间隔至 60 秒之间。')
+        params = dict(version=2, interval=title_interval, title_interval=title_interval,
+                      full_interval=full_interval, start=start, end=end, title_regions=regions)
+    else:
+        if not math.isfinite(interval) or not 2 <= interval <= 10:
+            raise ValueError('抽帧间隔必须在 2–10 秒之间。')
+        params = dict(version=1, interval=interval, start=start, end=end)
+    shown = {key: value for key, value in params.items() if key not in ('version', 'title_regions')}
     source = _source_video(folder)
     # 路径 2/1：相同视频及采样参数复用；转写、记录者变化不参与有效性。
+    # 路径 2：用户按设计规范改了标题区坐标，旧标题文字不再对应，需要重跑。
     if path.is_file():
         cached = json.loads(path.read_text(encoding='utf-8'))
-        if (cached['source_video'] == source and cached['interval'] == interval
-                and cached.get('start', 0) == start and cached.get('end') == end):
+        if cached['source_video'] == source and all(
+                cached.get(key, 0 if key == 'start' else None) == value
+                for key, value in params.items()):
             return dict(path=str(path.resolve()), frames=len(cached['frames']), reused=True,
-                        interval=interval, start=start, end=end)
+                        **shown)
     engine = _ocr_engine()
-    frames, watermark = [], None
-    for at, image in _sample_frames(folder / '录像.mp4', interval, start, end):
+    title_engine = _ocr_engine(title=True) if regions else None
+    frames, watermark, next_full = [], None, start
+    for at, image in _sample_frames(folder / '录像.mp4', params['interval'], start, end):
+        frame = dict(t=at)
+        if regions:
+            frame['titles'] = _titles(title_engine, image, regions)
+            # 路径 2：两层模式下整屏 OCR 只在整屏间隔的格点上运行，其余帧只有标题。
+            if at < next_full:
+                frames.append(frame)
+                continue
+            while next_full <= at:
+                next_full += full_interval
         result, _ = engine(image)
-        items = _items(result)
-        frames.append(dict(t=at, items=items))
-        watermark = _watermark(items, at, image.shape[0], watermark)
-    track = dict(version=1, source_video=source, interval=interval, start=start, end=end,
+        frame['items'] = _items(result)
+        watermark = _watermark(frame['items'], at, image.shape[0], watermark)
+        frames.append(frame)
+    track = dict(version=params.pop('version'), source_video=source, **params,
                  watermark=watermark, frames=frames,
-                 screens=game_catalog.match_screens(game_catalog.session_catalog(folder), frames))
+                 screens=game_catalog.match_screens(catalog, frames))
     path.parent.mkdir(parents=True, exist_ok=True)
     protocol._write(path.parent, path.name, track)
-    return dict(path=str(path.resolve()), frames=len(frames), reused=False,
-                interval=interval, start=start, end=end)
+    return dict(path=str(path.resolve()), frames=len(frames), reused=False, **shown)
 
 
 def load_track(folder, *, output=None):
@@ -156,23 +227,36 @@ def _title(items):
 
 
 def read_track(folder, *, start=None, end=None, compact=False, output=None):
-    """Return time-filtered OCR; compact merges adjacent title prefixes."""
+    """Return time-filtered OCR; compact merges adjacent frames, preferring title text."""
     track = load_track(folder, output=output)
-    frames, previous_title = [], None
+    frames, previous_title, group_full = [], None, False
     for frame in track['frames']:
-        at, items = frame['t'], frame['items']
+        at, items = frame['t'], frame.get('items')
         if (start is not None and at < start) or (end is not None and at > end):
             continue
-        text = '\n'.join(item[2] for item in items)
+        titles = ' '.join(title['text'] for title in frame.get('titles', ()))
+        text = '\n'.join(item[2] for item in items) if items is not None else titles
         if compact:
-            title = _title(items)
+            # 路径 2：两层轨道中只识别了标题区、且标题区无字的帧没有可读文字，不参与合并。
+            if items is None and not titles:
+                continue
+            title = titles or _title(items)
             if frames and title == previous_title:
                 frames[-1]['end'] = at
+                # 路径 2：组首只有标题时，用组内第一张整屏帧补全文字，避免画面上的反证被略去。
+                if items is not None and not group_full:
+                    frames[-1]['text'], group_full = text[:120], True
                 continue
             frames.append(dict(t=at, end=at, text=text[:120]))
-            previous_title = title
+            previous_title, group_full = title, items is not None
         else:
-            frames.append(dict(t=at, text=text, items=items))
-    return dict(version=track['version'], interval=track['interval'],
+            row = dict(t=at, text=text)
+            if 'titles' in frame:
+                row['titles'] = frame['titles']
+            if items is not None:
+                row['items'] = items
+            frames.append(row)
+    layers = {key: track[key] for key in ('title_interval', 'full_interval') if key in track}
+    return dict(version=track['version'], interval=track['interval'], **layers,
                 source_video=track['source_video'], watermark=track['watermark'],
                 frames=frames, screens=track['screens'])

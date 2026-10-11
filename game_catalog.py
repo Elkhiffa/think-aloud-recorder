@@ -35,12 +35,43 @@ def _optional_fields(item, label):
         _texts(item['aliases'], label + ' aliases')
 
 
+def _fraction(value):
+    return type(value) in (int, float) and 0 <= value <= 1
+
+
+def _title_regions(regions):
+    # 路径 2：用户按设计规范手填标题区坐标；像素坐标或越界会让裁图为空或切到别处。
+    if not isinstance(regions, list) or not regions:
+        raise ValueError('title_regions 必须是非空数组。')
+    ids = set()
+    for region in regions:
+        if not isinstance(region, dict):
+            raise ValueError('title region 必须是对象。')
+        _text(region.get('id'), 'title region id')
+        if region['id'] in ids:
+            raise ValueError('title region id 重复：' + region['id'])
+        ids.add(region['id'])
+        rect = region.get('rect')
+        if (not isinstance(rect, list) or len(rect) != 4 or not all(map(_fraction, rect))
+                or rect[2] <= 0 or rect[3] <= 0 or rect[0] + rect[2] > 1 or rect[1] + rect[3] > 1):
+            raise ValueError('title region rect 必须是 0–1 的归一化 [x,y,w,h]，且不超出画面。')
+        if 'detect' in region:
+            detect = region['detect']
+            span = detect.get('x_range') if isinstance(detect, dict) else None
+            if (not isinstance(detect, dict) or detect.get('type') != 'vertical_edge'
+                    or not isinstance(span, list) or len(span) != 2
+                    or not all(map(_fraction, span)) or span[0] >= span[1]):
+                raise ValueError('title region detect 须为 vertical_edge，x_range 为 0–1 的递增区间。')
+
+
 def validate_catalog(data):
     """Validate the v1 format, with globally unique element IDs."""
     # 路径 2：catalog-validate 检查手工目录，避免无效或重复 ID 的引用。
     if not isinstance(data, dict) or data.get('version') != 1:
         raise ValueError('界面目录 version 必须是 1。')
     _text(data.get('game'), 'game')
+    if 'title_regions' in data:
+        _title_regions(data['title_regions'])
     if not isinstance(data.get('screens'), list):
         raise ValueError('screens 必须是数组。')
     screen_ids, element_ids = set(), set()
@@ -60,6 +91,8 @@ def validate_catalog(data):
             raise ValueError('screen match 必须是对象。')
         for field in ('all_of', 'any_of', 'none_of'):
             _texts(rule.get(field), 'match ' + field)
+        if 'title_any_of' in rule:
+            _texts(rule['title_any_of'], 'match title_any_of')
         if not isinstance(screen.get('elements'), list):
             raise ValueError('screen elements 必须是数组。')
         for element in screen['elements']:
@@ -103,6 +136,18 @@ def validate(vault, game):
 
 def match_frame(catalog, frame):
     """Return the best matching screen, retaining catalog order for ties."""
+    titles = ' '.join(title['text'] for title in frame.get('titles', ()))
+    # 路径 2：两层轨道先按标题区文字定位界面，命中词数多者优先，并列按目录先后。
+    if titles:
+        best, best_score = None, 0
+        for screen in catalog['screens']:
+            score = sum(word in titles for word in screen['match'].get('title_any_of', ()))
+            if score > best_score:
+                best, best_score = screen, score
+        if best is not None:
+            return best
+    if 'items' not in frame:
+        return None
     text = ' '.join(item[2] for item in frame['items'])
     best, best_score = None, -1
     for screen in catalog['screens']:
@@ -125,6 +170,9 @@ def match_screens(catalog, frames):
     spans = []
     for frame in frames:
         screen = match_frame(catalog, frame) if catalog is not None else None
+        # 路径 2：只识别了标题区的帧若标题未命中，没有整屏文字可判断，不延长也不打断分段。
+        if screen is None and 'items' not in frame:
+            continue
         ident = screen['id'] if screen is not None else None
         if spans and spans[-1]['screen'] == ident:
             spans[-1]['end'] = frame['t']
@@ -142,7 +190,11 @@ def suggest(folder, top=30):
     track = load_track(folder)
     counts = {}
     for frame in track['frames']:
-        title = ' '.join(item[2] for item in frame['items'] if item[1] < 70).strip()
+        # 路径 2：两层轨道直接统计标题区文字，供用户填写 title_any_of。
+        if 'titles' in frame:
+            title = ' '.join(row['text'] for row in frame['titles'])
+        else:
+            title = ' '.join(item[2] for item in frame['items'] if item[1] < 70).strip()
         if not title:
             continue
         row = counts.setdefault(title, dict(text=title, count=0, samples=[]))

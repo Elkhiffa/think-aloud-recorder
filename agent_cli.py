@@ -98,7 +98,9 @@ def main(argv=None):
     discovery.add_argument('--include-test', action='store_true')
     context_build = commands.add_parser('context-build', help='本地 OCR 生成情景轨道；--output 将派生数据写到工作目录')
     context_build.add_argument('session')
-    context_build.add_argument('--interval', type=float, default=5)
+    context_build.add_argument('--interval', type=float, default=5, help='单层模式抽帧间隔（目录无 title_regions 时）')
+    context_build.add_argument('--title-interval', type=float, default=2, help='两层模式标题区识别间隔')
+    context_build.add_argument('--full-interval', type=float, default=10, help='两层模式整屏识别间隔')
     context_build.add_argument('--start', type=float, default=0)
     context_build.add_argument('--end', type=float)
     context_build.add_argument('--output')
@@ -255,7 +257,8 @@ def main(argv=None):
             value = scan(args.database, args.publish, args.include_test)
         elif name == 'context-build':
             from context_track import build
-            value = build(args.session, interval=args.interval, start=args.start,
+            value = build(args.session, interval=args.interval, title_interval=args.title_interval,
+                          full_interval=args.full_interval, start=args.start,
                           end=args.end, output=args.output, rematch=args.rematch)
         elif name == 'context-read':
             from context_track import read_track
