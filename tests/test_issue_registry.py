@@ -96,5 +96,52 @@ class IssueRegistryTests(unittest.TestCase):
         self.assertEqual(protocol._load(second, protocol.RESULT)['analysis_context'], context)
 
 
+    def test_links_make_issue_query_work_across_sessions(self):
+        """触发路径：跨场次分析 agent 把“议题 → 实例”的归类批量写入对应表 → 用户按议题查询，三场挂了该议题的实例都要列出来；只存在表里时查询为空。"""
+        self.make_session('first', '2026-10-08T12:00:00+08:00', [])
+        self.make_session('second', '2026-10-09T12:00:00+08:00', [])
+        issues.add_issue(self.vault, '提示何时算看过')
+        rows = [dict(issue='TA-01', session_id='second', instance_id='i1', reason='方向不明'),
+                dict(issue='N-001', session_id='first', instance_id='i1', reason='红点'),
+                dict(issue='TA-01', session_id='first', instance_id='i1', reason='方向不明')]
+        with self.assertRaisesRegex(ValueError, '实例不存在'):
+            issues.link_instances(self.vault, rows + [dict(issue='TA-01', session_id='first', instance_id='i9')])
+        self.assertFalse((self.vault / issues.LINKS).exists())
+        self.assertEqual(issues.link_instances(self.vault, rows), dict(added=3, updated=0, total=3))
+        found = issues.query_instances(self.vault, issue=['TA-01'])
+        self.assertEqual([(row['session_id'], row['instance_id']) for row in found],
+                         [('first', 'i1'), ('second', 'i1')])
+        self.assertEqual(found[0]['issue_tags'], ['N-001', 'TA-01'])
+        self.assertEqual(found[0]['issue_links'][1], dict(issue='TA-01', reason='方向不明'))
+        self.assertEqual((found[0]['event_id'], found[0]['event_title']), ('e1', '寻找目标'))
+        for folder in ('first', 'second'):
+            self.assertEqual(protocol._load(self.vault / '场次' / folder, protocol.RESULT)['instances'][0]['issue_tags'], [])
+
+    def test_links_to_reanalysed_result_stop_applying(self):
+        """触发路径：用户要求重新整理某场 → 新结果的内容变了，实例编号还可能被沿用 → 旧对应不能悄悄挂到新实例上，议题列表要显示它已过期。"""
+        folder = self.make_session('only', '2026-10-08T12:00:00+08:00', [])
+        issues.link_instances(self.vault, [dict(issue='TA-02', session_id='only', instance_id='i1')])
+        self.assertEqual(len(issues.query_instances(self.vault, issue=['TA-02'])), 1)
+        result = protocol._load(folder, protocol.RESULT)
+        for key in ('receipt', 'analysis_context'):
+            result.pop(key, None)
+        result['instances'][0]['statement'] = '重新整理后的陈述。'
+        job = protocol.reprocess(folder, 'synthetic-worker', '方法更新后重做')
+        protocol.submit(folder, job['token'], result)
+        self.assertEqual(issues.query_instances(self.vault, issue=['TA-02']), [])
+        row = next(row for row in issues.list_issues(self.vault)['issues'] if row['id'] == 'TA-02')
+        self.assertEqual((row['links_active'], row['links_stale']), (0, 1))
+
+    def test_merge_moves_links_to_target_issue(self):
+        """触发路径：用户决定把“红点何时算看过”并入“播报与注意力”议题 → 合并后对应表里的实例都要归到目标议题下。"""
+        self.make_session('first', '2026-10-08T12:00:00+08:00', [])
+        issues.link_instances(self.vault, [dict(issue='TA-01', session_id='first', instance_id='i1'),
+                                           dict(issue='TA-02', session_id='first', instance_id='i1')])
+        issues.merge_issues(self.vault, 'TA-01', 'TA-02')
+        self.assertEqual(issues.read_links(self.vault)['links'][0]['issue'], 'TA-02')
+        self.assertEqual(len(issues.read_links(self.vault)['links']), 1)
+        self.assertEqual([row['instance_id'] for row in issues.query_instances(self.vault, issue=['TA-02'])], ['i1'])
+
+
 if __name__ == '__main__':
     unittest.main()

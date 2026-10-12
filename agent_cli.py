@@ -121,7 +121,7 @@ def main(argv=None):
     catalog_hotwords.add_argument('vault')
     catalog_hotwords.add_argument('game')
     catalog_hotwords.add_argument('--output', required=True)
-    for action in ('list', 'add', 'update', 'merge'):
+    for action in ('list', 'add', 'update', 'merge', 'link', 'unlink'):
         issue_command = commands.add_parser('issues-' + action, help='管理资料库级议题标签；合并保留结果及校准历史')
         issue_command.add_argument('vault')
         if action == 'add':
@@ -136,6 +136,16 @@ def main(argv=None):
         elif action == 'merge':
             issue_command.add_argument('from_id')
             issue_command.add_argument('into_id')
+        elif action == 'link':
+            issue_command.add_argument('--file', help='批量对应 JSON：[{issue,session_id,instance_id,reason}]')
+            issue_command.add_argument('--issue')
+            issue_command.add_argument('--session')
+            issue_command.add_argument('--instance')
+            issue_command.add_argument('--reason', default='')
+        elif action == 'unlink':
+            issue_command.add_argument('issue')
+            issue_command.add_argument('--session', required=True)
+            issue_command.add_argument('--instance', required=True)
     instances_query = commands.add_parser('instances-query', help='按议题、界面或判断类型跨场次筛选已完成结果')
     instances_query.add_argument('vault')
     instances_query.add_argument('--issue', action='append')
@@ -281,8 +291,16 @@ def main(argv=None):
                 value = issues.add_issue(args.vault, args.title, args.id, args.status)
             elif name == 'issues-update':
                 value = issues.update_issue(args.vault, args.id, args.title, args.description, args.status)
-            else:
+            elif name == 'issues-merge':
                 value = issues.merge_issues(args.vault, args.from_id, args.into_id)
+            elif name == 'issues-link':
+                if args.file:
+                    rows = json.loads(Path(args.file).read_text(encoding='utf-8-sig'))
+                else:
+                    rows = [dict(issue=args.issue, session_id=args.session, instance_id=args.instance, reason=args.reason)]
+                value = issues.link_instances(args.vault, rows)
+            else:
+                value = issues.unlink_instance(args.vault, args.issue, args.session, args.instance)
         elif name == 'instances-query':
             from issue_registry import query_instances
             value = query_instances(args.vault, args.issue, args.screen, args.element, args.kind, args.session)

@@ -12,6 +12,7 @@ from session_metadata import metadata_lock
 
 
 FILE = 'issues.json'
+LINKS = 'issue-links.json'
 
 
 def _identifier(value):
@@ -56,8 +57,89 @@ def read_registry(vault):
     return data
 
 
+def read_links(vault):
+    path = Path(vault).resolve() / LINKS
+    # 路径 2/3：尚未建立议题对应表的资料库从空表开始。
+    if not path.is_file():
+        return dict(version=1, links=[])
+    data = json.loads(path.read_text(encoding='utf-8-sig'))
+    if not isinstance(data, dict) or data.get('version') != 1 or not isinstance(data.get('links'), list):
+        raise ValueError('issue-links.json 必须是 version=1 的议题对应表。')
+    return data
+
+
+def _complete_results(vault):
+    """Map session id -> (result digest, instance ids, instances) for complete sessions."""
+    sessions = {}
+    for path in sorted((Path(vault).resolve() / '场次').glob('*/session.json')):
+        meta = json.loads(path.read_text(encoding='utf-8-sig'))
+        state = protocol.preprocessing_status(path.parent, include_result=True)
+        if state['state'] != 'complete':
+            continue
+        instances = state['result'].get('instances', [])
+        digest = protocol._file_hash(protocol._path(path.parent, protocol.RESULT))
+        sessions[meta['id']] = (digest, {row['id'] for row in instances}, meta, state['result'])
+    return sessions
+
+
+def _active(link, sessions):
+    # 路径 1：重新整理后实例编号会变；只认绑定当时结果摘要的对应，旧对应保留但不再生效。
+    found = sessions.get(link['session_id'])
+    return found is not None and found[0] == link['result_sha256'] and link['instance_id'] in found[1]
+
+
 def list_issues(vault):
-    return read_registry(vault)
+    data = read_registry(vault)
+    links = read_links(vault)['links']
+    sessions = _complete_results(vault) if links else {}
+    for row in data['issues']:
+        mine = [link for link in links if link['issue'] == row['id']]
+        active = sum(_active(link, sessions) for link in mine)
+        row['links_active'], row['links_stale'] = active, len(mine) - active
+    return data
+
+
+def link_instances(vault, rows):
+    """Add or update issue -> instance links; every row is checked before anything is written."""
+    if not isinstance(rows, list) or not rows:
+        raise ValueError('至少需要一条议题对应。')
+    with metadata_lock(vault):
+        known = {row['id'] for row in read_registry(vault)['issues']}
+        data = read_links(vault)
+        sessions = _complete_results(vault)
+        index = {(link['issue'], link['session_id'], link['instance_id']): link for link in data['links']}
+        added = 0
+        for row in rows:
+            # 路径 3：跨场次分析 agent 批量提交对应；未知议题或实例会让查询永远找不到。
+            if not isinstance(row, dict):
+                raise ValueError('议题对应必须是对象。')
+            issue, session_id, instance_id = row.get('issue'), row.get('session_id'), row.get('instance_id')
+            if issue not in known:
+                raise ValueError('议题不存在：' + str(issue))
+            if session_id not in sessions or instance_id not in sessions[session_id][1]:
+                raise ValueError(f'实例不存在或场次未完成整理：{session_id}/{instance_id}')
+            reason = row.get('reason', '')
+            if not isinstance(reason, str) or len(reason) > 1000:
+                raise ValueError('归类理由必须是不超过 1000 字的字符串。')
+            key = (issue, session_id, instance_id)
+            added += key not in index
+            index[key] = dict(issue=issue, session_id=session_id, instance_id=instance_id,
+                              result_sha256=sessions[session_id][0], reason=reason.strip())
+        data['links'] = list(index.values())
+        protocol._write(vault, LINKS, data)
+        return dict(added=added, updated=len(rows) - added, total=len(data['links']))
+
+
+def unlink_instance(vault, issue, session_id, instance_id):
+    with metadata_lock(vault):
+        data = read_links(vault)
+        kept = [link for link in data['links']
+                if (link['issue'], link['session_id'], link['instance_id']) != (issue, session_id, instance_id)]
+        if len(kept) == len(data['links']):
+            raise ValueError('没有这条议题对应。')
+        data['links'] = kept
+        protocol._write(vault, LINKS, data)
+        return dict(removed=1, total=len(kept))
 
 
 def _find(data, ident):
@@ -155,6 +237,15 @@ def merge_issues(vault, from_id, into_id):
             if plan['copied']:
                 protocol._write(folder, event_edits.FILE, plan['corrections'])
             protocol._write(folder, protocol.RESULT, plan['result'])
+        # 路径 2：合并议题时对应表里的引用一起改到目标议题，重复的对应只保留一条。
+        links = read_links(vault)
+        merged = {}
+        for link in links['links']:
+            link = dict(link, issue=into_id if link['issue'] == from_id else link['issue'])
+            merged.setdefault((link['issue'], link['session_id'], link['instance_id']), link)
+        if links['links']:
+            links['links'] = list(merged.values())
+            protocol._write(vault, LINKS, links)
         data['issues'] = [row for row in data['issues'] if row['id'] != from_id]
         protocol._write(vault, FILE, data)
         return dict(from_id=from_id, into_id=into_id, sessions=len(plans),
@@ -165,15 +256,20 @@ def merge_issues(vault, from_id, into_id):
 def query_instances(vault, issue=None, screen=None, element=None, kind=None, session=None):
     rows = []
     requested = set(issue or [])
-    for path in sorted((Path(vault).resolve() / '场次').glob('*/session.json')):
-        meta = json.loads(path.read_text(encoding='utf-8-sig'))
-        if session is not None and meta.get('id') != session:
+    sessions = _complete_results(vault)
+    linked = {}
+    for link in read_links(vault)['links']:
+        if _active(link, sessions):
+            linked.setdefault((link['session_id'], link['instance_id']), []).append(
+                dict(issue=link['issue'], reason=link['reason']))
+    for session_id, (_, _, meta, result) in sessions.items():
+        if session is not None and session_id != session:
             continue
-        state = protocol.preprocessing_status(path.parent, include_result=True)
-        if state['state'] != 'complete':
-            continue
-        for instance in state['result'].get('instances', []):
-            if requested and not requested.intersection(instance['issue_tags']):
+        titles = {event['id']: event['title'] for event in result['events']}
+        for instance in result.get('instances', []):
+            links = linked.get((session_id, instance['id']), [])
+            tags = list(dict.fromkeys(instance['issue_tags'] + [link['issue'] for link in links]))
+            if requested and not requested.intersection(tags):
                 continue
             if screen is not None and instance['screen'] != screen:
                 continue
@@ -185,7 +281,8 @@ def query_instances(vault, issue=None, screen=None, element=None, kind=None, ses
                        said_start=min(said['start'] for said in instance['said']),
                        refers_start=instance['refers_to']['start'], refers_end=instance['refers_to']['end'],
                        screen=instance['screen'], elements=instance['elements'], kind=instance['kind'],
-                       statement=instance['statement'], issue_tags=instance['issue_tags'])
+                       statement=instance['statement'], issue_tags=tags, issue_links=links,
+                       event_id=instance['event_id'], event_title=titles.get(instance['event_id'], ''))
             rows.append((str(meta.get('created') or meta['id']), row))
     rows.sort(key=lambda item: (item[0], item[1]['refers_start']))
     return [row for _, row in rows]

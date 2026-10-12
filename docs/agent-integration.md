@@ -107,10 +107,12 @@ issues-list VAULT
 issues-add VAULT --title TITLE [--id ID] [--status candidate|confirmed]
 issues-update VAULT ID [--title TITLE] [--description TEXT] [--status candidate|confirmed]
 issues-merge VAULT FROM_ID INTO_ID
+issues-link VAULT --file LINKS.json | --issue ID --session SESSION --instance INSTANCE [--reason TEXT]
+issues-unlink VAULT ID --session SESSION --instance INSTANCE
 instances-query VAULT [--issue ID]... [--screen ID] [--element ID] [--kind KIND] [--session ID]
 ```
 
-以上均为 `agent_cli.py` 子命令。合并前备份原结果至 `agent-history`；追加绑定新摘要的校准记录，保留原条目，并保留分析快照。完成引用替换后再移除旧标签。资料库写入复用文件锁与原子替换。查询只读取 complete 场次，不建立查询缓存；多个 issue 取任一匹配，其余条件叠加。返回 session_id、instance_id、said_start、refers_start/refers_end、screen、elements、kind、statement、issue_tags，按场次时间、所指起点排序。
+以上均为 `agent_cli.py` 子命令。合并前备份原结果至 `agent-history`；追加绑定新摘要的校准记录，保留原条目，并保留分析快照。完成引用替换后再移除旧标签。资料库写入复用文件锁与原子替换。资料库根目录的 `issue-links.json` 是“议题 → 实例”对应表 `{version:1, links:[{issue,session_id,instance_id,result_sha256,reason}]}`，供跨场次分析在不改写各场结果的情况下归类；`issues-link` 整批校验后才写入，议题和实例都必须存在且场次已完成整理。每条对应绑定写入时的结果摘要，该场重新整理后旧对应不再生效，`issues-list` 为每个议题给出 links_active / links_stale。合并议题时对应表里的引用一起改写。查询只读取 complete 场次，不建立查询缓存；议题条件同时匹配实例自带的标签和有效对应；多个 issue 取任一匹配，其余条件叠加。返回 session_id、instance_id、said_start、refers_start/refers_end、screen、elements、kind、statement、issue_tags（两种来源合并）、issue_links（对应理由）、event_id 和 event_title，按场次时间、所指起点排序。
 
 ### 本地情景轨道与界面目录
 
