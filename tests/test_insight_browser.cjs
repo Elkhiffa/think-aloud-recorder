@@ -74,7 +74,10 @@ async function main(){
   });
   await check('evidence times open the review at that moment',async()=>{
     await page.locator('#expandAll').click();
-    await page.locator('#issue-TA-01\\.1 .card[data-key="'+S1+'/i1"] .jump',{hasText:'指'}).click();
+    const card=page.locator('#issue-TA-01\\.1 .card[data-key="'+S1+'/i1"]');
+    assert.equal(await card.locator('.card-title').textContent(),'困惑合成活动');
+    assert.equal(await card.locator('.jump').textContent(),'00:02–00:12');
+    await card.locator('.jump').click();
     await page.locator('#issue-BUG-raw-body .jump').click();
     const calls=await page.evaluate(()=>window.__calls);
     assert.deepEqual(calls.slice(-2),[['open_review',S1,2],['open_review',S2,30]]);

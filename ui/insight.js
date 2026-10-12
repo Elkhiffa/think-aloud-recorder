@@ -36,18 +36,25 @@
   }
   function jump(session,time,text){return Number.isFinite(time)?`<button type="button" class="jump" data-open-session="${escape(session)}" data-open-time="${time}" title="在新窗口打开回看并停在这一刻">${escape(text)}</button>`:'';}
 
+  // One span covers what was evaluated and when it was said; the review opens at its start.
+  function span(row){
+    if(row.refers_basis==='earlier_session'||!Number.isFinite(row.refers_start))return [row.said_start,row.said_start];
+    return [Math.min(row.refers_start,row.said_start),Math.max(row.refers_end,row.said_start)];
+  }
   function card(row,link,issue){
-    const at=row.refers_start??row.said_start;
-    const refers=row.refers_basis==='earlier_session'?'<span>指 本场之前</span>':jump(row.session_id,row.refers_start,`指 ${formatTime(row.refers_start)}–${formatTime(row.refers_end)}`);
+    const at=row.refers_start??row.said_start,[from,to]=span(row);
+    const time=jump(row.session_id,from,from===to?formatTime(from):`${formatTime(from)}–${formatTime(to)}`);
+    const earlier=row.refers_basis==='earlier_session'?'<span>指向本场之前</span>':'';
     const compare=row.compare_to?jump(row.session_id,row.compare_to.start,`对照 ${formatTime(row.compare_to.start)}`):'';
     let screen=row.catalog_screen||row.screen;
-    screen=screen?escape(screen)+(row.screen_proposed&&!row.catalog_screen?' <span class="badge">提议的界面</span>':''):'（'+escape(CONTEXT[row.screen_context]||'未注明界面')+'）';
-    if(row.route?.length)screen+=`<div class="reason">路线：${escape(row.route.join(' -> '))}</div>`;
+    screen=screen?escape(screen)+(row.screen_proposed&&!row.catalog_screen?'（提议的界面）':''):escape(CONTEXT[row.screen_context]||'未注明界面');
+    if(row.route?.length)screen+=' · 路线：'+escape(row.route.join(' -> '));
+    if(row.elements?.length)screen+=' › '+escape(row.elements.join('、'));
     const counter=link?.role==='counter';
     return `<article class="card${counter?' counter':''}" data-key="${escape(key(row.session_id,row.instance_id))}" data-issue="${escape(issue||'')}">${thumb(row.session_id,at,label(row)+' · '+formatTime(at))}<div>`+
-      `<div class="meta"><span class="label">${escape(label(row))}</span>${counter?'<span class="badge">反例</span>':''}<span>${escape(KIND[row.kind]||row.kind)}</span>${jump(row.session_id,row.said_start,'说 '+formatTime(row.said_start))}${refers}${compare}</div>`+
-      `<div class="screen">${screen}${row.elements?.length?' › '+escape(row.elements.join('、')):''}</div><p>${escape(row.statement)}</p>`+
-      `${link?.reason?`<p class="reason">归入理由：${escape(link.reason)}</p>`:''}${row.event_title?`<p class="reason">活动：${escape(row.event_title)}</p>`:''}</div></article>`;
+      `<h4 class="card-title"><span class="kind kind-${escape(row.kind)}">${escape(KIND[row.kind]||row.kind)}</span><span>${escape(row.event_title||'未归入活动')}</span>${counter?'<span class="badge">反例</span>':''}</h4>`+
+      `<p class="statement">${escape(row.statement)}</p>`+
+      `<div class="aside"><span class="meta">${time}${earlier}${compare}<span>${escape(label(row))}</span></span><div>界面：${screen}</div>${link?.reason?`<div>归入理由：${escape(link.reason)}</div>`:''}</div></div></article>`;
   }
   function cards(links,issue,role){
     return links.map(link=>{const row=state.instances.get(key(link.session_id,link.instance_id));return row?card(row,{...link,role},issue):'';}).join('');
