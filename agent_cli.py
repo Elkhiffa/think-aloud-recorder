@@ -151,7 +151,7 @@ def main(argv=None):
     instances_query.add_argument('--issue', action='append')
     instances_query.add_argument('--screen')
     instances_query.add_argument('--element')
-    instances_query.add_argument('--kind', choices=('confusion', 'obstacle', 'positive', 'expectation', 'suggestion', 'self_correction', 'observation'))
+    instances_query.add_argument('--kind', choices=('confusion', 'obstacle', 'positive', 'negative', 'expectation', 'suggestion', 'self_correction', 'observation'))
     instances_query.add_argument('--session')
     visual = commands.add_parser('visual-nodes', help='本地逐帧检测画面变化；不调用模型，不写入场次')
     visual.add_argument('session')
