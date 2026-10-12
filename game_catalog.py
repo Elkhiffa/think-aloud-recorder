@@ -127,6 +127,42 @@ def session_catalog(folder):
     return load_catalog(folder.parent.parent, game)
 
 
+def confirm_proposed(vault, game, proposed, new_id=None, name=None, into=None):
+    """Record a user-confirmed proposed screen name; session results keep their original text."""
+    import agent_protocol as protocol
+    from session_metadata import metadata_lock
+    _text(proposed, '提议的界面名')
+    if (new_id is None) == (into is None):
+        raise ValueError('请选择“收为新界面”或“并入已有界面”其中一种。')
+    path = catalog_path(vault, game)
+    with metadata_lock(vault):
+        # 路径 1/2：洞察界面或命令行确认第一个提议界面时，资料库可能还没有目录。
+        data = load_catalog(vault, game) if path.is_file() else dict(version=1, game=game, screens=[])
+        screens = {row['id']: row for row in data['screens']}
+        taken = set(screens) | {alias for row in data['screens'] for alias in row.get('aliases', [])}
+        if proposed in taken:
+            raise ValueError('该界面名已在目录中：' + proposed)
+        if into is not None:
+            if into not in screens:
+                raise ValueError('目录中没有这个界面：' + str(into))
+            screens[into].setdefault('aliases', []).append(proposed)
+            screen = into
+        else:
+            _text(new_id, '界面编号')
+            if new_id in taken:
+                raise ValueError('界面编号已被占用：' + new_id)
+            row = dict(id=new_id, name=(name or new_id.rpartition('/')[2]).strip(), source='manual',
+                       match=dict(all_of=[], any_of=[], none_of=[]), elements=[])
+            if new_id != proposed:
+                row['aliases'] = [proposed]
+            data['screens'].append(row)
+            screen = new_id
+        validate_catalog(data)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        protocol._write(path.parent, path.name, data)
+    return dict(path=str(path), screen=screen, proposed=proposed, action='into' if into is not None else 'new')
+
+
 def validate(vault, game):
     data = load_catalog(vault, game)
     return dict(path=str(catalog_path(vault, game)), game=data['game'],

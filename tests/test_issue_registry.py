@@ -17,14 +17,14 @@ class IssueRegistryTests(unittest.TestCase):
         issues.add_issue(self.vault, '目标丢失', 'TA-01', 'confirmed')
         issues.add_issue(self.vault, '入口不明', 'TA-02', 'confirmed')
 
-    def make_session(self, ident, created, tags):
+    def make_session(self, ident, created, tags, segments=None, screen=None, proposed=False, **meta):
         folder = self.vault / '场次' / ident
         folder.mkdir(parents=True)
+        segments = segments or [dict(start=2, end=4, text='不知道应该去哪里。', speaker_id=0)]
         protocol._write(folder, 'session.json', dict(id=ident, game='合成游戏', created=created,
                         state='可回看', transcription_state='ready', media=dict(duration=12),
-                        input_offset_seconds=1, settings=dict(record_inputs=False)))
-        protocol._write(folder, '录像.whisper.json', dict(segments=[
-            dict(start=2, end=4, text='不知道应该去哪里。', speaker_id=0)]))
+                        input_offset_seconds=1, settings=dict(record_inputs=False), **meta))
+        protocol._write(folder, '录像.whisper.json', dict(segments=segments))
         (folder / '录像.mp4').write_bytes(b'synthetic video placeholder')
         manifest = protocol.publish_ready(folder)
         result = dict(version=2, session_id=ident, revision=manifest['revision'], summary='合成整理。',
@@ -35,10 +35,12 @@ class IssueRegistryTests(unittest.TestCase):
                                    evidence=[dict(kind='quote', ref='t000001')])],
                       questions=[], ideas=[], instances=[
                           dict(id='i1', event_id='e1', said=[dict(kind='quote', ref='t000001')],
-                               refers_to=dict(start=2, end=4, basis='same_time'), screen=None,
+                               refers_to=dict(start=2, end=4, basis='same_time'), screen=screen,
                                elements=[], kind='confusion', statement='不知道目标方向。',
                                issue_tags=tags, evidence=[dict(kind='video', start=3, end=3,
                                                                observation='合成目标按钮。')], confidence='high')])
+        if proposed:
+            result['instances'][0]['screen_proposed'] = True
         job = protocol.claim(folder, 'synthetic-worker')
         protocol.submit(folder, job['token'], result)
         return folder
@@ -80,7 +82,7 @@ class IssueRegistryTests(unittest.TestCase):
         originals = {folder: (folder / protocol.RESULT).read_bytes() for folder in (first, second)}
         merged = issues.merge_issues(self.vault, 'TA-01', 'TA-02')
         self.assertEqual((merged['sessions'], merged['instances'], merged['corrections_migrated']), (2, 2, 1))
-        self.assertEqual([row['id'] for row in issues.list_issues(self.vault)['issues']], ['TA-02'])
+        self.assertEqual([row['id'] for row in issues.list_issues(self.vault)['issues']], ['BUG', 'TA-02'])
         for folder in (first, second):
             raw = protocol._load(folder, protocol.RESULT)
             self.assertEqual(raw['instances'][0]['issue_tags'], ['TA-02'])
@@ -112,7 +114,7 @@ class IssueRegistryTests(unittest.TestCase):
         self.assertEqual([(row['session_id'], row['instance_id']) for row in found],
                          [('first', 'i1'), ('second', 'i1')])
         self.assertEqual(found[0]['issue_tags'], ['N-001', 'TA-01'])
-        self.assertEqual(found[0]['issue_links'][1], dict(issue='TA-01', reason='方向不明'))
+        self.assertEqual(found[0]['issue_links'][1], dict(issue='TA-01', reason='方向不明', role='support'))
         self.assertEqual((found[0]['event_id'], found[0]['event_title']), ('e1', '寻找目标'))
         for folder in ('first', 'second'):
             self.assertEqual(protocol._load(self.vault / '场次' / folder, protocol.RESULT)['instances'][0]['issue_tags'], [])
@@ -141,6 +143,49 @@ class IssueRegistryTests(unittest.TestCase):
         self.assertEqual(issues.read_links(self.vault)['links'][0]['issue'], 'TA-02')
         self.assertEqual(len(issues.read_links(self.vault)['links']), 1)
         self.assertEqual([row['instance_id'] for row in issues.query_instances(self.vault, issue=['TA-02'])], ['i1'])
+
+    def test_merge_keeps_other_links_of_rewritten_session_active(self):
+        """触发路径：实例上直接带着旧标签的场次被合并改写 → 同一场里挂在其他议题下的对应不能因结果摘要变化而失效。"""
+        self.make_session('first', '2026-10-08T12:00:00+08:00', ['TA-01'])
+        issues.add_issue(self.vault, '奖励效率', 'TA-03', 'confirmed')
+        issues.link_instances(self.vault, [dict(issue='TA-02', session_id='first', instance_id='i1')])
+        merged = issues.merge_issues(self.vault, 'TA-01', 'TA-03')
+        self.assertEqual(merged['sessions'], 1)
+        row = next(row for row in issues.list_issues(self.vault)['issues'] if row['id'] == 'TA-02')
+        self.assertEqual((row['links_active'], row['links_stale']), (1, 0))
+
+    def test_sub_issues_hold_support_and_counter_evidence(self):
+        """触发路径：跨场次分析把议题下的模式写成子议题，并把反例和支持证据分开挂 → 按父议题查询能带出子议题的证据和角色。"""
+        self.make_session('first', '2026-10-08T12:00:00+08:00', [])
+        self.make_session('second', '2026-10-09T12:00:00+08:00', [])
+        sub = issues.add_issue(self.vault, '代价：目标被替换', parent='TA-01')
+        self.assertEqual((sub['id'], sub['parent']), ('TA-01.1', 'TA-01'))
+        self.assertEqual(issues.add_issue(self.vault, '提示抢占操作', parent='TA-01')['id'], 'TA-01.2')
+        with self.assertRaisesRegex(ValueError, '不能再建子议题'):
+            issues.add_issue(self.vault, '更深一层', parent='TA-01.1')
+        with self.assertRaisesRegex(ValueError, '指定父议题'):
+            issues.add_issue(self.vault, '没有父议题', 'TA-02.1')
+        with self.assertRaisesRegex(ValueError, 'support 或 counter'):
+            issues.link_instances(self.vault, [dict(issue='TA-01.1', session_id='first', instance_id='i1', role='maybe')])
+        issues.link_instances(self.vault, [
+            dict(issue='TA-01.1', session_id='first', instance_id='i1', reason='清完红点忘了目标'),
+            dict(issue='TA-01.1', session_id='second', instance_id='i1', reason='专注时少提示反而好', role='counter')])
+        rows = issues.query_instances(self.vault, issue=['TA-01'])
+        self.assertEqual([(row['session_id'], row['issue_links'][0]['issue'], row['issue_links'][0]['role'])
+                          for row in rows], [('first', 'TA-01.1', 'support'), ('second', 'TA-01.1', 'counter')])
+        with self.assertRaisesRegex(ValueError, '还有子议题'):
+            issues.merge_issues(self.vault, 'TA-01', 'TA-02')
+
+    def test_bug_is_a_fixed_issue_single_session_can_tag(self):
+        """触发路径：记录者在原话里说“这是 bug” → 单场次整理直接挂 BUG，BUG 不能改名或被合并。"""
+        self.make_session('first', '2026-10-08T12:00:00+08:00', ['BUG'])
+        self.assertIn('BUG', [row['id'] for row in issues.list_issues(self.vault)['issues']])
+        self.assertEqual(len(issues.query_instances(self.vault, issue=['BUG'])), 1)
+        with self.assertRaisesRegex(ValueError, '固定议题'):
+            issues.merge_issues(self.vault, 'BUG', 'TA-01')
+        with self.assertRaisesRegex(ValueError, '固定议题'):
+            issues.update_issue(self.vault, 'BUG', title='缺陷')
+        self.assertEqual(issues.add_issue(self.vault, '手柄独占', parent='BUG')['id'], 'BUG.1')
 
 
 if __name__ == '__main__':

@@ -13,13 +13,27 @@ from session_metadata import metadata_lock
 
 FILE = 'issues.json'
 LINKS = 'issue-links.json'
+BUG = 'BUG'
+ROLES = ('support', 'counter')
+
+
+def _bug_issue():
+    return dict(id=BUG, title='Bug', status='confirmed',
+                description='记录者在原话里明确说是 bug 的问题。候选按关键词定位，跨场次分析时分组为子议题。')
+
+
+def _base(value):
+    return value == BUG or value.startswith('TA-') and len(value) > 3 or re.fullmatch(r'N-\d{3}', value)
 
 
 def _identifier(value):
-    # 路径 2/3：命令行及外部 agent 只能引用用户 TA 标签或三位 N 候选标签。
-    if not isinstance(value, str) or not (value.startswith('TA-') and len(value) > 3 or re.fullmatch(r'N-\d{3}', value)):
-        raise ValueError('议题 id 必须是 TA- 开头的用户编号或 N- 加三位数字。')
-    return value
+    # 路径 2/3：命令行及外部 agent 只能引用用户 TA 标签、三位 N 候选标签、固定的 BUG，
+    # 以及它们下一级的子议题（父编号加 .n）。
+    if isinstance(value, str):
+        base, dot, sub = value.partition('.')
+        if _base(base) and (not dot or re.fullmatch(r'\d{1,3}', sub)):
+            return value
+    raise ValueError('议题 id 必须是 TA- 开头的用户编号、N- 加三位数字、BUG，或它们后接 .n 的子议题。')
 
 
 def _title(value):
@@ -54,6 +68,16 @@ def read_registry(vault):
         _status(row.get('status'))
         if not isinstance(row.get('description'), str):
             raise ValueError('议题 description 必须是字符串。')
+        # 路径 2/3：子议题只有一级，编号前缀必须就是它的父议题。
+        parent = ident.partition('.')[0] if '.' in ident else None
+        if row.get('parent') != parent:
+            raise ValueError('子议题必须以 parent 指向编号前缀，顶层议题不能带 parent：' + ident)
+    for row in data['issues']:
+        if row.get('parent') and row['parent'] not in identifiers:
+            raise ValueError('子议题的父议题不存在：' + row['id'])
+    # 路径 3：BUG 是固定议题，单场次整理可直接引用，未写入过的资料库也能读到它。
+    if BUG not in identifiers:
+        data['issues'].append(_bug_issue())
     return data
 
 
@@ -121,10 +145,14 @@ def link_instances(vault, rows):
             reason = row.get('reason', '')
             if not isinstance(reason, str) or len(reason) > 1000:
                 raise ValueError('归类理由必须是不超过 1000 字的字符串。')
+            # 路径 3：反例要和支持证据分开存，洞察界面按角色分栏。
+            role = row.get('role', 'support')
+            if role not in ROLES:
+                raise ValueError('证据角色必须是 support 或 counter。')
             key = (issue, session_id, instance_id)
             added += key not in index
             index[key] = dict(issue=issue, session_id=session_id, instance_id=instance_id,
-                              result_sha256=sessions[session_id][0], reason=reason.strip())
+                              result_sha256=sessions[session_id][0], reason=reason.strip(), role=role)
         data['links'] = list(index.values())
         protocol._write(vault, LINKS, data)
         return dict(added=added, updated=len(rows) - added, total=len(data['links']))
@@ -149,22 +177,34 @@ def _find(data, ident):
     return row
 
 
-def add_issue(vault, title, ident=None, status='candidate'):
+def add_issue(vault, title, ident=None, status='candidate', parent=None):
     with metadata_lock(vault):
         data = read_registry(vault)
-        if ident is None:
-            numbers = [int(row['id'][2:]) for row in data['issues'] if row['id'].startswith('N-')]
+        if parent is not None:
+            # 路径 3：跨场次分析把议题下的具体模式写成子议题，编号接在父议题后面。
+            if _find(data, parent).get('parent'):
+                raise ValueError('子议题下不能再建子议题。')
+            if ident is None:
+                numbers = [int(row['id'].rpartition('.')[2]) for row in data['issues'] if row.get('parent') == parent]
+                ident = f'{parent}.{max(numbers, default=0) + 1}'
+            if '.' not in _identifier(ident) or ident.partition('.')[0] != parent:
+                raise ValueError('子议题编号必须是父议题编号加 .n。')
+        elif ident is None:
+            numbers = [int(row['id'][2:]) for row in data['issues'] if re.fullmatch(r'N-\d{3}', row['id'])]
             number = max(numbers, default=0) + 1
             if number > 999:
                 raise ValueError('三位 N- 候选编号已用完。')
             ident = f'N-{number:03d}'
-        _identifier(ident)
+        elif '.' in _identifier(ident):
+            raise ValueError('新建子议题请指定父议题。')
         _status(status)
-        if ident.startswith('N-') and status != 'candidate':
+        if parent is None and ident.startswith('N-') and status != 'candidate':
             raise ValueError('新建 N- 议题只能是 candidate；确认已有议题请使用 issues-update。')
         if any(row['id'] == ident for row in data['issues']):
             raise ValueError('议题 id 重复：' + ident)
         row = dict(id=ident, title=_title(title), description='', status=status)
+        if parent is not None:
+            row['parent'] = parent
         data['issues'].append(row)
         protocol._write(vault, FILE, data)
         return row
@@ -174,6 +214,8 @@ def update_issue(vault, ident, title=None, description=None, status=None):
     with metadata_lock(vault):
         data = read_registry(vault)
         row = _find(data, ident)
+        if ident == BUG and (title is not None or status is not None):
+            raise ValueError('BUG 是固定议题，只能修改说明。')
         if title is not None:
             row['title'] = _title(title)
         if description is not None:
@@ -200,6 +242,10 @@ def merge_issues(vault, from_id, into_id):
         _find(data, into_id)
         if from_id == into_id:
             raise ValueError('不能把议题合并到自身。')
+        if BUG in (from_id, into_id):
+            raise ValueError('BUG 是固定议题，不能合并。')
+        if any(row.get('parent') == from_id for row in data['issues']):
+            raise ValueError('该议题下还有子议题，请先合并或移走子议题。')
         plans = []
         for path in sorted((vault / '场次').glob('*/' + protocol.RESULT)):
             folder = path.parent
@@ -228,8 +274,8 @@ def merge_issues(vault, from_id, into_id):
                 raise ValueError('合并后手动校准历史超过容量上限；议题与场次尚未修改。')
             if len(_encoded(result)) > protocol.MAX_RESULT:
                 raise ValueError('合并后的结果超过 2 MB；议题与场次尚未修改。')
-            plans.append(dict(folder=folder, result=result, corrections=corrections,
-                              copied=len(copied), instances=len(matches)))
+            plans.append(dict(folder=folder, result=result, corrections=corrections, old=old_digest,
+                              new=new_digest, copied=len(copied), instances=len(matches)))
         backups = []
         for plan in plans:
             folder = plan['folder']
@@ -237,11 +283,14 @@ def merge_issues(vault, from_id, into_id):
             if plan['copied']:
                 protocol._write(folder, event_edits.FILE, plan['corrections'])
             protocol._write(folder, protocol.RESULT, plan['result'])
-        # 路径 2：合并议题时对应表里的引用一起改到目标议题，重复的对应只保留一条。
+        # 路径 2：合并议题时对应表里的引用一起改到目标议题，重复的对应只保留一条；
+        # 被改写的结果换了摘要，同场次其他议题的对应也要跟着换绑，否则全部失效。
+        digests = {plan['old']: plan['new'] for plan in plans}
         links = read_links(vault)
         merged = {}
         for link in links['links']:
-            link = dict(link, issue=into_id if link['issue'] == from_id else link['issue'])
+            link = dict(link, issue=into_id if link['issue'] == from_id else link['issue'],
+                        result_sha256=digests.get(link['result_sha256'], link['result_sha256']))
             merged.setdefault((link['issue'], link['session_id'], link['instance_id']), link)
         if links['links']:
             links['links'] = list(merged.values())
@@ -253,25 +302,48 @@ def merge_issues(vault, from_id, into_id):
                     corrections_migrated=sum(plan['copied'] for plan in plans))
 
 
+def screen_names(vault, game):
+    """Catalog id or alias -> catalog id; confirmed proposals resolve without rewriting results."""
+    import game_catalog
+    names = {}
+    if game and game_catalog.catalog_path(vault, game).is_file():
+        screens = game_catalog.load_catalog(vault, game)['screens']
+        for row in screens:
+            for name in row.get('aliases', []):
+                names.setdefault(name, row['id'])
+        names.update((row['id'], row['id']) for row in screens)
+    return names
+
+
 def query_instances(vault, issue=None, screen=None, element=None, kind=None, session=None):
     rows = []
     requested = set(issue or [])
+    # 路径 2/3：查父议题时一并带出它的子议题。
+    requested |= {row['id'] for row in read_registry(vault)['issues'] if row.get('parent') in requested}
     sessions = _complete_results(vault)
     linked = {}
     for link in read_links(vault)['links']:
         if _active(link, sessions):
             linked.setdefault((link['session_id'], link['instance_id']), []).append(
-                dict(issue=link['issue'], reason=link['reason']))
+                dict(issue=link['issue'], reason=link['reason'], role=link.get('role', 'support')))
+    catalogs = {}
     for session_id, (_, _, meta, result) in sessions.items():
         if session is not None and session_id != session:
             continue
         titles = {event['id']: event['title'] for event in result['events']}
+        game = meta.get('game')
+        if game not in catalogs:
+            catalogs[game] = screen_names(vault, game)
+        names = catalogs[game]
         for instance in result.get('instances', []):
             links = linked.get((session_id, instance['id']), [])
             tags = list(dict.fromkeys(instance['issue_tags'] + [link['issue'] for link in links]))
             if requested and not requested.intersection(tags):
                 continue
-            if screen is not None and instance['screen'] != screen:
+            catalog_screen = names.get(instance['screen'])
+            # 路径 2：按界面查询时，别名（含已确认的提议名）与正式编号等价。
+            if screen is not None and instance['screen'] != screen and (
+                    catalog_screen is None or catalog_screen != names.get(screen)):
                 continue
             if element is not None and element not in instance['elements']:
                 continue
@@ -283,7 +355,7 @@ def query_instances(vault, issue=None, screen=None, element=None, kind=None, ses
                        screen=instance['screen'], elements=instance['elements'], kind=instance['kind'],
                        statement=instance['statement'], issue_tags=tags, issue_links=links,
                        event_id=instance['event_id'], event_title=titles.get(instance['event_id'], ''),
-                       refers_basis=instance['refers_to']['basis'],
+                       refers_basis=instance['refers_to']['basis'], catalog_screen=catalog_screen,
                        **{key: instance[key] for key in ('route', 'screen_proposed', 'screen_context', 'compare_to')
                           if key in instance})
             rows.append((str(meta.get('created') or meta['id']), row))

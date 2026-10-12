@@ -121,6 +121,14 @@ def main(argv=None):
     catalog_hotwords.add_argument('vault')
     catalog_hotwords.add_argument('game')
     catalog_hotwords.add_argument('--output', required=True)
+    catalog_confirm = commands.add_parser('catalog-confirm', help='把用户确认的提议界面收为新界面或并入已有界面；不改写场次结果')
+    catalog_confirm.add_argument('vault')
+    catalog_confirm.add_argument('game')
+    catalog_confirm.add_argument('--proposed', required=True)
+    confirm_target = catalog_confirm.add_mutually_exclusive_group(required=True)
+    confirm_target.add_argument('--new', dest='new_id')
+    confirm_target.add_argument('--into')
+    catalog_confirm.add_argument('--name')
     for action in ('list', 'add', 'update', 'merge', 'link', 'unlink'):
         issue_command = commands.add_parser('issues-' + action, help='管理资料库级议题标签；合并保留结果及校准历史')
         issue_command.add_argument('vault')
@@ -128,6 +136,7 @@ def main(argv=None):
             issue_command.add_argument('--title', required=True)
             issue_command.add_argument('--id')
             issue_command.add_argument('--status', choices=('candidate', 'confirmed'), default='candidate')
+            issue_command.add_argument('--parent', help='建为该议题下的子议题')
         elif action == 'update':
             issue_command.add_argument('id')
             issue_command.add_argument('--title')
@@ -137,11 +146,12 @@ def main(argv=None):
             issue_command.add_argument('from_id')
             issue_command.add_argument('into_id')
         elif action == 'link':
-            issue_command.add_argument('--file', help='批量对应 JSON：[{issue,session_id,instance_id,reason}]')
+            issue_command.add_argument('--file', help='批量对应 JSON：[{issue,session_id,instance_id,reason,role}]')
             issue_command.add_argument('--issue')
             issue_command.add_argument('--session')
             issue_command.add_argument('--instance')
             issue_command.add_argument('--reason', default='')
+            issue_command.add_argument('--role', choices=('support', 'counter'), default='support')
         elif action == 'unlink':
             issue_command.add_argument('issue')
             issue_command.add_argument('--session', required=True)
@@ -153,6 +163,11 @@ def main(argv=None):
     instances_query.add_argument('--element')
     instances_query.add_argument('--kind', choices=('confusion', 'obstacle', 'positive', 'negative', 'expectation', 'suggestion', 'self_correction', 'observation'))
     instances_query.add_argument('--session')
+    insight_validate = commands.add_parser('insight-validate', help='核对资料库洞察报告里的实例和议题引用')
+    insight_validate.add_argument('vault')
+    insight_validate.add_argument('report', help='洞察/ 目录下的报告文件名')
+    bug_hits = commands.add_parser('bug-hits', help='列出记录者原话中提到 bug 的位置及是否已整理')
+    bug_hits.add_argument('vault')
     visual = commands.add_parser('visual-nodes', help='本地逐帧检测画面变化；不调用模型，不写入场次')
     visual.add_argument('session')
     visual.add_argument('--output', required=True, help='资料库之外的新输出目录')
@@ -287,12 +302,15 @@ def main(argv=None):
         elif name == 'catalog-hotwords':
             from game_catalog import hotwords
             value = hotwords(args.vault, args.game, args.output)
+        elif name == 'catalog-confirm':
+            from game_catalog import confirm_proposed
+            value = confirm_proposed(args.vault, args.game, args.proposed, args.new_id, args.name, args.into)
         elif name.startswith('issues-'):
             import issue_registry as issues
             if name == 'issues-list':
                 value = issues.list_issues(args.vault)
             elif name == 'issues-add':
-                value = issues.add_issue(args.vault, args.title, args.id, args.status)
+                value = issues.add_issue(args.vault, args.title, args.id, args.status, args.parent)
             elif name == 'issues-update':
                 value = issues.update_issue(args.vault, args.id, args.title, args.description, args.status)
             elif name == 'issues-merge':
@@ -301,13 +319,20 @@ def main(argv=None):
                 if args.file:
                     rows = json.loads(Path(args.file).read_text(encoding='utf-8-sig'))
                 else:
-                    rows = [dict(issue=args.issue, session_id=args.session, instance_id=args.instance, reason=args.reason)]
+                    rows = [dict(issue=args.issue, session_id=args.session, instance_id=args.instance,
+                                 reason=args.reason, role=args.role)]
                 value = issues.link_instances(args.vault, rows)
             else:
                 value = issues.unlink_instance(args.vault, args.issue, args.session, args.instance)
         elif name == 'instances-query':
             from issue_registry import query_instances
             value = query_instances(args.vault, args.issue, args.screen, args.element, args.kind, args.session)
+        elif name == 'insight-validate':
+            from insight_report import validate_report
+            value = validate_report(args.vault, args.report)
+        elif name == 'bug-hits':
+            from insight_report import bug_hits
+            value = bug_hits(args.vault)
         elif name == 'visual-nodes':
             from visual_nodes import extract
             def progress(value):
