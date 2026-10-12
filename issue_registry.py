@@ -282,7 +282,12 @@ def query_instances(vault, issue=None, screen=None, element=None, kind=None, ses
                        refers_start=instance['refers_to']['start'], refers_end=instance['refers_to']['end'],
                        screen=instance['screen'], elements=instance['elements'], kind=instance['kind'],
                        statement=instance['statement'], issue_tags=tags, issue_links=links,
-                       event_id=instance['event_id'], event_title=titles.get(instance['event_id'], ''))
+                       event_id=instance['event_id'], event_title=titles.get(instance['event_id'], ''),
+                       refers_basis=instance['refers_to']['basis'],
+                       **{key: instance[key] for key in ('route', 'screen_proposed', 'screen_context', 'compare_to')
+                          if key in instance})
             rows.append((str(meta.get('created') or meta['id']), row))
-    rows.sort(key=lambda item: (item[0], item[1]['refers_start']))
+    # 指向本场之前的实例没有本场所指时间，按说出口的时间排序。
+    rows.sort(key=lambda item: (item[0], item[1]['refers_start'] if item[1]['refers_start'] is not None
+                                else item[1]['said_start']))
     return [row for _, row in rows]

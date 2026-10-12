@@ -92,7 +92,7 @@ async function main(){
    const judgments=structuredClone(excerptReady);
    judgments.result.version=2;
    judgments.notice='整理后同步偏移／记录者已改动，事件中的操作时间可能有偏差';
-   judgments.result.instances=[{id:'i01',event_id:'e1',said:[{kind:'quote_words',ref:'t000001',word_range:[3,6],start:8.2,end:8.8,text:'这是后半句。'}],refers_to:{start:3,end:4,basis:'retrospective'},screen:null,elements:[],kind:'confusion',statement:'回顾刚才的按钮状态。',issue_tags:['TA-03'],evidence:[],confidence:'high'}];
+   judgments.result.instances=[{id:'i01',event_id:'e1',said:[{kind:'quote_words',ref:'t000001',word_range:[3,6],start:8.2,end:8.8,text:'这是后半句。'}],refers_to:{start:3,end:4,basis:'retrospective'},screen:null,elements:[],kind:'confusion',statement:'回顾刚才的按钮状态。',issue_tags:['TA-03'],evidence:[],confidence:'high'},{id:'i02',event_id:'e1',said:[{kind:'quote',ref:'t000001',start:5,end:6,text:'又是前两天那个问题。'}],refers_to:{start:null,end:null,basis:'earlier_session',note:'前两天那场'},compare_to:{start:2,end:2.5},screen:null,elements:[],kind:'negative',statement:'认为同样的问题又出现了。',issue_tags:[],evidence:[],confidence:'medium'}];
    await page.goto(origin);await page.waitForFunction(()=>document.querySelector('video').readyState>=2);
    await page.evaluate(value=>window.__snapshot.preprocessing=value,judgments);
    await page.waitForFunction(()=>document.querySelector('[data-instance-id="i01"]'));
@@ -104,6 +104,11 @@ async function main(){
    await times.nth(0).click();assert.ok(Math.abs(await page.locator('video').evaluate(v=>v.currentTime)-8.2)<.00001);
    await times.nth(1).click();assert.equal(await page.locator('video').evaluate(v=>v.currentTime),3);
    assert.equal(await page.locator('video').evaluate(v=>v.paused),true);
+   // 指向本场之前的判断没有本场时间，只显示说明；对照时刻可以定位。
+   const earlier=page.locator('[data-instance-id="i02"]');
+   assert.match(await earlier.innerText(),/负面评价/);assert.match(await earlier.innerText(),/指 本场之前/);
+   const earlierTimes=earlier.locator('[data-event-time]');assert.equal(await earlierTimes.count(),2);
+   await earlierTimes.nth(1).click();assert.equal(await page.locator('video').evaluate(v=>v.currentTime),2);
    await page.screenshot({path:path.join(out,'judgment-instances-1440.png')});
  });
  assert.deepEqual(report.errors,[]);report.pass=true;

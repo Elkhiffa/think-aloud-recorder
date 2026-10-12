@@ -125,6 +125,66 @@ class JudgmentInstanceTests(unittest.TestCase):
             self.assertIn('寻找入口', archive.read('场次/fixture/独立回看.html').decode('utf-8'))
         self.assertEqual((self.folder / agent.RESULT).read_bytes(), before)
 
+    def test_new_screen_is_proposed_with_route_and_free_text_elements(self):
+        """触发路径：agent 整理新场次 → 记录者从别处跳进一个目录里还没有的界面 → 未标提议的名称会让整份结果被拒，标为提议后留待用户确认，跳转路线另记。"""
+        candidate = self.candidate()
+        row = candidate['instances'][0]
+        row.update(screen='武林录/挑战/镇守·挑战', elements=['领取奖励消耗'],
+                   route=['培养/装备', '武林录/挑战/镇守·挑战'])
+        with self.assertRaisesRegex(ValueError, '不在目录中'):
+            agent.validate_result(self.folder, candidate)
+        row['screen_proposed'] = True
+        instance = agent.validate_result(self.folder, candidate)['instances'][0]
+        self.assertTrue(instance['screen_proposed'])
+        self.assertEqual(instance['route'], ['培养/装备', '武林录/挑战/镇守·挑战'])
+        self.assertEqual(instance['elements'], ['领取奖励消耗'])
+        row.update(screen=None, screen_proposed=False, screen_context='multi_screen')
+        self.assertEqual(agent.validate_result(self.folder, candidate)['instances'][0]['screen_context'], 'multi_screen')
+        row.update(screen='bag.items', screen_context='hud')
+        with self.assertRaisesRegex(ValueError, 'screen_context'):
+            agent.validate_result(self.folder, candidate)
+
+    def test_earlier_session_and_comparison_referents(self):
+        """触发路径：记录者说“前两天那个同款 bug”或“这边要点最大、那边不用” → 所指在本场之前或有两个时刻，旧格式只能塞进备注，跨场次分析找不到复现信号。"""
+        candidate = self.candidate()
+        row = candidate['instances'][0]
+        row.update(kind='negative', refers_to=dict(basis='earlier_session', note='前两天那场的同款自动滚动 bug'),
+                   compare_to=dict(start=2, end=3, note='另一处数量弹窗'))
+        instance = agent.validate_result(self.folder, candidate)['instances'][0]
+        self.assertEqual(instance['refers_to'], dict(start=None, end=None, basis='earlier_session',
+                                                    note='前两天那场的同款自动滚动 bug'))
+        self.assertEqual(instance['compare_to'], dict(start=2, end=3, note='另一处数量弹窗'))
+        self.assertEqual(instance['kind'], 'negative')
+        row['refers_to'] = dict(basis='earlier_session')
+        with self.assertRaisesRegex(ValueError, '所指说明'):
+            agent.validate_result(self.folder, candidate)
+        job = agent.claim(self.folder, 'synthetic-v2-worker')
+        row['refers_to'] = dict(basis='earlier_session', note='前两天那场')
+        agent.submit(self.folder, job['token'], candidate)
+        self.assertEqual(agent.preprocessing_status(self.folder)['state'], 'complete')
+
+    def test_instance_cites_input_record(self):
+        """触发路径：手柄场里记录者说“按了没反应” → 关键证据是操作记录 → 实例只能引用画面时只好写进备注。"""
+        recorder.write(self.folder / 'input-events.json', dict(
+            version=1, state='complete', duration=12, timebase='video_seconds', recording_scope='all',
+            window_states=[dict(start=0, end=12, state='foreground')],
+            intervals=[dict(id='raw1', start=2, end=2.2, device='gamepad', code='A', label='A'),
+                       dict(id='raw2', start=2.5, end=2.6, device='gamepad', code='A', label='A'),
+                       dict(id='raw3', start=5, end=5.1, device='gamepad', code='A', label='A')], gaps=[]))
+        manifest = agent.publish_ready(self.folder)
+        candidate = self.candidate()
+        candidate['revision'] = manifest['revision']
+        candidate['instances'][0]['evidence'].append(dict(kind='input', ref='i0000001'))
+        with self.assertRaisesRegex(ValueError, '未检查操作记录'):
+            agent.validate_result(self.folder, candidate)
+        candidate['coverage']['inputs'] = 'partial'
+        evidence = agent.validate_result(self.folder, candidate)['instances'][0]['evidence']
+        self.assertEqual((evidence[1]['kind'], evidence[1]['ref'], evidence[1]['text']), ('input', 'i0000001', 'A'))
+        # 原始操作逐条读不了；摘要把短间隔的连按合成一段，首尾编号仍可直接引用。
+        segments = agent.input_summary(self.folder, 0, 12)['segments']
+        self.assertEqual([(row['count'], row['first_ref'], row['last_ref']) for row in segments],
+                         [(2, 'i0000001', 'i0000002'), (1, 'i0000003', 'i0000003')])
+
 
 if __name__ == '__main__':
     unittest.main()

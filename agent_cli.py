@@ -221,6 +221,10 @@ def main(argv=None):
     naming.add_argument('session')
     naming.add_argument('--file', help='工作目录中的活动命名候选 JSON；省略则读取当前命名上下文')
     naming.add_argument('--apply', action='store_true', help='原子保存具体内容标签与名称，保留手动前缀并更新自动摘要；默认仅预览')
+    inputs_summary = commands.add_parser('inputs-summary', help='把同一按键或摇杆的连续操作合并成可读区段；首尾编号可作证据引用')
+    inputs_summary.add_argument('session')
+    inputs_summary.add_argument('--start', type=float, required=True)
+    inputs_summary.add_argument('--end', type=float, required=True)
     for name in ('publish', 'status', 'evidence', 'quote-words', 'claim', 'reprocess', 'renew', 'fail', 'validate', 'submit', 'frame'):
         command = commands.add_parser(name)
         command.add_argument('session')
@@ -367,6 +371,8 @@ def main(argv=None):
             value = protocol.fail(args.session, args.token, args.reason)
         elif name == 'frame':
             value = frame(args.session, args.at, args.output)
+        elif name == 'inputs-summary':
+            value = protocol.input_summary(args.session, args.start, args.end)
         elif name == 'name-activities':
             candidate = None
             if args.file:

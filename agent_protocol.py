@@ -342,6 +342,40 @@ def _normalized_inputs(folder, meta, duration, alignment=None):
     return inputs
 
 
+def input_summary(folder, start, end, gap=0.5):
+    """Merge runs of the same control into readable segments; refs stay citable as input evidence."""
+    meta, material, revision, _ = _ready(folder)
+    _span(dict(start=start, end=end), material['duration'])
+    # 路径 2：手柄场的摇杆采样一秒几十条，原始区间读不了；按同一按键或摇杆、短间隔的连续记录合并。
+    if end - start > 600:
+        raise ValueError('每次最多汇总 10 分钟的操作记录。')
+    inputs = _normalized_inputs(folder, meta, material['duration'])
+    rows = sorted((row for row in inputs.get('intervals', []) if row['end'] >= start and row['start'] <= end),
+                  key=lambda row: row['start'])
+    segments = []
+    for row in rows:
+        last = segments[-1] if segments else None
+        key = (row.get('device'), row.get('code'), row.get('kind'))
+        if last is not None and last['key'] == key and row['start'] - last['end'] <= gap:
+            last['end'] = max(last['end'], row['end'])
+            last['count'] += 1
+            last['last_ref'] = row['id']
+        else:
+            last = dict(key=key, start=row['start'], end=row['end'], count=1, first_ref=row['id'],
+                        last_ref=row['id'], directions={})
+            segments.append(last)
+        if row.get('direction'):
+            last['directions'][row['direction']] = last['directions'].get(row['direction'], 0) + 1
+    for segment in segments:
+        device, code, kind = segment.pop('key')
+        directions = segment.pop('directions')
+        segment.update(device=device, label=code, kind=kind)
+        if directions:
+            segment['directions'] = ''.join(d for d, _ in sorted(directions.items(), key=lambda item: -item[1])[:3])
+    return dict(session_id=meta['id'], revision=revision, range=dict(start=start, end=end), gap_seconds=gap,
+                state=inputs.get('state'), alignment=inputs.get('alignment'), raw_intervals=len(rows), segments=segments)
+
+
 def evidence(folder, start=None, end=None):
     """Summary by default; bounded detailed inputs only for an explicit range."""
     meta, material, revision, manifest = _ready(folder)
@@ -441,6 +475,20 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                        text=''.join(word['text'] for word in selection))
         return ref
     input_rows = None
+
+    def input_reference(item):
+        nonlocal input_rows
+        if coverage['inputs'] == 'none':
+            raise ValueError('未检查操作记录，不能引用操作证据。')
+        if input_rows is None:
+            alignment = analysis_context['alignment'] if analysis_context is not None else None
+            input_rows = {r['id']: r for r in _normalized_inputs(folder, meta, duration, alignment)['intervals']}
+        source = input_rows.get(item.get('ref')) if isinstance(item.get('ref'), str) else None
+        if source is None:
+            raise ValueError('操作引用不存在或已被撤销。')
+        return dict(kind='input', ref=source['id'], start=source['start'], end=source['end'],
+                    text=str(source.get('label') or source.get('code') or '操作'),
+                    device=source.get('device', ''), source_start=source['source_start'], source_end=source['source_end'])
     events, identifiers, expanded_bytes = [], set(), 0
     for row in _rows(value.get('events'), 300, '体验事件'):
         span = _span(row, duration)
@@ -465,17 +513,7 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 if not any(r['start'] <= ref['start'] and r['end'] >= ref['end'] for r in ranges):
                     raise ValueError('画面证据不在已检查范围内。')
             elif kind == 'input':
-                if coverage['inputs'] == 'none':
-                    raise ValueError('未检查操作记录，不能引用操作证据。')
-                if input_rows is None:
-                    alignment = analysis_context['alignment'] if analysis_context is not None else None
-                    input_rows = {r['id']: r for r in _normalized_inputs(folder, meta, duration, alignment)['intervals']}
-                source = input_rows.get(item.get('ref')) if isinstance(item.get('ref'), str) else None
-                if source is None:
-                    raise ValueError('操作引用不存在或已被撤销。')
-                ref = dict(kind=kind, ref=source['id'], start=source['start'], end=source['end'],
-                           text=str(source.get('label') or source.get('code') or '操作'),
-                           device=source.get('device', ''), source_start=source['source_start'], source_end=source['source_end'])
+                ref = input_reference(item)
             else:
                 raise ValueError('未知证据类型。')
             if ref['start'] < span['start'] - .001 or ref['end'] > span['end'] + .001:
@@ -520,7 +558,6 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
         issues = {row['id'] for row in read_registry(Path(folder).resolve().parent.parent)['issues']}
         catalog = session_catalog(folder)
         screens = {row['id'] for row in catalog['screens']} if catalog is not None else set()
-        elements = {item['id'] for row in catalog['screens'] for item in row['elements']} if catalog is not None else set()
         instances, instance_ids = [], set()
         for row in _rows(value.get('instances'), 300, '判断实例'):
             if not isinstance(row, dict):
@@ -535,35 +572,65 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 raise ValueError('判断实例至少需要一条说出口的原话。')
             said = [quote_reference(item) for item in row['said']]
             target = row.get('refers_to')
-            refers_to = _span(target, duration)
-            if target.get('basis') not in ('same_time', 'retrospective', 'unknown'):
+            if not isinstance(target, dict) or target.get('basis') not in (
+                    'same_time', 'retrospective', 'unknown', 'earlier_session'):
                 raise ValueError('判断实例的所指依据无效。')
-            refers_to['basis'] = target['basis']
-            if 'note' in target:
-                refers_to['note'] = _text(target['note'], 200, '所指说明', empty=True)
+            if target['basis'] == 'earlier_session':
+                # 路径 3：记录者回指本场之前的游玩，本场没有对应时刻，必须写明所指。
+                if target.get('start') is not None or target.get('end') is not None:
+                    raise ValueError('指向本场之前的判断不填本场时间。')
+                refers_to = dict(start=None, end=None, basis='earlier_session',
+                                 note=_text(target.get('note'), 200, '所指说明'))
+            else:
+                refers_to = _span(target, duration)
+                refers_to['basis'] = target['basis']
+                if 'note' in target:
+                    refers_to['note'] = _text(target['note'], 200, '所指说明', empty=True)
             if target['basis'] == 'retrospective' and refers_to['end'] > min(item['start'] for item in said):
                 raise ValueError('回顾判断的所指时间不能晚于说出口的时间。')
-            screen = row.get('screen')
-            if screen is not None and not isinstance(screen, str):
-                raise ValueError('判断实例的 screen 必须是目录编号或 null。')
-            if catalog is not None and screen and screen not in screens:
-                raise ValueError('判断实例引用的界面不存在。')
+            compare_to = row.get('compare_to')
+            if compare_to is not None:
+                # 路径 3：比较两个时刻的判断需要第二个所指时刻。
+                compared = _span(compare_to, duration)
+                if 'note' in compare_to:
+                    compared['note'] = _text(compare_to['note'], 200, '对照说明', empty=True)
+                compare_to = compared
+            screen, proposed = row.get('screen'), row.get('screen_proposed', False)
+            if screen is not None and (not isinstance(screen, str) or not screen.strip() or len(screen) > 200):
+                raise ValueError('判断实例的 screen 必须是界面编号或 null。')
+            if type(proposed) is not bool or (proposed and screen is None):
+                raise ValueError('screen_proposed 只能在填写了界面时为 true。')
+            # 路径 3：新场次常有目录里还没有的界面；标为提议的名称留待用户确认，未标注的必须在目录中。
+            if catalog is not None and screen and not proposed and screen not in screens:
+                raise ValueError('判断实例引用的界面不在目录中；新界面请标 screen_proposed。')
+            route = row.get('route', [])
+            if (not isinstance(route, list) or len(route) > 20
+                    or any(not isinstance(item, str) or not item.strip() or len(item) > 200 for item in route)):
+                raise ValueError('route 必须是不超过 20 个界面名称的列表。')
+            screen_context = row.get('screen_context')
+            if screen_context is not None and (screen is not None or screen_context not in (
+                    'hud', 'multi_screen', 'outside_game', 'unknown')):
+                raise ValueError('screen_context 只在 screen 为 null 时使用，取值为 hud、multi_screen、outside_game 或 unknown。')
             selected_elements, tags = row.get('elements'), row.get('issue_tags')
-            if not isinstance(selected_elements, list) or any(not isinstance(item, str) for item in selected_elements):
-                raise ValueError('判断实例的 elements 必须是目录编号列表。')
-            if catalog is not None and any(item not in elements for item in selected_elements):
-                raise ValueError('判断实例引用的元素不存在。')
+            # 元素记录画面上的文字，不要求在目录中登记。
+            if (not isinstance(selected_elements, list) or len(selected_elements) > 20
+                    or any(not isinstance(item, str) or not item.strip() or len(item) > 100 for item in selected_elements)):
+                raise ValueError('判断实例的 elements 必须是画面文字列表。')
             if not isinstance(tags, list) or any(not isinstance(tag, str) or tag not in issues for tag in tags):
                 raise ValueError('判断实例引用的议题标签不存在。')
-            if row.get('kind') not in ('confusion', 'obstacle', 'positive', 'expectation', 'suggestion',
+            if row.get('kind') not in ('confusion', 'obstacle', 'positive', 'negative', 'expectation', 'suggestion',
                                        'self_correction', 'observation'):
                 raise ValueError('判断实例类型无效。')
             if row.get('confidence') not in ('high', 'medium', 'low'):
                 raise ValueError('判断实例的 confidence 必须是 high、medium 或 low。')
             refs = []
             for item in _rows(row.get('evidence'), 12, '判断实例证据'):
+                if isinstance(item, dict) and item.get('kind') == 'input':
+                    # 路径 3：手柄场“点不到、连按没反应”这类判断，关键证据在操作记录里。
+                    refs.append(input_reference(item))
+                    continue
                 if not isinstance(item, dict) or item.get('kind') != 'video':
-                    raise ValueError('判断实例的补充证据必须是 video。')
+                    raise ValueError('判断实例的补充证据必须是 video 或 input。')
                 ref = dict(kind='video', **_span(item, duration),
                            observation=_text(item.get('observation'), 300, '判断实例画面事实'))
                 if not any(checked['start'] <= ref['start'] and checked['end'] >= ref['end'] for checked in ranges):
@@ -572,7 +639,11 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
             expanded_bytes += len(json.dumps(said + refs, ensure_ascii=False).encode('utf-8'))
             if expanded_bytes > MAX_RESULT:
                 raise ValueError('展开证据超过 2 MB，请减少重复引用。')
-            instances.append(dict(id=ident, event_id=row['event_id'], said=said, refers_to=refers_to,
+            extra = {key: val for key, val in (('compare_to', compare_to), ('route', list(route)),
+                                               ('screen_context', screen_context)) if val}
+            if proposed:
+                extra['screen_proposed'] = True
+            instances.append(dict(id=ident, event_id=row['event_id'], said=said, refers_to=refers_to, **extra,
                                   screen=screen, elements=list(selected_elements), kind=row['kind'],
                                   statement=_text(row.get('statement'), 300, '判断陈述'), issue_tags=list(tags),
                                   evidence=refs, confidence=row['confidence']))
