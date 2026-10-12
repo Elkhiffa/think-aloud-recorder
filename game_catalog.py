@@ -152,6 +152,9 @@ def match_frame(catalog, frame):
     best, best_score = None, -1
     for screen in catalog['screens']:
         rule = screen['match']
+        # 路径 2：用户确认过名称但还没写匹配词的界面，不能把每一帧都认成它。
+        if not rule['all_of'] and not rule['any_of']:
+            continue
         if not all(word in text for word in rule['all_of']):
             continue
         any_hits = sum(word in text for word in rule['any_of'])

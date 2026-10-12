@@ -37,6 +37,11 @@ class GameCatalogTests(unittest.TestCase):
         self.assertEqual(catalog.match_frame(data, frame(0, '仓库 道具'))['id'], 'bag.items')
         tied['match']['all_of'].append('稀有')
         self.assertEqual(catalog.match_frame(data, frame(0, '仓库 道具 稀有'))['id'], 'bag.same')
+        # 触发路径：用户只确认了界面名称、还没写匹配词 → 这类界面排在目录最前也不能认领任意一帧。
+        data['screens'].insert(0, dict(id='named.only', name='只有名称', source='manual', elements=[],
+                                       match=dict(all_of=[], any_of=[], none_of=[])))
+        self.assertIsNone(catalog.match_frame(data, frame(0, '道具')))
+        self.assertEqual(catalog.match_frame(data, frame(0, '仓库 道具'))['id'], 'bag.items')
 
     def test_adjacent_frames_merge(self):
         """触发路径：agent 读界面时间轴时需要的是区间，不是逐帧列表。"""
