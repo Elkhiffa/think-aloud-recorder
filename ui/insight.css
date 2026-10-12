@@ -25,14 +25,17 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .report{border-right:1px solid var(--line)}
 .report h1,.report h2,.report h3,.report h4{color:var(--heading);line-height:1.45;margin:24px 0 8px;font-weight:600}
 .report h1{font-size:22px;margin-top:0}.report h2{font-size:19px}.report h3{font-size:17px}.report h4{font-size:15px}
+.report{line-height:1.85}
 .report p,.report li{max-width:72ch}
+.report li{margin:4px 0}
 .report table{border-collapse:collapse;margin:8px 0;font-size:14px}
 .report th,.report td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}
 .report blockquote{margin:8px 0;padding:0 12px;border-left:3px solid var(--line);color:var(--muted)}
 .report code{background:var(--soft);padding:0 4px;border-radius:3px}
-.cite{color:var(--accent);text-decoration:none;border-bottom:1px dotted var(--accent);cursor:pointer;white-space:nowrap}
-.cite:hover{background:var(--tint)}
-.cite.unresolved{color:var(--muted);border-bottom-style:dashed;cursor:help}
+/* Citations are reference marks: smaller and quieter than the analysis they support. */
+.cite{font-size:.75em;line-height:1;color:var(--muted);text-decoration:none;cursor:pointer;white-space:nowrap;padding:1px 4px;margin:0 1px;border-radius:3px;background:var(--soft);vertical-align:1px}
+.cite:hover,.cite:focus-visible{color:var(--accent);background:var(--tint)}
+.cite.unresolved{text-decoration:line-through;cursor:help}
 .empty,.hint{color:var(--muted)}
 .evidence-head{position:sticky;top:-16px;z-index:2;margin:-16px -24px 16px;background:var(--surface);border-bottom:1px solid var(--line)}
 .toc-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 24px 8px}
