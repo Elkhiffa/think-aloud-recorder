@@ -6,11 +6,11 @@ const root=path.join(__dirname,'..'),out=path.resolve(process.env.REVIEW_TEST_OU
 fs.mkdirSync(out,{recursive:true});
 const S1='20261008-120000-aaaaaa',S2='20261009-120000-bbbbbb';
 const row=(session,id,extra={})=>Object.assign({session_id:session,instance_id:id,said_start:12,refers_start:2,refers_end:4,refers_basis:'same_time',screen:'bag',catalog_screen:'bag',elements:[],kind:'confusion',statement:'合成陈述 '+id,issue_tags:[],issue_links:[],event_id:'e1',event_title:'合成活动'},extra);
-const instances=[row(S1,'i1',{statement:'清完提示后忘了目标 <img src=x>'}),row(S2,'i1'),row(S2,'i2',{refers_basis:'earlier_session',refers_start:null,refers_end:null}),row(S1,'i3'),row(S2,'i9'),row(S2,'i5',{statement:'教学弹窗左半边多了一层灰色'})];
+const instances=[row(S1,'i1',{statement:'清完提示后忘了目标 <img src=x>'}),row(S1,'i6',{refers_start:2,refers_end:300,said_start:600}),row(S2,'i1'),row(S2,'i2',{refers_basis:'earlier_session',refers_start:null,refers_end:null}),row(S1,'i3'),row(S2,'i9'),row(S2,'i5',{statement:'教学弹窗左半边多了一层灰色'})];
 const link=(session,id,reason='合成理由')=>({session_id:session,instance_id:id,reason});
 const overview={vault:'合成资料库',reports:[{name:'r.md',modified:1,bytes:10}],games:['合成游戏'],session_labels:{[S1]:'1008',[S2]:'1009'},instances,
   issues:[{id:'TA-01',title:'目标明确仍有摩擦',description:'合成议题',status:'confirmed',support:[link(S2,'i2')],counter:[],children:[
-     {id:'TA-01.1',parent:'TA-01',title:'清完提示后忘了目标',description:'成立理由：合成',status:'candidate',support:[link(S1,'i1')],counter:[link(S2,'i1','专注时少提示反而好')],children:[]}]},
+     {id:'TA-01.1',parent:'TA-01',title:'清完提示后忘了目标',description:'成立理由：合成',status:'candidate',support:[link(S1,'i1'),link(S1,'i6')],counter:[link(S2,'i1','专注时少提示反而好')],children:[]}]},
     {id:'BUG',title:'Bug',description:'',status:'confirmed',support:[link(S1,'i3')],counter:[],children:[
      {id:'BUG.1',parent:'BUG',title:'教学弹窗多出遮挡',description:'疑似缺陷',status:'candidate',support:[link(S2,'i5')],counter:[],children:[]}]}],
   bug_unorganized:[{session_id:S2,ref:'t000005',start:30,end:32,text:'现在有几个bug',instances:[],bug_instances:[],state:'raw'}],
@@ -41,7 +41,7 @@ async function main(){
   const check=async(name,run)=>{await run();result.checks.push({name,pass:true});};
   await page.goto(origin);await page.waitForSelector('#issue-TA-01');
   await check('outline lists issues and sub-issues with counts; sub-issues start collapsed',async()=>{
-    assert.match(await page.locator('#toc').textContent(),/TA-01\.1 清完提示后忘了目标支持 1 · 反例 1/);
+    assert.match(await page.locator('#toc').textContent(),/TA-01\.1 清完提示后忘了目标支持 2 · 反例 1/);
     assert.equal(await page.locator('#issue-TA-01-body').isVisible(),true);
     assert.equal(await page.locator('#issue-TA-01\\.1-body').isHidden(),true);
     assert.match(await page.locator('#toc').textContent(),/BUG Bug/);
@@ -83,8 +83,9 @@ async function main(){
     assert.equal(await card.locator('.jump').textContent(),'00:02–00:12');
     await card.locator('.jump').click();
     await page.locator('#issue-BUG-raw-body .jump').click();
+    await page.locator('[id="issue-TA-01.1"] .card[data-key="'+S1+'/i6"] .jump').click();
     const calls=await page.evaluate(()=>window.__calls);
-    assert.deepEqual(calls.slice(-2),[['open_review',S1,2],['open_review',S2,30]]);
+    assert.deepEqual(calls.slice(-3),[['open_review',S1,2],['open_review',S2,30],['open_review',S1,590]]);
   });
   await page.screenshot({path:path.join(out,'insight-1440.png')});
   await check('proposed screen can be merged into an existing screen',async()=>{
@@ -106,7 +107,7 @@ async function main(){
     await page.waitForFunction(()=>document.querySelector('#issueCount').textContent==='(1)');
     assert.deepEqual((await page.evaluate(()=>window.__calls)).at(-1),['dismiss_issue','BUG.1']);
     const article=page.locator('#issueList .proposal[data-issue-id="TA-01.1"]');
-    assert.equal(await article.locator('.shot').count(),2);
+    assert.equal(await article.locator('.shot').count(),3);
     assert.match(await article.textContent(),/属于 TA-01/);
     await article.locator('[data-issue-action="title"]').click();
     await page.locator('#issueTitle').fill('清完提示后忘了原本目标');await page.locator('#issueList button[type="submit"]').click();

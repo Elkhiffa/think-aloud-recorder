@@ -36,14 +36,16 @@
   }
   function jump(session,time,text){return Number.isFinite(time)?`<button type="button" class="jump" data-open-session="${escape(session)}" data-open-time="${time}" title="在新窗口打开回看并停在这一刻">${escape(text)}</button>`:'';}
 
-  // One span covers what was evaluated and when it was said; the review opens at its start.
+  // One span covers what was evaluated and when it was said. The review opens at its start,
+  // or 10 seconds before the remark when the span is longer than two minutes.
   function span(row){
-    if(row.refers_basis==='earlier_session'||!Number.isFinite(row.refers_start))return [row.said_start,row.said_start];
-    return [Math.min(row.refers_start,row.said_start),Math.max(row.refers_end,row.said_start)];
+    if(row.refers_basis==='earlier_session'||!Number.isFinite(row.refers_start))return [row.said_start,row.said_start,row.said_start];
+    const from=Math.min(row.refers_start,row.said_start),to=Math.max(row.refers_end,row.said_start);
+    return [from,to,to-from>120?Math.max(from,row.said_start-10):from];
   }
   function card(row,link,issue){
-    const at=row.frame_at??row.refers_start??row.said_start,[from,to]=span(row);
-    const time=jump(row.session_id,from,from===to?formatTime(from):`${formatTime(from)}–${formatTime(to)}`);
+    const at=row.frame_at??row.refers_start??row.said_start,[from,to,open]=span(row);
+    const time=jump(row.session_id,open,from===to?formatTime(from):`${formatTime(from)}–${formatTime(to)}`);
     const earlier=row.refers_basis==='earlier_session'?'<span>指向本场之前</span>':'';
     const compare=row.compare_to?jump(row.session_id,row.compare_to.start,`对照 ${formatTime(row.compare_to.start)}`):'';
     let screen=row.catalog_screen||row.screen;
