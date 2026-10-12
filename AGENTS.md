@@ -1,7 +1,7 @@
 # Think Aloud Recorder — Agent 指令
 
 开始工作前依次阅读：
-1. `docs/plans/HANDOFF-2026-10-12.md`：当前进度、已确定的决定、缺口清单和下一批任务。
+1. `docs/plans/HANDOFF-2026-10-13.md`：当前进度、已确定的决定、缺口清单和下一批任务。
 2. `docs/plans/2026-10-09-transcript-first-mvp.md`：开发计划。其中第 1 节的全局规则适用于之后的所有批次。
 
 ## 产品定位（稳定前提）
