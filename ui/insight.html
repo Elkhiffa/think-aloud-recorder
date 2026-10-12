@@ -7,6 +7,7 @@
   <button type="button" id="refresh" title="重新读取报告、议题和目录">刷新</button>
   <div class="tabs" role="tablist" aria-label="右栏内容">
     <button type="button" role="tab" id="tabEvidence" aria-selected="true" aria-controls="evidencePane">证据</button>
+    <button type="button" role="tab" id="tabIssues" aria-selected="false" aria-controls="issuesPane">议题确认 <span id="issueCount" class="count"></span></button>
     <button type="button" role="tab" id="tabProposed" aria-selected="false" aria-controls="proposedPane">界面确认 <span id="proposedCount" class="count"></span></button>
   </div>
   <p id="status" class="status" role="status" aria-live="polite"></p>
@@ -25,6 +26,10 @@
     <nav id="toc" class="toc" aria-label="议题目录"></nav>
     </div>
     <div id="evidenceList"></div>
+  </section>
+  <section id="issuesPane" class="pane proposed" role="tabpanel" aria-labelledby="tabIssues" tabindex="0" hidden>
+    <div class="actions"><p class="hint">以下是 agent 新提的候选议题和子议题。看过证据后确认、改标题，或并入别的议题；并入会把证据一起移过去。</p><button type="button" id="confirmAll" hidden>全部确认</button></div>
+    <div id="issueList"></div>
   </section>
   <section id="proposedPane" class="pane proposed" role="tabpanel" aria-labelledby="tabProposed" tabindex="0" hidden>
     <p class="hint">以下是 agent 提议、目录里还没有的界面名，按名称相近程度分组。确认只修改界面目录，不改写场次整理结果；确认后按正式界面查询能查到这些写法。</p>

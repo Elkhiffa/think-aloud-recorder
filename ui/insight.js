@@ -4,7 +4,7 @@
   const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const KIND={confusion:'困惑',obstacle:'阻碍',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
   const CONTEXT={hud:'HUD / 战斗 / 大世界',multi_screen:'跨多个界面',outside_game:'游戏外窗口',unknown:'认不出界面'};
-  const state={overview:null,instances:new Map(),labels:{},reports:[],report:null,issues:new Map(),hidden:new Set()};
+  const state={overview:null,instances:new Map(),labels:{},reports:[],report:null,issues:new Map(),hidden:new Set(),hiddenIssues:new Set()};
   let api=null;
 
   async function call(method,...args){
@@ -42,7 +42,7 @@
     return [Math.min(row.refers_start,row.said_start),Math.max(row.refers_end,row.said_start)];
   }
   function card(row,link,issue){
-    const at=row.refers_start??row.said_start,[from,to]=span(row);
+    const at=row.frame_at??row.refers_start??row.said_start,[from,to]=span(row);
     const time=jump(row.session_id,from,from===to?formatTime(from):`${formatTime(from)}–${formatTime(to)}`);
     const earlier=row.refers_basis==='earlier_session'?'<span>指向本场之前</span>':'';
     const compare=row.compare_to?jump(row.session_id,row.compare_to.start,`对照 ${formatTime(row.compare_to.start)}`):'';
@@ -234,7 +234,7 @@
     let html='';
     for(const [family,items] of families(groups)){
       html+=`<section class="family">${items.length>1?`<h2>名称相近：${escape(family)}</h2>`:''}`+items.map(group=>{
-        const shots=group.instances.map(row=>{const at=row.refers_start??row.said_start,name=(state.labels[row.session_id]||row.session_id)+' '+row.instance_id;
+        const shots=group.instances.map(row=>{const at=row.frame_at??row.refers_start??row.said_start,name=(state.labels[row.session_id]||row.session_id)+' '+row.instance_id;
           return `<div class="shot">${thumb(row.session_id,at,name+' · '+formatTime(at))}<p>${escape(name)} ${jump(row.session_id,at,formatTime(at))}</p><p>${escape(row.statement.slice(0,80))}${row.statement.length>80?'…':''}</p>${row.route?.length?`<p>路线：${escape(row.route.join(' -> '))}</p>`:''}</div>`;}).join('');
         return `<article class="proposal" data-name="${escape(group.name)}" data-game="${escape(group.games[0]||'')}"><h3>${escape(group.name)} <span class="count">${group.instances.length} 处</span></h3><div class="shots">${shots}</div>`+
           `<div class="actions"><button type="button" data-proposal="new">收为新界面</button><button type="button" data-proposal="into">并入已有界面</button><button type="button" data-proposal="skip">暂不处理</button></div></article>`;
@@ -271,9 +271,63 @@
   }
 
   function selectTab(name){
-    const evidence=name==='evidence';
-    $('tabEvidence').setAttribute('aria-selected',String(evidence));$('tabProposed').setAttribute('aria-selected',String(!evidence));
-    $('evidencePane').hidden=!evidence;$('proposedPane').hidden=evidence;
+    for(const [tab,pane,id] of [['tabEvidence','evidencePane','evidence'],['tabIssues','issuesPane','issues'],['tabProposed','proposedPane','proposed']]){
+      $(tab).setAttribute('aria-selected',String(id===name));$(pane).hidden=id!==name;
+    }
+  }
+
+  // Candidate issues: decide while looking at their evidence, like proposed screens.
+  function candidates(){
+    const found=[];
+    const walk=(node,parent)=>{if(node.status==='candidate'&&!state.hiddenIssues.has(node.id))found.push({node,parent});node.children.forEach(child=>walk(child,node));};
+    state.overview.issues.forEach(node=>walk(node,null));
+    return found;
+  }
+  function renderCandidates(){
+    const found=candidates();
+    $('issueCount').textContent=found.length?`(${found.length})`:'';
+    $('confirmAll').hidden=found.length<2;$('confirmAll').textContent='全部确认';delete $('confirmAll').dataset.armed;
+    if(!found.length){$('issueList').innerHTML='<p class="empty">没有待确认的议题。</p>';return;}
+    $('issueList').innerHTML=found.map(({node,parent})=>{
+      const links=[...node.support.map(link=>({...link,role:'support'})),...node.counter.map(link=>({...link,role:'counter'}))];
+      for(const child of node.children)links.push(...child.support.map(link=>({...link,role:'support'})));
+      const shots=links.slice(0,6).map(link=>{const row=state.instances.get(key(link.session_id,link.instance_id));if(!row)return '';
+        const at=row.frame_at??row.refers_start??row.said_start;
+        return `<div class="shot">${thumb(row.session_id,at,label(row)+' · '+formatTime(at))}<p>${link.role==='counter'?'<span class="badge">反例</span> ':''}<strong>${escape(KIND[row.kind]||row.kind)}</strong> ${escape(label(row))} ${jump(row.session_id,at,formatTime(at))}</p><p>${escape(row.statement.slice(0,80))}${row.statement.length>80?'…':''}</p></div>`;}).join('');
+      return `<article class="proposal" data-issue-id="${escape(node.id)}"><h3>${escape(node.id)} ${escape(node.title)} <span class="count">${escape(countText(node))}</span></h3>`+
+        `${parent?`<p class="hint">属于 ${escape(parent.id)} ${escape(parent.title)}</p>`:''}${node.description?`<p class="desc">${escape(node.description)}</p>`:''}<div class="shots">${shots}</div>`+
+        `${links.length>6?`<p class="hint">另有 ${links.length-6} 条证据，可在“证据”页签里查看。</p>`:''}`+
+        `<div class="actions"><button type="button" data-issue-action="confirm">确认</button><button type="button" data-issue-action="title">改标题</button><button type="button" data-issue-action="merge">并入其他议题</button><button type="button" data-issue-action="skip">暂不处理</button></div></article>`;
+    }).join('');
+    document.querySelectorAll('#issueList .thumb[data-session]').forEach(button=>thumbObserver.observe(button));
+  }
+  async function issueAction(article,action){
+    const id=article.dataset.issueId,node=state.issues.get(id);
+    if(action==='skip'){state.hiddenIssues.add(id);renderCandidates();return;}
+    if(action==='confirm'){await call('update_issue',{id,status:'confirmed'});status(`已确认 ${id}。`);await load();return;}
+    const actions=article.querySelector('.actions');
+    if(action==='title'){
+      actions.innerHTML=`<form><label class="sr-only" for="issueTitle">新标题</label><input id="issueTitle" name="title" required value="${escape(node.title)}"><button type="submit">保存标题</button><button type="button" data-issue-action="cancel">取消</button></form>`;
+    }else{
+      const descendants=new Set([id,...node.children.map(child=>child.id)]);
+      const options=[...state.issues.values()].filter(other=>!descendants.has(other.id)&&other.id!=='BUG');
+      actions.innerHTML=`<form><label class="sr-only" for="mergeInto">并入的议题</label><input id="mergeInto" name="into" list="issueOptions" required placeholder="搜索议题编号或标题"><datalist id="issueOptions">${options.map(other=>`<option value="${escape(other.id)}">${escape(other.title)}</option>`).join('')}</datalist><button type="submit">确认并入</button><button type="button" data-issue-action="cancel">取消</button></form>`;
+    }
+    const form=actions.querySelector('form');form.querySelector('input').focus();
+    form.onsubmit=async event=>{
+      event.preventDefault();const data=new FormData(form);
+      try{
+        if(action==='title'){await call('update_issue',{id,title:String(data.get('title')).trim()});status(`已修改 ${id} 的标题。`);}
+        else{const into=String(data.get('into')).trim();await call('merge_issue',id,into);status(`已把 ${id} 并入 ${into}，证据一起移过去了。`);}
+        await load();
+      }catch(error){status(error.message,true);}
+    };
+  }
+  async function confirmAll(){
+    const button=$('confirmAll'),found=candidates();
+    if(!button.dataset.armed){button.dataset.armed='1';button.textContent=`再点一次，确认全部 ${found.length} 个`;return;}
+    for(const {node} of found)await call('update_issue',{id:node.id,status:'confirmed'});
+    status(`已确认 ${found.length} 个议题。`);await load();
   }
   async function openReport(name){
     state.report=name?await call('read_report',name):null;
@@ -289,7 +343,7 @@
       const previous=$('reportSelect').value;
       $('reportSelect').innerHTML=overview.reports.length?overview.reports.map(row=>`<option value="${escape(row.name)}">${escape(row.name)}</option>`).join(''):'<option value="">（没有报告）</option>';
       if(overview.reports.some(row=>row.name===previous))$('reportSelect').value=previous;
-      renderEvidence();renderProposed();
+      renderEvidence();renderProposed();renderCandidates();
       await openReport($('reportSelect').value);
       if(!state.report||!state.report.citations.some(row=>!row.resolved))status('');
     }catch(error){status(error.message,true);}
@@ -314,6 +368,12 @@
     if(button){setExpanded(button,button.getAttribute('aria-expanded')!=='true');return;}
     const tocLink=event.target.closest('#toc a');
     if(tocLink){event.preventDefault();goToIssue(tocLink.dataset.target);return;}
+    const issueButton=event.target.closest('[data-issue-action]');
+    if(issueButton){
+      if(issueButton.dataset.issueAction==='cancel')renderCandidates();
+      else issueAction(issueButton.closest('.proposal'),issueButton.dataset.issueAction).catch(error=>status(error.message,true));
+      return;
+    }
     const proposal=event.target.closest('[data-proposal]');
     if(proposal){
       const article=proposal.closest('.proposal');
@@ -340,6 +400,8 @@
   $('refresh').onclick=load;
   $('tabEvidence').onclick=()=>selectTab('evidence');
   $('tabProposed').onclick=()=>selectTab('proposed');
+  $('tabIssues').onclick=()=>selectTab('issues');
+  $('confirmAll').onclick=()=>confirmAll().catch(error=>status(error.message,true));
 
   function start(){
     if(api)return;

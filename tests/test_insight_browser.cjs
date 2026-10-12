@@ -32,6 +32,8 @@ async function main(){
     window.pywebview={api:{ready:async()=>({ok:true}),get_overview:async()=>({ok:true,data:structuredClone(window.__overview)}),read_report:async()=>({ok:true,data:report}),
       thumbnail:async()=>({ok:true,data:pixel}),open_review:async(session,at)=>{window.__calls.push(['open_review',session,at]);return {ok:true,data:{ready:true}};},
       list_screens:async()=>({ok:true,data:[{id:'bag',name:'背包',aliases:[]}]}),
+      update_issue:async request=>{window.__calls.push(['update_issue',request]);const walk=node=>{if(node.id===request.id)Object.assign(node,request.status?{status:request.status}:{},request.title?{title:request.title}:{});node.children.forEach(walk);};window.__overview.issues.forEach(walk);return {ok:true,data:{}};},
+      merge_issue:async(from,into)=>{window.__calls.push(['merge_issue',from,into]);return {ok:true,data:{}};},
       confirm_proposed:async request=>{window.__calls.push(['confirm',request]);window.__overview.proposed=[];return {ok:true,data:{result:{screen:request.into},proposed:[]}};}}};
   },[overview,report]);
   const check=async(name,run)=>{await run();result.checks.push({name,pass:true});};
@@ -91,6 +93,21 @@ async function main(){
     await page.waitForFunction(()=>document.querySelector('#proposedCount').textContent==='');
     const calls=await page.evaluate(()=>window.__calls);
     assert.deepEqual(calls.at(-1),['confirm',{game:'合成游戏',proposed:'兑换选择',into:'bag'}]);
+  });
+  await check('candidate issue is confirmed while viewing its evidence',async()=>{
+    await page.locator('#tabIssues').click();
+    assert.equal(await page.locator('#issueCount').textContent(),'(1)');
+    const article=page.locator('#issueList .proposal[data-issue-id="TA-01.1"]');
+    assert.equal(await article.locator('.shot').count(),2);
+    assert.match(await article.textContent(),/属于 TA-01/);
+    await article.locator('[data-issue-action="title"]').click();
+    await page.locator('#issueTitle').fill('清完提示后忘了原本目标');await page.locator('#issueList button[type="submit"]').click();
+    await page.waitForFunction(()=>document.querySelector('#issueList h3')?.textContent.includes('原本目标'));
+    await page.locator('#issueList [data-issue-action="confirm"]').click();
+    await page.waitForFunction(()=>document.querySelector('#issueCount').textContent==='');
+    const calls=await page.evaluate(()=>window.__calls);
+    assert.deepEqual(calls.slice(-2),[['update_issue',{id:'TA-01.1',title:'清完提示后忘了原本目标'}],['update_issue',{id:'TA-01.1',status:'confirmed'}]]);
+    assert.equal(await page.locator('#toc a[data-target="TA-01.1"]').textContent().then(t=>t.includes('原本目标')),true);
   });
   await check('narrow window switches the outline to a select',async()=>{
     await page.locator('#tabEvidence').click();await page.setViewportSize({width:800,height:900});

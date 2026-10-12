@@ -74,7 +74,7 @@ class InsightReportTests(unittest.TestCase):
         self.assertEqual(protocol.preprocessing_status(first)['state'], 'complete')
 
     def test_insight_bridge_confirms_and_rejects_bad_times(self):
-        """触发路径：洞察窗口里确认提议界面、点证据时间 → 确认后待确认列表刷新；无效时间不会去打开回看或解码画面。"""
+        """触发路径：洞察窗口里确认提议界面和候选议题、点证据时间 → 确认后列表刷新；有子议题的议题不能并入；无效时间不会去打开回看或解码画面。"""
         from insight_runtime import InsightAPI
         self.write_catalog()
         self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [], screen='兑换选择', proposed=True)
@@ -89,6 +89,12 @@ class InsightReportTests(unittest.TestCase):
         self.assertFalse(api.thumbnail('20261008-120000-aaaaaa', float('nan'))['ok'])
         api.open_review('20261008-120000-aaaaaa', 2)
         self.assertEqual(opened, [('20261008-120000-aaaaaa', 2)])
+        sub = issues.add_issue(self.vault, '目标被替换', parent='TA-01')
+        self.assertTrue(api.update_issue(dict(id=sub['id'], status='confirmed'))['ok'])
+        self.assertEqual(issues.read_registry(self.vault)['issues'][-1]['status'], 'confirmed')
+        self.assertFalse(api.merge_issue('TA-01', 'TA-02')['ok'])
+        self.assertTrue(api.merge_issue(sub['id'], 'TA-02')['ok'])
+        self.assertEqual(issues.query_instances(self.vault)[0]['frame_at'], 3)
 
     def test_evidence_groups_sub_issue_support_and_counter(self):
         """触发路径：洞察界面右栏按 议题 → 子议题 → 证据 排列，反例单独成组。"""

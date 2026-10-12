@@ -157,6 +157,7 @@ def proposed_screens(vault):
         group = groups.setdefault(row['screen'], dict(name=row['screen'], instances=[]))
         group['instances'].append(dict(session_id=row['session_id'], instance_id=row['instance_id'],
                                        refers_start=row['refers_start'], said_start=row['said_start'],
+                                       frame_at=row['frame_at'],
                                        statement=row['statement'], route=row.get('route', [])))
     for group in groups.values():
         # 名称相近（最后一级相同，去掉括号注释后）的提议放在一起，便于发现同一界面的不同写法。

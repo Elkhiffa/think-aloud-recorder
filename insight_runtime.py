@@ -79,6 +79,22 @@ class InsightAPI:
             return dict(result=result, proposed=self._proposed())
         return self._call(work)
 
+    def update_issue(self, request):
+        def work():
+            # Path 1: the user confirms or retitles a candidate issue while reading its evidence.
+            import issue_registry
+            if not isinstance(request, dict):
+                raise ValueError('议题请求无效。')
+            return issue_registry.update_issue(self._vault, request.get('id'), request.get('title'), None,
+                                               request.get('status'))
+        return self._call(work)
+
+    def merge_issue(self, from_id, into_id):
+        def work():
+            import issue_registry
+            return issue_registry.merge_issues(self._vault, from_id, into_id)
+        return self._call(work)
+
     def thumbnail(self, session_id, at, large=False):
         def work():
             if type(at) not in (int, float) or not math.isfinite(at) or at < 0:
