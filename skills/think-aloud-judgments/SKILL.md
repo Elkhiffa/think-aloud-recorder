@@ -35,7 +35,7 @@ description: 单场次初次整理：把一场 Think Aloud 录制整理成可追
    - `elements` 写判断针对的元素在画面上的文字，没有就空。
 5. **需要时看证据**：依赖视觉状态的判断（焦点、高亮、布局、数值、反证、OCR 读不到的状态）用 `frame` 截所指时刻附近的画面，看到的事实写进实例 `evidence`，该时刻加进 `coverage.video_ranges`。依赖操作的判断（“按了没反应”“点不到”“又按错了”）先用 `inputs-summary` 读操作区段，再引用操作编号。OCR 文字只算线索，要么截图核实，要么在 note 写明“仅有 OCR 线索”。
 6. **组织活动**：`events` 是游戏内活动，写清玩家当时想做什么、主要过程和结果，覆盖整场，不按问题拆。问题放在实例里。每条实例挂到一个 `event_id`。
-7. **议题标签**：`issue_tags` 一律留空。记录者明说“之前也遇到过”“又是这样”时，写进 statement，并按第 3 步考虑 `earlier_session`。
+7. **议题标签**：`issue_tags` 一律留空，只有一个例外：记录者本人原话里说某个问题是 bug（如“这是 bug”“同款 bug”），这句话必须整理成实例，`issue_tags` 写 `["BUG"]`。别人说的、或只是闲聊提到 bug 的不算。记录者明说“之前也遇到过”“又是这样”时，写进 statement，并按第 3 步考虑 `earlier_session`。
 8. **校验、提交、回读**：`validate` 通过后 `submit`，再用 `status` 确认实例数量。
 
 ## 写 statement
