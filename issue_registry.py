@@ -228,6 +228,32 @@ def update_issue(vault, ident, title=None, description=None, status=None):
         return row
 
 
+def dismiss_issue(vault, ident):
+    """Remove a rejected candidate and its links; confirmed issues are only ever merged."""
+    vault = Path(vault).resolve()
+    with metadata_lock(vault):
+        data = read_registry(vault)
+        row = _find(data, ident)
+        # 路径 1/2：用户看过证据后判断候选不成立（如“这不是 bug”），驳回它。
+        if row['status'] != 'candidate' or ident == BUG:
+            raise ValueError('只能驳回候选议题。')
+        if any(other.get('parent') == ident for other in data['issues']):
+            raise ValueError('该议题下还有子议题，请先处理子议题。')
+        for path in (vault / '场次').glob('*/' + protocol.RESULT):
+            raw = protocol._load(path.parent, protocol.RESULT, protocol.MAX_RESULT)
+            if any(ident in row.get('issue_tags', []) for row in raw.get('instances', [])):
+                raise ValueError('有场次结果直接带着这个标签，请改用合并。')
+        links = read_links(vault)
+        kept = [link for link in links['links'] if link['issue'] != ident]
+        removed = len(links['links']) - len(kept)
+        if removed:
+            links['links'] = kept
+            protocol._write(vault, LINKS, links)
+        data['issues'] = [other for other in data['issues'] if other['id'] != ident]
+        protocol._write(vault, FILE, data)
+        return dict(id=ident, links_removed=removed)
+
+
 def _encoded(value):
     return json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False).encode('utf-8')
 

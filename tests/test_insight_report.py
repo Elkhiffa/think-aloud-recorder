@@ -38,7 +38,8 @@ class InsightReportTests(unittest.TestCase):
         """触发路径：记录者说“这是 bug”后，洞察界面的 BUG 栏要列出每一处：已挂 BUG 的、成了实例但没挂的、没成实例的；另一位说话人的不算。"""
         segments = [dict(start=2, end=4, text='这是个 BUG。', speaker_id=0),
                     dict(start=5, end=6, text='我这边也有bug。', speaker_id=1),
-                    dict(start=7, end=8, text='又是那个bug。', speaker_id=0)]
+                    dict(start=7, end=8, text='又是那个bug。', speaker_id=0),
+                    dict(start=9, end=10, text='可能是 Cocos 出啥问题，文字也重叠了。', speaker_id=0)]
         role = dict(transcript_id=transcript_id(segments), speaker_id=0, source='manual')
         self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', ['BUG'],
                           segments=segments, recorder_speaker=role)
@@ -46,9 +47,10 @@ class InsightReportTests(unittest.TestCase):
                           segments=[dict(start=2, end=4, text='估计是手柄的bug。')])
         rows = insight.bug_hits(self.vault)
         self.assertEqual([(row['session_id'][4:8], row['ref'], row['state']) for row in rows],
-                         [('1008', 't000001', 'linked'), ('1008', 't000003', 'raw'), ('1009', 't000001', 'instance')])
+                         [('1008', 't000001', 'linked'), ('1008', 't000003', 'raw'), ('1008', 't000004', 'raw'),
+                          ('1009', 't000001', 'instance')])
         tree = insight.evidence(self.vault)
-        self.assertEqual(len(tree['bug_unorganized']), 2)
+        self.assertEqual(len(tree['bug_unorganized']), 3)
         bug = next(node for node in tree['issues'] if node['id'] == 'BUG')
         self.assertEqual([row['instance_id'] for row in bug['support']], ['i1'])
         self.assertEqual(tree['session_labels'], {'20261008-120000-aaaaaa': '1008', '20261009-120000-bbbbbb': '1009'})
@@ -95,6 +97,20 @@ class InsightReportTests(unittest.TestCase):
         self.assertFalse(api.merge_issue('TA-01', 'TA-02')['ok'])
         self.assertTrue(api.merge_issue(sub['id'], 'TA-02')['ok'])
         self.assertEqual(issues.query_instances(self.vault)[0]['frame_at'], 3)
+
+    def test_dismissed_candidate_leaves_results_and_other_links(self):
+        """触发路径：用户在议题确认里判断疑似 bug 其实不是 bug → 驳回候选，它的对应一起移除，其他议题的对应和场次结果不变；已确认的议题不能驳回。"""
+        folder = self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [])
+        before = (folder / protocol.RESULT).read_bytes()
+        issues.add_issue(self.vault, '教学弹窗多出遮挡', parent='BUG')
+        issues.link_instances(self.vault, [dict(issue='BUG.1', session_id='20261008-120000-aaaaaa', instance_id='i1'),
+                                           dict(issue='TA-01', session_id='20261008-120000-aaaaaa', instance_id='i1')])
+        with self.assertRaisesRegex(ValueError, '只能驳回候选'):
+            issues.dismiss_issue(self.vault, 'TA-01')
+        self.assertEqual(issues.dismiss_issue(self.vault, 'BUG.1'), dict(id='BUG.1', links_removed=1))
+        self.assertNotIn('BUG.1', [row['id'] for row in issues.read_registry(self.vault)['issues']])
+        self.assertEqual([link['issue'] for link in issues.read_links(self.vault)['links']], ['TA-01'])
+        self.assertEqual((folder / protocol.RESULT).read_bytes(), before)
 
     def test_evidence_groups_sub_issue_support_and_counter(self):
         """触发路径：洞察界面右栏按 议题 → 子议题 → 证据 排列，反例单独成组。"""

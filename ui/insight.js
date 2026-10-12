@@ -297,7 +297,7 @@
       return `<article class="proposal" data-issue-id="${escape(node.id)}"><h3>${escape(node.id)} ${escape(node.title)} <span class="count">${escape(countText(node))}</span></h3>`+
         `${parent?`<p class="hint">属于 ${escape(parent.id)} ${escape(parent.title)}</p>`:''}${node.description?`<p class="desc">${escape(node.description)}</p>`:''}<div class="shots">${shots}</div>`+
         `${links.length>6?`<p class="hint">另有 ${links.length-6} 条证据，可在“证据”页签里查看。</p>`:''}`+
-        `<div class="actions"><button type="button" data-issue-action="confirm">确认</button><button type="button" data-issue-action="title">改标题</button><button type="button" data-issue-action="merge">并入其他议题</button><button type="button" data-issue-action="skip">暂不处理</button></div></article>`;
+        `<div class="actions"><button type="button" data-issue-action="confirm">确认</button><button type="button" data-issue-action="title">改标题</button><button type="button" data-issue-action="merge">并入其他议题</button><button type="button" data-issue-action="dismiss">驳回</button><button type="button" data-issue-action="skip">暂不处理</button></div></article>`;
     }).join('');
     document.querySelectorAll('#issueList .thumb[data-session]').forEach(button=>thumbObserver.observe(button));
   }
@@ -305,6 +305,11 @@
     const id=article.dataset.issueId,node=state.issues.get(id);
     if(action==='skip'){state.hiddenIssues.add(id);renderCandidates();return;}
     if(action==='confirm'){await call('update_issue',{id,status:'confirmed'});status(`已确认 ${id}。`);await load();return;}
+    if(action==='dismiss'){
+      const button=article.querySelector('[data-issue-action="dismiss"]');
+      if(!button.dataset.armed){button.dataset.armed='1';button.textContent='再点一次驳回（移除这个候选和它的证据对应）';return;}
+      await call('dismiss_issue',id);status(`已驳回 ${id}。`);await load();return;
+    }
     const actions=article.querySelector('.actions');
     if(action==='title'){
       actions.innerHTML=`<form><label class="sr-only" for="issueTitle">新标题</label><input id="issueTitle" name="title" required value="${escape(node.title)}"><button type="submit">保存标题</button><button type="button" data-issue-action="cancel">取消</button></form>`;

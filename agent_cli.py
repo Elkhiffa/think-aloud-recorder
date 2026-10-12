@@ -129,7 +129,7 @@ def main(argv=None):
     confirm_target.add_argument('--new', dest='new_id')
     confirm_target.add_argument('--into')
     catalog_confirm.add_argument('--name')
-    for action in ('list', 'add', 'update', 'merge', 'link', 'unlink'):
+    for action in ('list', 'add', 'update', 'merge', 'dismiss', 'link', 'unlink'):
         issue_command = commands.add_parser('issues-' + action, help='管理资料库级议题标签；合并保留结果及校准历史')
         issue_command.add_argument('vault')
         if action == 'add':
@@ -142,6 +142,8 @@ def main(argv=None):
             issue_command.add_argument('--title')
             issue_command.add_argument('--description')
             issue_command.add_argument('--status', choices=('candidate', 'confirmed'))
+        elif action == 'dismiss':
+            issue_command.add_argument('id')
         elif action == 'merge':
             issue_command.add_argument('from_id')
             issue_command.add_argument('into_id')
@@ -315,6 +317,8 @@ def main(argv=None):
                 value = issues.update_issue(args.vault, args.id, args.title, args.description, args.status)
             elif name == 'issues-merge':
                 value = issues.merge_issues(args.vault, args.from_id, args.into_id)
+            elif name == 'issues-dismiss':
+                value = issues.dismiss_issue(args.vault, args.id)
             elif name == 'issues-link':
                 if args.file:
                     rows = json.loads(Path(args.file).read_text(encoding='utf-8-sig'))

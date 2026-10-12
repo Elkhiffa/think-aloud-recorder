@@ -89,6 +89,12 @@ class InsightAPI:
                                                request.get('status'))
         return self._call(work)
 
+    def dismiss_issue(self, ident):
+        def work():
+            import issue_registry
+            return issue_registry.dismiss_issue(self._vault, ident)
+        return self._call(work)
+
     def merge_issue(self, from_id, into_id):
         def work():
             import issue_registry

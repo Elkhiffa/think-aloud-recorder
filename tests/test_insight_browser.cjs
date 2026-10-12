@@ -6,12 +6,13 @@ const root=path.join(__dirname,'..'),out=path.resolve(process.env.REVIEW_TEST_OU
 fs.mkdirSync(out,{recursive:true});
 const S1='20261008-120000-aaaaaa',S2='20261009-120000-bbbbbb';
 const row=(session,id,extra={})=>Object.assign({session_id:session,instance_id:id,said_start:12,refers_start:2,refers_end:4,refers_basis:'same_time',screen:'bag',catalog_screen:'bag',elements:[],kind:'confusion',statement:'合成陈述 '+id,issue_tags:[],issue_links:[],event_id:'e1',event_title:'合成活动'},extra);
-const instances=[row(S1,'i1',{statement:'清完提示后忘了目标 <img src=x>'}),row(S2,'i1'),row(S2,'i2',{refers_basis:'earlier_session',refers_start:null,refers_end:null}),row(S1,'i3'),row(S2,'i9')];
+const instances=[row(S1,'i1',{statement:'清完提示后忘了目标 <img src=x>'}),row(S2,'i1'),row(S2,'i2',{refers_basis:'earlier_session',refers_start:null,refers_end:null}),row(S1,'i3'),row(S2,'i9'),row(S2,'i5',{statement:'教学弹窗左半边多了一层灰色'})];
 const link=(session,id,reason='合成理由')=>({session_id:session,instance_id:id,reason});
 const overview={vault:'合成资料库',reports:[{name:'r.md',modified:1,bytes:10}],games:['合成游戏'],session_labels:{[S1]:'1008',[S2]:'1009'},instances,
   issues:[{id:'TA-01',title:'目标明确仍有摩擦',description:'合成议题',status:'confirmed',support:[link(S2,'i2')],counter:[],children:[
      {id:'TA-01.1',parent:'TA-01',title:'清完提示后忘了目标',description:'成立理由：合成',status:'candidate',support:[link(S1,'i1')],counter:[link(S2,'i1','专注时少提示反而好')],children:[]}]},
-    {id:'BUG',title:'Bug',description:'',status:'confirmed',support:[link(S1,'i3')],counter:[],children:[]}],
+    {id:'BUG',title:'Bug',description:'',status:'confirmed',support:[link(S1,'i3')],counter:[],children:[
+     {id:'BUG.1',parent:'BUG',title:'教学弹窗多出遮挡',description:'疑似缺陷',status:'candidate',support:[link(S2,'i5')],counter:[],children:[]}]}],
   bug_unorganized:[{session_id:S2,ref:'t000005',start:30,end:32,text:'现在有几个bug',instances:[],bug_instances:[],state:'raw'}],
   proposed:[{name:'兑换选择',family:'兑换选择',games:['合成游戏'],instances:[{session_id:S1,instance_id:'i3',refers_start:2,said_start:12,statement:'在兑换选择界面',route:['培养','兑换选择']}]}]};
 const text=['# 总体判断','玩家清完提示后忘了目标 [1008 i1](i:'+S1+'/i1#TA-01.1)，见 [TA-01.1](issue:TA-01.1)。',
@@ -33,6 +34,7 @@ async function main(){
       thumbnail:async()=>({ok:true,data:pixel}),open_review:async(session,at)=>{window.__calls.push(['open_review',session,at]);return {ok:true,data:{ready:true}};},
       list_screens:async()=>({ok:true,data:[{id:'bag',name:'背包',aliases:[]}]}),
       update_issue:async request=>{window.__calls.push(['update_issue',request]);const walk=node=>{if(node.id===request.id)Object.assign(node,request.status?{status:request.status}:{},request.title?{title:request.title}:{});node.children.forEach(walk);};window.__overview.issues.forEach(walk);return {ok:true,data:{}};},
+      dismiss_issue:async id=>{window.__calls.push(['dismiss_issue',id]);for(const node of window.__overview.issues)node.children=node.children.filter(child=>child.id!==id);return {ok:true,data:{}};},
       merge_issue:async(from,into)=>{window.__calls.push(['merge_issue',from,into]);return {ok:true,data:{}};},
       confirm_proposed:async request=>{window.__calls.push(['confirm',request]);window.__overview.proposed=[];return {ok:true,data:{result:{screen:request.into},proposed:[]}};}}};
   },[overview,report]);
@@ -96,7 +98,13 @@ async function main(){
   });
   await check('candidate issue is confirmed while viewing its evidence',async()=>{
     await page.locator('#tabIssues').click();
-    assert.equal(await page.locator('#issueCount').textContent(),'(1)');
+    assert.equal(await page.locator('#issueCount').textContent(),'(2)');
+    const bug=page.locator('#issueList .proposal[data-issue-id="BUG.1"]');
+    await bug.locator('[data-issue-action="dismiss"]').click();
+    assert.match(await bug.locator('[data-issue-action="dismiss"]').textContent(),/再点一次/);
+    await bug.locator('[data-issue-action="dismiss"]').click();
+    await page.waitForFunction(()=>document.querySelector('#issueCount').textContent==='(1)');
+    assert.deepEqual((await page.evaluate(()=>window.__calls)).at(-1),['dismiss_issue','BUG.1']);
     const article=page.locator('#issueList .proposal[data-issue-id="TA-01.1"]');
     assert.equal(await article.locator('.shot').count(),2);
     assert.match(await article.textContent(),/属于 TA-01/);
