@@ -791,6 +791,23 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertFalse(self.service.open_review(active.meta['id'])['ok'])
         self.service._active = None
 
+    def test_insight_opens_current_vault_and_reviews_at_a_moment(self):
+        """触发路径：主窗口点“洞察” → 打开当前资料库的洞察窗口；洞察里点证据时间 → 回看带着这一刻打开。"""
+        insight = MagicMock(return_value={'ready': True})
+        self.service.set_insight_opener(insight)
+        empty = self.service.open_insight()
+        self.assertFalse(empty['ok'])
+        self.assertIn('还没有场次', empty['error'])
+        session = self.session(state='可回看')
+        (session.path / '录像.mp4').write_bytes(b'synthetic published video placeholder')
+        self.assertTrue(self.service.open_insight()['ok'])
+        insight.assert_called_once_with(self.vault.resolve())
+        review = MagicMock(return_value={'ready': True})
+        self.service.set_review_opener(review)
+        self.assertTrue(self.service.review_at(session.meta['id'], 12.5)['ok'])
+        self.assertEqual(review.call_args.args[1], 12.5)
+        self.assertEqual(self.service._review_opening, 0)
+
     def test_pending_review_and_rename_are_independent_of_background_processing(self):
         session = self.session(state='转写中')
         (session.path / '录像.mp4').write_bytes(b'synthetic published video placeholder')

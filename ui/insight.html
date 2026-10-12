@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'"><title>洞察</title><link rel="stylesheet" href="insight.css"></head>
+<body>
+<header class="topbar">
+  <h1 id="title">洞察</h1>
+  <label class="report-choice"><span class="sr-only">选择报告</span><select id="reportSelect"></select></label>
+  <button type="button" id="refresh" title="重新读取报告、议题和目录">刷新</button>
+  <div class="tabs" role="tablist" aria-label="右栏内容">
+    <button type="button" role="tab" id="tabEvidence" aria-selected="true" aria-controls="evidencePane">证据</button>
+    <button type="button" role="tab" id="tabProposed" aria-selected="false" aria-controls="proposedPane">界面确认 <span id="proposedCount" class="count"></span></button>
+  </div>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
+</header>
+<main class="split">
+  <article id="report" class="pane report" tabindex="0" aria-label="分析报告"><p class="empty">正在读取…</p></article>
+  <section id="evidencePane" class="pane evidence" role="tabpanel" aria-labelledby="tabEvidence" tabindex="0">
+    <div class="evidence-head">
+    <div class="toc-bar">
+      <button type="button" id="tocToggle" aria-expanded="true" aria-controls="toc">目录</button>
+      <label class="toc-select"><span class="sr-only">跳到议题</span><select id="tocSelect"></select></label>
+      <button type="button" id="expandAll">全部展开</button>
+      <button type="button" id="collapseAll">全部收起</button>
+    </div>
+    <nav id="toc" class="toc" aria-label="议题目录"></nav>
+    </div>
+    <div id="evidenceList"></div>
+  </section>
+  <section id="proposedPane" class="pane proposed" role="tabpanel" aria-labelledby="tabProposed" tabindex="0" hidden>
+    <p class="hint">以下是 agent 提议、目录里还没有的界面名，按名称相近程度分组。确认只修改界面目录，不改写场次整理结果；确认后按正式界面查询能查到这些写法。</p>
+    <div id="proposedList"></div>
+  </section>
+</main>
+<div id="lightbox" class="lightbox" hidden><img id="lightboxImage" alt="所指时刻的大图"><p id="lightboxCaption"></p></div>
+<script src="insight.js"></script>
+</body></html>

@@ -85,6 +85,7 @@ class DesktopService:
         self._update_review_count = lambda: 0
         self._update_close_windows = None
         self._review_opener = None
+        self._insight_opener = None
         self._review_opening = 0
         self._uncertain_ids = set()
         self._obs_uncertain = False
@@ -1455,6 +1456,13 @@ class DesktopService:
             return self._error(error)
 
     def open_review(self, id):
+        return self._open_review(id)
+
+    def review_at(self, id, at):
+        """Insight evidence opens a review at its cited moment; not a main-window bridge method."""
+        return self._open_review(id, at)
+
+    def _open_review(self, id, at=None):
         admitted = False
         try:
             with self._lock:
@@ -1469,7 +1477,7 @@ class DesktopService:
                     raise RuntimeError('回看窗口尚未就绪。')
                 self._review_opening += 1
                 admitted = True
-            return ok(opener(session))
+            return ok(opener(session) if at is None else opener(session, at))
         except Exception as error:
             return self._error(error)
         finally:
@@ -1479,6 +1487,32 @@ class DesktopService:
 
     def set_review_opener(self, opener):
         self._review_opener = opener
+
+    def open_insight(self):
+        admitted = False
+        try:
+            with self._lock:
+                if self._closed.is_set() or self._exit_pending:
+                    raise RuntimeError('记录器正在关闭。')
+                vault = Path(self._cfg['vault']).resolve()
+                # Path 1: the insight window reads the current vault's analysed sessions.
+                if not (vault / '场次').is_dir():
+                    raise RuntimeError('当前资料库还没有场次。')
+                opener = self._insight_opener
+                if opener is None:
+                    raise RuntimeError('洞察窗口尚未就绪。')
+                self._review_opening += 1
+                admitted = True
+            return ok(opener(vault))
+        except Exception as error:
+            return self._error(error)
+        finally:
+            if admitted:
+                with self._lock:
+                    self._review_opening -= 1
+
+    def set_insight_opener(self, opener):
+        self._insight_opener = opener
 
     def rename_session(self, id, name):
         try:

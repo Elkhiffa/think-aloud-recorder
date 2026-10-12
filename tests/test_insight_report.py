@@ -73,6 +73,23 @@ class InsightReportTests(unittest.TestCase):
         self.assertEqual((first / protocol.RESULT).read_bytes(), before)
         self.assertEqual(protocol.preprocessing_status(first)['state'], 'complete')
 
+    def test_insight_bridge_confirms_and_rejects_bad_times(self):
+        """触发路径：洞察窗口里确认提议界面、点证据时间 → 确认后待确认列表刷新；无效时间不会去打开回看或解码画面。"""
+        from insight_runtime import InsightAPI
+        self.write_catalog()
+        self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [], screen='兑换选择', proposed=True)
+        opened = []
+        api = InsightAPI(self.vault, self.vault / 'app', lambda *args: opened.append(args) or {'ok': True})
+        overview = api.get_overview()
+        self.assertTrue(overview['ok'], overview)
+        self.assertEqual([group['games'] for group in overview['data']['proposed']], [['合成游戏']])
+        confirmed = api.confirm_proposed(dict(game='合成游戏', proposed='兑换选择', into='bag'))
+        self.assertEqual(confirmed['data']['proposed'], [])
+        self.assertFalse(api.open_review('20261008-120000-aaaaaa', -1)['ok'])
+        self.assertFalse(api.thumbnail('20261008-120000-aaaaaa', float('nan'))['ok'])
+        api.open_review('20261008-120000-aaaaaa', 2)
+        self.assertEqual(opened, [('20261008-120000-aaaaaa', 2)])
+
     def test_evidence_groups_sub_issue_support_and_counter(self):
         """触发路径：洞察界面右栏按 议题 → 子议题 → 证据 排列，反例单独成组。"""
         self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [])

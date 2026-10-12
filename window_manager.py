@@ -283,11 +283,11 @@ class WindowManager:
             pass
         return options
 
-    def open_review(self, session):
+    def open_review(self, session, initial_time=None):
         with self._lock:
             if self._updating:raise RuntimeError('应用正在退出以完成更新。')
         from review_runtime import ReviewAPI, prepare_window
-        page, payload = prepare_window(self.service.root, session)
+        page, payload = prepare_window(self.service.root, session, initial_time)
         api = ReviewAPI(session.path, payload, self.service.root / 'state/review-layout.json')
         try:
             window = self.webview.create_window(
@@ -313,6 +313,30 @@ class WindowManager:
             if 'window' not in locals():
                 page.unlink(missing_ok=True)
             raise
+
+    def open_insight(self, vault):
+        with self._lock:
+            if self._updating:raise RuntimeError('应用正在退出以完成更新。')
+        from insight_runtime import InsightAPI
+        api = InsightAPI(vault, self.service.root, self.service.review_at)
+        # Registered with the viewers so the update flow closes it like a review.
+        window = self.webview.create_window(
+            '洞察 · ' + vault.name, url=(self.service.root / 'ui' / 'insight.html').as_uri(),
+            js_api=api, **self._review_window_options(), min_size=(560, 540),
+            frameless=False, resizable=True, text_select=True, background_color='#fcfaf5')
+        with self._lock:
+            self._viewers[window.uid] = window
+
+        def closed():
+            with self._viewer_changed:
+                self._viewers.pop(window.uid, None)
+                self._viewer_changed.notify_all()
+        window.events.closed += closed
+        if not api._ready.wait(15):
+            raise RuntimeError('洞察窗口尚未确认加载完成，请查看新窗口中的提示。')
+        if api._error:
+            raise RuntimeError(api._error)
+        return {'ready': True}
 
     def review_count(self):
         with self._lock:return len(self._viewers)

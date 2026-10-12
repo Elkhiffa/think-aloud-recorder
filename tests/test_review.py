@@ -55,6 +55,17 @@ class ReviewTests(unittest.TestCase):
         self.assertNotIn('</script><script>alert(1)</script>', html)
         self.assertIn('\\u003c/script>', html)
 
+    def test_insight_evidence_opens_review_at_cited_moment(self):
+        """触发路径：洞察窗口里点证据卡片上的时间 → 新回看窗口的数据带上这一刻；无效时间不打开窗口。"""
+        with patch('review_runtime.render_player', wraps=lambda root, payload: render_player(recorder.ROOT, payload)):
+            _, payload = prepare_window(self.root, recorder.Session(self.folder), 754.5)
+            self.assertEqual(payload['initial_time'], 754.5)
+            _, payload = prepare_window(self.root, recorder.Session(self.folder))
+            self.assertNotIn('initial_time', payload)
+            for value in (-1, float('nan'), '12', True):
+                with self.assertRaisesRegex(ValueError, '定位时间无效'):
+                    prepare_window(self.root, recorder.Session(self.folder), value)
+
     def test_export_refreshes_player_and_contains_no_absolute_desktop_paths(self):
         archive = recorder.Session(self.folder).package()
         with zipfile.ZipFile(archive) as bundle:

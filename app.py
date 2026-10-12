@@ -6,7 +6,7 @@ from contextlib import contextmanager
 BRIDGE_METHODS = ('get_state', 'get_microphone_state', 'refresh_device_inventory', 'refresh_devices', 'save_settings', 'save_preset', 'select_preset', 'choose_directory',
                   'import_hotwords', 'choose_hotword_files', 'open_dictionary_site', 'open_bailian_console',
                   'start_recording', 'stop_recording',
-                  'process_session', 'open_review', 'rename_session', 'package_session', 'open_folder',
+                  'process_session', 'open_review', 'open_insight', 'rename_session', 'package_session', 'open_folder',
                   'open_raw', 'save_cloud_key', 'verify_cloud_key', 'recover_cloud_task',
                   'model_action', 'update_action')
 
@@ -81,6 +81,7 @@ def run_window(root):
     windows.bind_main(window)
     service.set_window(window)
     service.set_review_opener(windows.open_review)
+    service.set_insight_opener(windows.open_insight)
     service.set_update_lifecycle(windows.review_count, windows.close_for_update)
     from update_installer import acknowledge_start
     window.events.loaded += lambda: acknowledge_start(root)

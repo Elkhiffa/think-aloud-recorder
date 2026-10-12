@@ -584,7 +584,10 @@
     if(pendingSeek!==null){initialPositionUsed=true;seek(pendingSeek);pendingSeek=null;}
     else if(!initialPositionUsed){
       initialPositionUsed=true;
-      const start=initialReviewTime(data.inputs,video.duration);
+      // An insight evidence card opens the review at its moment; otherwise
+      // the calibrated end of recording preparation is the starting point.
+      const requested=Number.isFinite(data.initial_time)&&data.initial_time>=0?Math.min(data.initial_time,Math.max(0,video.duration-.05)):null;
+      const start=requested??initialReviewTime(data.inputs,video.duration);
       if(!initialPositionTouched&&video.paused&&video.currentTime===0&&start!==null){
         // Seek once in the existing calibrated video clock, without trimming
         // media, shifting events again or starting playback.
