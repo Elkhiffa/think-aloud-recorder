@@ -142,7 +142,7 @@
       if(node.matches('section.issue,section.group'))setExpanded(node.querySelector(':scope>.toggle'),true);
     }
     status(all.length>1?`这条证据出现在 ${all.length} 处，已定位到 ${target.dataset.issue}。`:'');
-    target.scrollIntoView({block:'center',behavior:'smooth'});flash(target);
+    target.scrollIntoView({block:'start',behavior:'smooth'});flash(target);
   }
 
   // Scroll position highlights the current issue in the outline.
@@ -323,6 +323,8 @@
     if(event.target.closest('#lightbox'))$('lightbox').hidden=true;
   });
   document.addEventListener('keydown',event=>{if(event.key==='Escape')$('lightbox').hidden=true;});
+  // Cards and sections scroll to just below the sticky outline, whatever its current height.
+  new ResizeObserver(()=>$('evidencePane').style.setProperty('--head',document.querySelector('.evidence-head').offsetHeight-16+'px')).observe(document.querySelector('.evidence-head'));
   $('tocToggle').onclick=()=>{const open=$('tocToggle').getAttribute('aria-expanded')!=='true';$('tocToggle').setAttribute('aria-expanded',String(open));$('toc').hidden=!open;};
   $('tocSelect').onchange=()=>{if($('tocSelect').value)goToIssue($('tocSelect').value);$('tocSelect').value='';};
   $('expandAll').onclick=()=>document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,true));

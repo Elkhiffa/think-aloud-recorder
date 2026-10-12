@@ -45,6 +45,7 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .toc a.active{background:var(--tint);font-weight:600}
 .toc .n{color:var(--muted);white-space:nowrap;font-size:13px}
 .issue{border-top:1px solid var(--line);padding:12px 0}
+.issue,.group{scroll-margin-top:calc(var(--head,0px) + 8px)}
 .group{margin:8px 0 0 16px;padding-left:12px;border-left:2px solid var(--line)}
 .toggle{display:flex;width:100%;text-align:left;gap:8px;align-items:baseline;border:0;padding:4px 0;background:none;font-weight:600;color:var(--heading)}
 .toggle:hover{background:none;color:var(--accent)}
@@ -56,7 +57,7 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .desc{margin:4px 0 8px 18px;color:var(--muted);font-size:14px;white-space:pre-wrap;max-width:72ch}
 .cards{display:grid;gap:12px;margin:8px 0 8px 18px}
 .subhead{margin:12px 0 0 18px;font-size:13px;color:var(--muted);font-weight:600}
-.card{display:grid;grid-template-columns:160px minmax(0,1fr);gap:12px;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--surface);scroll-margin:120px}
+.card{display:grid;grid-template-columns:160px minmax(0,1fr);gap:12px;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--surface);scroll-margin-top:calc(var(--head,0px) + 16px)}
 .card.counter{border-color:var(--counter);background:var(--counter-bg)}
 .card.flash{animation:flash 1.6s ease-out}
 @keyframes flash{0%,40%{background:var(--mark)}}
