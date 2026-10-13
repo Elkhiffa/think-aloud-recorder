@@ -119,6 +119,54 @@ class UpdaterTests(unittest.TestCase):
         manager.check();manager.wait(2)
         self.assertEqual(manager.snapshot()['state'],'error')
 
+    def app_update_fixture(self, *, modify_installed=False):
+        data = {'requests': []}
+        def handler(request):
+            path = request.url.path; data['requests'].append(path.rsplit('/', 1)[-1])
+            if path.endswith('/releases'): return httpx.Response(200, json=[data['release']])
+            if path.endswith('SHA256SUMS.txt'): return httpx.Response(200, content=data['sums'])
+            if path.endswith('app-update.zip'): return httpx.Response(200, content=data['update'])
+            return httpx.Response(200, content=data['archive'])
+        manager = self.manager(handler, compact=True)
+        stage = compact_fixture(manager.install_root.parent/'fixture', '1.0.0', {'app/app.py': b'new code'})
+        if modify_installed: (manager.root/'runtime/python.exe').write_bytes(b'MZ changed')
+        def pack(names):
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+                for path in stage.rglob('*'):
+                    name = path.relative_to(stage).as_posix()
+                    if path.is_file() and (names is None or name in names): archive.write(path, name)
+            return buffer.getvalue()
+        data['archive'] = pack(None)
+        data['update'] = pack({'app/app.py', 'app/portable.json', 'app/package-manifest.json', 'vocabularies/uiux-terms.txt'})
+        base = 'https://github.com/Elkhiffa/think-aloud-recorder/releases/download/v1.0.0/'
+        prefix = 'ExperienceRecorder-1.0.0-windows-x64'
+        files = {prefix+'.zip': data['archive'], prefix+'-app-update.zip': data['update']}
+        data['sums'] = ''.join(hashlib.sha256(v).hexdigest()+'  '+k+'\n' for k, v in files.items()).encode()
+        assets = [{'name': k, 'state': 'uploaded', 'browser_download_url': base+k, 'size': len(v)} for k, v in files.items()]
+        assets.append({'name': prefix+'-SHA256SUMS.txt', 'state': 'uploaded', 'browser_download_url': base+prefix+'-SHA256SUMS.txt', 'size': len(data['sums'])})
+        data['release'] = {'tag_name': 'v1.0.0', 'draft': False, 'prerelease': False, 'body': 'Notes', 'assets': assets}
+        manager.check(); self.assertTrue(manager.wait(2)); self.assertEqual(manager.snapshot()['state'], 'available')
+        return manager, data
+
+    def test_app_update_downloads_only_changed_files(self):
+        """触发路径：用户点“下载”，Release 附有程序更新包且本机文件与新版本基础一致 → 只下小包，不下完整包。"""
+        manager, data = self.app_update_fixture()
+        self.assertEqual(manager.snapshot()['total_bytes'], len(data['update']))
+        manager.download(); self.assertTrue(manager.wait(3))
+        self.assertEqual(manager.snapshot()['state'], 'ready', manager.snapshot())
+        self.assertNotIn('ExperienceRecorder-1.0.0-windows-x64.zip', data['requests'])
+        self.assertEqual((manager._stage/'app/app.py').read_bytes(), b'new code')
+        self.assertEqual((manager._stage/'app/runtime/python.exe').read_bytes(), b'MZ python')
+
+    def test_app_update_falls_back_to_full_package(self):
+        """触发路径：本机运行环境文件被改过 → 小包拼不出完整包，自动改下完整包，结果仍可安装。"""
+        manager, data = self.app_update_fixture(modify_installed=True)
+        manager.download(); self.assertTrue(manager.wait(3))
+        self.assertEqual(manager.snapshot()['state'], 'ready', manager.snapshot())
+        self.assertIn('ExperienceRecorder-1.0.0-windows-x64.zip', data['requests'])
+        self.assertEqual((manager._stage/'app/runtime/python.exe').read_bytes(), b'MZ python')
+
     def download_fixture(self, *, partial=False, wrong_digest=False, redirect=False, compact=False):
         data={}
         def handler(request):

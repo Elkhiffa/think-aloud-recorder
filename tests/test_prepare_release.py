@@ -152,6 +152,30 @@ class ReleasePreparationTests(unittest.TestCase):
         self.assertEqual(len(report['commit_binding']['files']), len(release.KEY_APPLICATION_FILES))
         self.assertEqual(report['version_binding']['version'], '1.2.3')
 
+    def app_update(self, values):
+        update = self.artifacts / ('ExperienceRecorder-' + self.version + '-windows-x64-app-update.zip')
+        if update.exists():
+            update.unlink()
+        self.write_zip(update, values)
+        (self.artifacts / self.names[2]).write_text(''.join(release.sha256(self.artifacts / name) + '  ' + name + '\n'
+            for name in (*self.names[:2], update.name)), encoding='utf-8')
+        return update
+
+    def test_app_update_package_must_rebuild_the_full_package(self):
+        """触发路径：发布时附上只含变化文件的程序更新包 → 预检用它和完整包拼回一套，必须逐文件一致，且写进校验文件。"""
+        self.make()
+        with zipfile.ZipFile(self.artifacts / self.names[0]) as archive:
+            values = {name: archive.read(name) for name in ('portable.json', 'package-manifest.json', 'app.py')}
+        update = self.app_update(values)
+        report = self.run_preflight()
+        self.assertEqual(report['status'], 'ready_for_draft_review', report['blockers'])
+        self.assertEqual(report['app_update']['files'], 3)
+        self.assertIn(update.name, {item['name'] for item in report['artifacts']})
+        values['app.py'] = b'# tampered'
+        self.app_update(values)
+        self.out = self.out.with_name(self.out.name + '-tampered')
+        self.assert_blocked(self.run_preflight(), 'app_update_rebuilds_full_package')
+
     def test_compact_package_keeps_commit_and_runtime_seed_binding(self):
         self.make()
         binary = self.artifacts / self.names[0]

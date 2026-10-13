@@ -16,7 +16,7 @@ import uuid
 
 import httpx
 from app_paths import application_root, installation_root, metadata_path
-from update_installer import (UpdateError, MAX_ARCHIVE, acknowledge_start, atomic_json, build_plan,
+from update_installer import (UpdateError, MAX_ARCHIVE, acknowledge_start, assemble_package, atomic_json, build_plan,
                               child, extract_package, read_json, reject_reparse, self_check, sha256,
                               write_recovery_entry)
 
@@ -81,26 +81,34 @@ def valid_url(url, *, api=False, initial=False):
     return not initial and parsed.hostname in CDN_HOSTS
 
 
-def release_assets(release, version):
-    base='ExperienceRecorder-'+version+'-windows-x64'
-    expected=(base+'.zip',base+'-SHA256SUMS.txt')
+def _release_asset(release, name):
     assets=release.get('assets')
     if not isinstance(assets,list):raise UpdateError('该 Release 尚未提供完整的 Windows 软件包。')
-    result={}
-    for name in expected:
-        matching=[a for a in assets if isinstance(a,dict) and a.get('name')==name and a.get('state')=='uploaded']
-        if len(matching)!=1:raise UpdateError('该 Release 尚未提供完整的软件包和校验文件。')
-        item=matching[0]; url=item.get('browser_download_url',''); size=item.get('size')
-        path='/'+REPOSITORY+'/releases/download/'+quote(release['tag_name'],safe='')+'/'+quote(name,safe='')
-        if not valid_url(url,initial=True) or urlsplit(url).path!=path or urlsplit(url).query:
-            raise UpdateError('发布文件地址不属于本项目的官方 GitHub Release。')
-        limit=MAX_ARCHIVE if name.endswith('.zip') else 1024**2
-        if type(size) is not int or not 0<size<=limit:raise UpdateError('发布文件大小无效。')
-        digest=item.get('digest')
-        if digest is not None and (not isinstance(digest,str) or not re.fullmatch('sha256:[0-9a-f]{64}',digest)):
-            raise UpdateError('GitHub 文件校验值无效。')
-        result[name]=dict(name=name,url=url,size=size,digest=digest[7:] if digest else None)
-    return tuple(result[name] for name in expected)
+    matching=[a for a in assets if isinstance(a,dict) and a.get('name')==name and a.get('state')=='uploaded']
+    if len(matching)!=1:raise UpdateError('该 Release 尚未提供完整的软件包和校验文件。')
+    item=matching[0]; url=item.get('browser_download_url',''); size=item.get('size')
+    path='/'+REPOSITORY+'/releases/download/'+quote(release['tag_name'],safe='')+'/'+quote(name,safe='')
+    if not valid_url(url,initial=True) or urlsplit(url).path!=path or urlsplit(url).query:
+        raise UpdateError('发布文件地址不属于本项目的官方 GitHub Release。')
+    limit=MAX_ARCHIVE if name.endswith('.zip') else 1024**2
+    if type(size) is not int or not 0<size<=limit:raise UpdateError('发布文件大小无效。')
+    digest=item.get('digest')
+    if digest is not None and (not isinstance(digest,str) or not re.fullmatch('sha256:[0-9a-f]{64}',digest)):
+        raise UpdateError('GitHub 文件校验值无效。')
+    return dict(name=name,url=url,size=size,digest=digest[7:] if digest else None)
+
+
+def release_assets(release, version):
+    base='ExperienceRecorder-'+version+'-windows-x64'
+    return tuple(_release_asset(release,name) for name in (base+'.zip',base+'-SHA256SUMS.txt'))
+
+
+def app_update_asset(release, version):
+    """Optional changed-files package; any problem means the full package is used."""
+    name='ExperienceRecorder-'+version+'-windows-x64-app-update.zip'
+    if not any(isinstance(a,dict) and a.get('name')==name for a in release.get('assets') or []):return None
+    try:return _release_asset(release,name)
+    except UpdateError:return None
 
 
 class Cancelled(Exception):pass
@@ -121,6 +129,7 @@ class UpdateManager:
                          downloaded_bytes=0,total_bytes=0,error=None,include_prerelease=False)
         self._lock=threading.RLock();self._cancel=threading.Event();self._thread=None
         self._release=self._assets=self._work=self._stage=None
+        self._update_asset=None
         self._preparing=False
         self._prepared=None
         self._installer=None
@@ -212,6 +221,7 @@ class UpdateManager:
         if type(include_prerelease) is not bool:raise UpdateError('预览版本选项无效。')
         def operation():
             self._release=self._assets=self._work=self._stage=None
+            self._update_asset=None
             self._set(include_prerelease=include_prerelease,latest_version=None,release_url=None,notes='',downloaded_bytes=0,total_bytes=0)
             try:current=SemVer(self._state['current_version'])
             except ValueError:raise UpdateError('无法识别当前版本，请使用完整软件包。') from None
@@ -234,36 +244,55 @@ class UpdateManager:
             if semantic<=current:self._set(state='current');return
             assets=release_assets(release,version)
             self._release,self._assets=release,assets
-            self._set(state='available',total_bytes=assets[0]['size'])
+            self._update_asset=app_update_asset(release,version)
+            self._set(state='available',total_bytes=(self._update_asset or assets[0])['size'])
         return self._launch('checking',operation)
 
     def download(self):
         if not self._release or not self._assets:raise UpdateError('请先检查并选择可用更新。')
         release,assets=deepcopy(self._release),deepcopy(self._assets)
+        update=deepcopy(self._update_asset)
         def operation():
             base=self.install_root.parent/'.think-aloud-updates'/hashlib.sha256(str(self.install_root).casefold().encode()).hexdigest()[:16]
             reject_reparse(base);work=base/uuid.uuid4().hex;work.mkdir(parents=True)
             if shutil.disk_usage(work).free < assets[0]['size']+32*1024**2:
                 raise UpdateError('磁盘空间不足以下载更新包。')
-            self._set(downloaded_bytes=0,total_bytes=assets[0]['size'])
             software,sums=assets
+            version,_=tag_version(release['tag_name'])
             with self.client_factory() as client:
                 digest,text=self._receive(client,sums['url'],1024**2,expected=sums['size'])
                 if sums['digest'] and sums['digest']!=digest:raise UpdateError('GitHub 校验文件摘要不匹配。')
-                matches=[]
+                listed={}
                 try:
                     for line in text.decode('utf-8').splitlines():
                         match=re.fullmatch(r'([0-9a-fA-F]{64})[ \t]+\*?([^/\\]+)',line)
-                        if match and match[2]==software['name']:matches.append(match[1].lower())
+                        if match:listed.setdefault(match[2],[]).append(match[1].lower())
                 except UnicodeError:raise UpdateError('发布校验文件编码无效。') from None
+                matches=listed.get(software['name'],[])
                 if len(matches)!=1:raise UpdateError('发布校验文件未唯一列出所选软件包。')
                 if software['digest'] and software['digest']!=matches[0]:raise UpdateError('GitHub 摘要与发布校验文件不一致。')
+                stage=work/'package'
+                # Changed files only, when the release lists one and the installed files match the new manifest.
+                expected=listed.get(update['name'],[]) if update else []
+                if len(expected)==1 and (not update['digest'] or update['digest']==expected[0]):
+                    try:
+                        self._set(downloaded_bytes=0,total_bytes=update['size'])
+                        partial=work/'app-update.zip.partial'
+                        actual,_=self._receive(client,update['url'],MAX_ARCHIVE,expected=update['size'],target=partial,progress=True)
+                        if actual!=expected[0]:raise UpdateError('程序更新包校验失败。')
+                        self._check_cancel();archive=work/'app-update.zip';os.replace(partial,archive)
+                        assemble_package(archive,self.install_root,stage,expected_version=version,cancelled=self._cancel.is_set)
+                        self._check_cancel();self._work,self._stage=work,stage
+                        self._set(state='ready',error=None);return
+                    except Cancelled:raise
+                    except (UpdateError,OSError,httpx.HTTPError):
+                        # The full package below is verified independently; a partial stage is discarded.
+                        shutil.rmtree(stage,ignore_errors=True)
+                self._set(downloaded_bytes=0,total_bytes=software['size'])
                 partial=work/'package.zip.partial'
                 actual,_=self._receive(client,software['url'],MAX_ARCHIVE,expected=software['size'],target=partial,progress=True)
                 if actual!=matches[0]:raise UpdateError('更新包校验失败，安装目录未改变。')
             self._check_cancel();archive=work/'package.zip';os.replace(partial,archive)
-            stage=work/'package'
-            version,_=tag_version(release['tag_name'])
             extract_package(archive,stage,expected_version=version,cancelled=self._cancel.is_set)
             self._check_cancel();self._work,self._stage=work,stage
             self._set(state='ready',error=None)

@@ -20,9 +20,9 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from update_installer import (HIDDEN, MAX_ARCHIVE, MAX_ENTRIES, MAX_EXPANDED,
                               MAX_FILE, MAX_MANIFEST, MAX_PORTABLE_METADATA,
-                              UpdateError, extract_package, reject_reparse,
+                              UpdateError, assemble_package, extract_package, reject_reparse,
                               safe_name, sha256)
-from updater import REPOSITORY, SemVer, release_assets, tag_version
+from updater import REPOSITORY, SemVer, app_update_asset, release_assets, tag_version
 from scripts.build_portable import ROOT_FILES
 from app_paths import application_root, installation_root, manifest_path
 from scripts.verify_runtime_seed import verify_runtime_seed
@@ -333,6 +333,11 @@ def prepare_release(*, tag, commit, artifacts, notes, outdir, runtime_evidence=N
                 report['version_binding'] = binding
         names, candidates = public_names(version), candidate_names(version)
         report['required_assets'] = list(names)
+        # Optional changed-files package for in-app updates; checked against the full package below.
+        update_name = 'ExperienceRecorder-' + version + '-windows-x64-app-update.zip'
+        update_path = artifacts / update_name if (artifacts / update_name).is_file() else None
+        if update_path:
+            report['optional_assets'] = [update_name]
         report['candidate_counterparts'] = [name for name in candidates if (artifacts / name).exists()]
 
         def inspect_inputs():
@@ -342,7 +347,7 @@ def prepare_release(*, tag, commit, artifacts, notes, outdir, runtime_evidence=N
             if missing:
                 raise ValueError('Missing exact public assets: ' + ', '.join(missing) +
                                  ('. Candidate counterparts exist and cannot be renamed or admitted.' if report['candidate_counterparts'] else ''))
-            for name in names:
+            for name in names + ((update_name,) if update_path else ()):
                 safe_file(artifacts / name, MAX_TEXT if name.endswith('.txt') else MAX_ARCHIVE)
             return True
 
@@ -362,18 +367,18 @@ def prepare_release(*, tag, commit, artifacts, notes, outdir, runtime_evidence=N
         if assets_present:
             def verify_checksums():
                 text = (artifacts / names[2]).read_text(encoding='utf-8')
-                expected, checksums = set(names[:2]), {}
+                expected, checksums = set(names[:2]) | ({update_name} if update_path else set()), {}
                 for line in text.splitlines():
                     if not line.strip():
                         continue
                     match = re.fullmatch(r'([0-9a-fA-F]{64})[ \t]+\*?([^/\\]+)', line)
                     if not match or match[2] not in expected or match[2] in checksums:
-                        raise ValueError('Checksums must uniquely list exactly the two public ZIP filenames.')
+                        raise ValueError('Checksums must uniquely list exactly the public ZIPs.')
                     checksums[match[2]] = match[1].lower()
                 if set(checksums) != expected:
-                    raise ValueError('Checksum file does not list both public ZIPs.')
+                    raise ValueError('Checksum file does not list every public ZIP.')
                 inventory = []
-                for name in names:
+                for name in names + ((update_name,) if update_path else ()):
                     path = artifacts / name
                     before = path.stat()
                     digest = sha256(path)
@@ -395,6 +400,8 @@ def prepare_release(*, tag, commit, artifacts, notes, outdir, runtime_evidence=N
                          'browser_download_url': 'https://github.com/' + REPOSITORY + '/releases/download/' +
                          quote(tag, safe='') + '/' + quote(item['name'], safe='')} for item in inventory]}
                     release_assets(release, version)
+                    if update_path and app_update_asset(release, version) is None:
+                        raise ValueError('The app update asset does not satisfy the updater contract.')
                     return True
                 check('updater_asset_contract', client_contract)
             source_result = check('dependency_source_integrity', lambda: verify_source_archive(artifacts / names[1]))
@@ -407,6 +414,18 @@ def prepare_release(*, tag, commit, artifacts, notes, outdir, runtime_evidence=N
                         raise ValueError('portable.json must explicitly name the fixed repository and update_protocol 1.')
                     return True
                 check('fixed_update_repository_protocol', package_metadata)
+                if update_path and inventory:
+                    def app_update():
+                        assembled = outdir / 'assembled-from-app-update'
+                        assemble_package(update_path, stage, assembled, expected_version=version)
+                        manifest = 'app/package-manifest.json' if (assembled / 'app').is_dir() else 'package-manifest.json'
+                        if sha256(assembled / manifest) != sha256(stage / manifest):
+                            raise ValueError('App update manifest differs from the full package manifest.')
+                        with zipfile.ZipFile(update_path) as archive:
+                            return {'files': len(archive.namelist()), 'bytes': update_path.stat().st_size}
+                    result = check('app_update_rebuilds_full_package', app_update)
+                    if result:
+                        report['app_update'] = result
                 packaged_sources = check('packaged_source_manifest', lambda: parse_json(
                     safe_file(application_root(stage) / 'dependency-source-manifest.json', MAX_MANIFEST).read_bytes()))
                 if source_result and packaged_sources is not None:

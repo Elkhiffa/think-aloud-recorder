@@ -169,6 +169,58 @@ def validate_metadata(metadata, manifest, expected_version=None, allow_candidate
         raise UpdateError('该软件包尚未通过公开分发检查，不能作为在线更新安装。')
 
 
+class BaseMismatch(UpdateError):
+    """Installed files cannot complete a changed-files update; the full package is needed."""
+
+
+def _open_package(archive, expected_version, allow_candidate):
+    """Entry, manifest and metadata checks shared by full and changed-files packages."""
+    infos = archive.infolist(); names, aliases = {}, set()
+    if len(infos) > MAX_ENTRIES + 1: raise UpdateError('更新包文件数量过多。')
+    for item in infos:
+        name = safe_name(item.filename)
+        mode = item.external_attr >> 16
+        if (item.is_dir() or item.flag_bits & 1 or stat.S_ISLNK(mode)
+                or (stat.S_IFMT(mode) not in (0, stat.S_IFREG))
+                or (item.external_attr & 0x400) or name.casefold() in aliases
+                or item.file_size > MAX_FILE or not managed_path(name)):
+            raise UpdateError('更新包含重复、链接、加密或受保护条目。')
+        aliases.add(name.casefold()); names[name] = item
+    manifests = [name for name in ('package-manifest.json', 'app/package-manifest.json') if name in names]
+    if len(manifests) != 1 or names[manifests[0]].file_size > MAX_MANIFEST:
+        raise UpdateError('更新包缺少有效清单。')
+    manifest_name = manifests[0]
+    manifest = json.loads(archive.read(manifest_name))
+    records = inventory(manifest)
+    layout = inventory_layout(records)
+    if manifest_name != layout_path('package-manifest.json', layout):
+        raise UpdateError('更新包清单位置与布局不一致。')
+    if sum(i.file_size for i in infos) > MAX_EXPANDED: raise UpdateError('更新包展开后过大。')
+    metadata_name = layout_path('portable.json', layout)
+    if metadata_name not in names: raise UpdateError('更新包缺少版本元数据。')
+    info, record = names[metadata_name], records[metadata_name]
+    if info.file_size > MAX_PORTABLE_METADATA or info.file_size != record['bytes']:
+        raise UpdateError('更新包版本元数据过大或长度不符。')
+    raw_metadata = archive.read(metadata_name)
+    if hashlib.sha256(raw_metadata).hexdigest() != record['sha256']:
+        raise UpdateError('更新包版本元数据校验失败。')
+    metadata = json.loads(raw_metadata)
+    validate_metadata(metadata, manifest, expected_version, allow_candidate)
+    return names, manifest_name, records, metadata
+
+
+def _write_verified(source, path, size, record, cancelled):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(); count = 0
+    with path.open('xb') as target:
+        for chunk in iter(lambda: source.read(1024**2), b''):
+            if cancelled(): raise UpdateError('已取消下载，安装目录未改变。')
+            count += len(chunk)
+            if count > size: raise UpdateError('更新包文件长度异常。')
+            digest.update(chunk); target.write(chunk)
+    return count == size and (record is None or (count == record['bytes'] and digest.hexdigest() == record['sha256']))
+
+
 def extract_package(archive_path, destination, *, expected_version=None, allow_candidate=False, cancelled=lambda: False):
     archive_path, destination = Path(archive_path), Path(destination)
     reject_reparse(archive_path); reject_reparse(destination)
@@ -176,56 +228,60 @@ def extract_package(archive_path, destination, *, expected_version=None, allow_c
     if destination.exists(): raise UpdateError('更新暂存目录已存在，请重新下载。')
     try:
         with zipfile.ZipFile(archive_path) as archive:
-            infos = archive.infolist(); names, aliases = {}, set()
-            if len(infos) > MAX_ENTRIES + 1: raise UpdateError('更新包文件数量过多。')
-            for item in infos:
-                name = safe_name(item.filename)
-                mode = item.external_attr >> 16
-                if (item.is_dir() or item.flag_bits & 1 or stat.S_ISLNK(mode)
-                        or (stat.S_IFMT(mode) not in (0, stat.S_IFREG))
-                        or (item.external_attr & 0x400) or name.casefold() in aliases
-                        or item.file_size > MAX_FILE or not managed_path(name)):
-                    raise UpdateError('更新包含重复、链接、加密或受保护条目。')
-                aliases.add(name.casefold()); names[name] = item
-            manifests = [name for name in ('package-manifest.json', 'app/package-manifest.json') if name in names]
-            if len(manifests) != 1 or names[manifests[0]].file_size > MAX_MANIFEST:
-                raise UpdateError('更新包缺少有效清单。')
-            manifest_name = manifests[0]
-            manifest = json.loads(archive.read(manifest_name))
-            records = inventory(manifest)
-            layout = inventory_layout(records)
-            if manifest_name != layout_path('package-manifest.json', layout):
-                raise UpdateError('更新包清单位置与布局不一致。')
+            names, manifest_name, records, metadata = _open_package(archive, expected_version, allow_candidate)
             if names.keys() != records.keys() | {manifest_name}: raise UpdateError('更新包内容与清单不一致。')
-            if sum(i.file_size for i in infos) > MAX_EXPANDED: raise UpdateError('更新包展开后过大。')
-            metadata_name = layout_path('portable.json', layout)
-            info, record = names[metadata_name], records[metadata_name]
-            if info.file_size > MAX_PORTABLE_METADATA or info.file_size != record['bytes']:
-                raise UpdateError('更新包版本元数据过大或长度不符。')
-            raw_metadata = archive.read(metadata_name)
-            if hashlib.sha256(raw_metadata).hexdigest() != record['sha256']:
-                raise UpdateError('更新包版本元数据校验失败。')
-            metadata = json.loads(raw_metadata)
-            validate_metadata(metadata, manifest, expected_version, allow_candidate)
-            if shutil.disk_usage(destination.parent).free < sum(i.file_size for i in infos) + 16*1024**2:
+            if shutil.disk_usage(destination.parent).free < sum(i.file_size for i in names.values()) + 16*1024**2:
                 raise UpdateError('磁盘空间不足以展开更新包。')
             destination.mkdir(parents=True)
             for name, item in names.items():
                 if cancelled(): raise UpdateError('已取消下载，安装目录未改变。')
-                path = child(destination, name); path.parent.mkdir(parents=True, exist_ok=True)
-                digest = hashlib.sha256(); count = 0
-                with archive.open(item) as source, path.open('xb') as target:
-                    for chunk in iter(lambda: source.read(1024**2), b''):
-                        if cancelled(): raise UpdateError('已取消下载，安装目录未改变。')
-                        count += len(chunk)
-                        if count > item.file_size: raise UpdateError('更新包文件长度异常。')
-                        digest.update(chunk); target.write(chunk)
-                record = records.get(name)
-                if count != item.file_size or (record and (count != record['bytes'] or digest.hexdigest() != record['sha256'])):
-                    raise UpdateError('更新包文件校验失败，安装目录未改变。')
+                with archive.open(item) as source:
+                    if not _write_verified(source, child(destination, name), item.file_size, records.get(name), cancelled):
+                        raise UpdateError('更新包文件校验失败，安装目录未改变。')
             return metadata
     except (zipfile.BadZipFile, ValueError, KeyError, UnicodeError):
         raise UpdateError('更新包损坏或格式无效。') from None
+
+
+def assemble_package(update_path, install_root, destination, *, expected_version=None, cancelled=lambda: False):
+    """Rebuild the full public package from a changed-files archive plus unchanged installed files.
+
+    Every file is verified against the archive's complete new manifest. A missing
+    or modified installed file raises BaseMismatch so the caller downloads the
+    full package instead; the installation is only read.
+    """
+    update_path, destination = Path(update_path), Path(destination)
+    reject_reparse(update_path); reject_reparse(destination)
+    install_root = installation_root(install_root)
+    if update_path.stat().st_size > MAX_ARCHIVE: raise UpdateError('程序更新包过大。')
+    if destination.exists(): raise UpdateError('更新暂存目录已存在，请重新下载。')
+    try:
+        with zipfile.ZipFile(update_path) as archive:
+            names, manifest_name, records, metadata = _open_package(archive, expected_version, False)
+            if not names.keys() <= records.keys() | {manifest_name}:
+                raise UpdateError('程序更新包含有清单之外的文件。')
+            if shutil.disk_usage(destination.parent).free < sum(r['bytes'] for r in records.values()) + 16*1024**2:
+                raise UpdateError('磁盘空间不足以展开更新包。')
+            destination.mkdir(parents=True)
+            for name, record in records.items():
+                if cancelled(): raise UpdateError('已取消下载，安装目录未改变。')
+                target = child(destination, name)
+                if name in names:
+                    with archive.open(names[name]) as source:
+                        if not _write_verified(source, target, names[name].file_size, record, cancelled):
+                            raise UpdateError('程序更新包文件校验失败，安装目录未改变。')
+                    continue
+                installed = child(install_root, name)
+                if not installed.is_file() or installed.stat().st_size != record['bytes']:
+                    raise BaseMismatch('本机软件文件与新版本基础不一致：' + name)
+                with installed.open('rb') as source:
+                    if not _write_verified(source, target, record['bytes'], record, cancelled):
+                        raise BaseMismatch('本机软件文件与新版本基础不一致：' + name)
+            with archive.open(names[manifest_name]) as source:
+                _write_verified(source, child(destination, manifest_name), names[manifest_name].file_size, None, cancelled)
+            return metadata
+    except (zipfile.BadZipFile, ValueError, KeyError, UnicodeError):
+        raise UpdateError('程序更新包损坏或格式无效。') from None
 
 
 def verified_inventory(root):

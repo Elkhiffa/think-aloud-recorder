@@ -20,7 +20,7 @@ import zipfile
 # protocol, rather than a neighbouring seed's application modules.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from updater import SemVer
-from app_paths import application_root, installation_root
+from app_paths import application_root, installation_root, manifest_path
 from media_runtime import MEDIA_DIRECTORY, verify_media
 from scripts.verify_runtime_seed import verify_runtime_seed
 from scripts.brand_launcher import branded_stub
@@ -209,7 +209,7 @@ def read_sources(source_dir, candidate):
     return manifest, entries
 
 
-def write_zip(path, entries):
+def write_zip(path, entries, *, subset=False):
     if path.exists() or path.with_suffix(path.suffix + '.partial').exists():
         raise FileExistsError('Output exists; select a new output directory: ' + str(path))
     partial = path.with_suffix(path.suffix + '.partial')
@@ -234,9 +234,12 @@ def write_zip(path, entries):
         manifest_name = next((name for name in ('app/package-manifest.json', 'package-manifest.json') if name in archive.namelist()), None)
         if manifest_name:
             inventory = json.loads(archive.read(manifest_name))['files']
-            if set(archive.namelist()) != {item['path'] for item in inventory} | {manifest_name}:
+            listed = {item['path'] for item in inventory} | {manifest_name}
+            if (not set(archive.namelist()) <= listed) if subset else set(archive.namelist()) != listed:
                 raise ValueError('ZIP entries differ from package manifest')
             for item in inventory:
+                if subset and item['path'] not in archive.namelist():
+                    continue
                 digest = hashlib.sha256()
                 with archive.open(item['path']) as source:
                     for block in iter(lambda: source.read(1024 * 1024), b''):
@@ -245,6 +248,24 @@ def write_zip(path, entries):
                     raise ValueError('Package changed since inventory: ' + item['path'])
     partial.rename(path)
     return {'filename': path.name, 'bytes': path.stat().st_size, 'sha256': sha256(path)}
+
+
+def write_app_update(stage, base_manifest, path):
+    """Changed-files package for in-app updates; the release still ships the full package.
+
+    Holds the complete new manifest plus every file whose bytes differ from the
+    base release. The updater fills in the rest from the installation after
+    verifying each file, and falls back to the full package on any mismatch.
+    """
+    stage = Path(stage)
+    manifest = manifest_path(stage)
+    records = json.loads(manifest.read_text(encoding='utf-8'))['files']
+    base = {item['path']: item['sha256'] for item in json.loads(Path(base_manifest).read_text(encoding='utf-8'))['files']}
+    # The bundled vocabulary may be user-edited in place, so its package copy always travels.
+    entries = {item['path']: stage / item['path'] for item in records
+               if base.get(item['path']) != item['sha256'] or item['path'] == 'vocabularies/uiux-terms.txt'}
+    entries[manifest.relative_to(stage).as_posix()] = manifest
+    return write_zip(Path(path), entries, subset=True)
 
 
 def build(root, outdir, source_dir=None, *, candidate=False, version=None, launcher=None):

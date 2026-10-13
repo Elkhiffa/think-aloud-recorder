@@ -52,6 +52,36 @@ class InstallerTests(unittest.TestCase):
         self.stage=fixture(self.base/'stage','1.1.0', {'app.py':b'new code','updater.py':b'new module'})
         self.work=self.base/'transaction'; self.work.mkdir()
 
+    def update_zip(self, extra=None):
+        skip = ('runtime/python.exe', 'runtime/pythonw.exe', 'ExperienceRecorder.exe', 'portable_entry.py', 'ui/index.html')
+        path = self.base/'app-update.zip'
+        if path.exists(): path.unlink()
+        with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
+            for item in self.stage.rglob('*'):
+                name = item.relative_to(self.stage).as_posix()
+                if item.is_file() and name not in skip: archive.write(item, name)
+            for name, content in (extra or {}).items(): archive.writestr(name, content)
+        return path
+
+    def test_app_update_rebuilds_full_stage_from_installed_files(self):
+        """触发路径：新版只改了程序文件 → 只下变化文件，其余从本机安装目录补齐，暂存结果与完整包逐文件一致，安装目录只读。"""
+        from update_installer import assemble_package, verified_inventory
+        dest = self.base/'assembled'
+        assemble_package(self.update_zip(), self.root, dest, expected_version='1.1.0')
+        self.assertEqual(verified_inventory(dest), verified_inventory(self.stage))
+        self.assertEqual((dest/'runtime/python.exe').read_bytes(), b'MZ python')
+        self.assertEqual((dest/'app.py').read_bytes(), b'new code')
+        self.assertEqual((self.root/'app.py').read_bytes(), b'old code')
+
+    def test_app_update_falls_back_when_installed_base_differs(self):
+        """触发路径：本机运行环境文件被改过，或小包里夹带清单外的文件 → 拒绝拼装，交给更新器改下完整包。"""
+        from update_installer import BaseMismatch, assemble_package
+        with self.assertRaisesRegex(UpdateError, '清单之外'):
+            assemble_package(self.update_zip({'extra.py': b'x'}), self.root, self.base/'assembled-extra', expected_version='1.1.0')
+        (self.root/'runtime/python.exe').write_bytes(b'MZ modified')
+        with self.assertRaises(BaseMismatch):
+            assemble_package(self.update_zip(), self.root, self.base/'assembled', expected_version='1.1.0')
+
     def zip(self, extra=None):
         path=self.base/'download.zip'
         with zipfile.ZipFile(path,'w',zipfile.ZIP_DEFLATED) as archive:
