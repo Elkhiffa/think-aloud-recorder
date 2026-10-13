@@ -12,7 +12,7 @@ MAX_REPORT = 1024 * 1024
 # 报告引用：[0924 i72](i:<场次 id>/i72#TA-04.5) 指向实例，可选写明出自哪个子议题；[TA-04.5](issue:TA-04.5) 指向议题。
 CITATION = re.compile(r'\[([^\]\n]{1,80})\]\((i|issue):([^)\s#]+)(?:#([^)\s]+))?\)')
 # 记录者报缺陷的说法：明说 bug、归到程序本身、跑测常用的表现词。逐字稿里很少用于设计评价。
-BUG_WORD = re.compile('bug|cocos|引擎|报错|闪退|重叠|裁切|适配|歪了|偏了', re.IGNORECASE)
+BUG_WORD = re.compile('bug|cocos|引擎|报错|闪退|重叠|裁切|适配|歪了|偏了|偶现|不显示|没显示', re.IGNORECASE)
 
 
 def _report_path(vault, name):
