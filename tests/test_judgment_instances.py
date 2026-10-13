@@ -87,6 +87,15 @@ class JudgmentInstanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '不能晚于说出口'):
             agent.validate_result(self.folder, candidate)
 
+    def test_operation_cost_is_its_own_kind(self):
+        """触发路径：记录者说“这个好麻烦”“又要退出再进” → agent 记为操作成本，跨场次能把“能做但费劲”和“做不到”分开查。"""
+        candidate = self.candidate()
+        candidate['instances'][0]['kind'] = 'cost'
+        self.assertEqual(agent.validate_result(self.folder, candidate)['instances'][0]['kind'], 'cost')
+        candidate['instances'][0]['kind'] = 'tedious'
+        with self.assertRaisesRegex(ValueError, '类型无效'):
+            agent.validate_result(self.folder, candidate)
+
     def test_unknown_issue_tag_is_rejected(self):
         """触发路径：agent 自造一个不在 issues.json 里的标签 → 按议题筛选时这条实例永远查不到。"""
         candidate = self.candidate()

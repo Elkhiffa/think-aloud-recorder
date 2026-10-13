@@ -794,7 +794,7 @@
       const jump=(time,label,cls='event-jump')=>`<button class="${cls}" data-event-time="${time}" title="定位原始录像">${escape(label)}</button>`;
       const basis={explicit:'你明确说出的体验',observed:'从画面与操作整理',inferred:'待核实的推测'},kind={friction:'遇到阻碍',positive:'顺畅体验',routine:'正常过程',question:'疑问'};
       const content=event=>{const parts=String(event.summary||'').split(/(?:^|\n)\s*备注[：:]\s*/),notes=[...parts.slice(1),event.notes].filter(Boolean).join('\n');return `<p class="event-description">${escape(parts[0])}</p>${event.context?`<p class="event-context">上下文：${escape(event.context)}</p>`:''}${event.issue?`<div class="event-issue"><strong>问题与感受</strong><p>${escape(event.issue)}</p></div>`:''}${notes?`<p class="event-notes">备注：${escape(notes)}</p>`:''}`;};
-      const judgmentKind={confusion:'困惑',obstacle:'阻碍',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
+      const judgmentKind={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
       const judgments=event=>(result.instances||[]).filter(item=>item.event_id===event.id).map(item=>{
         const said=Math.min(...item.said.map(ref=>ref.start)),refers=item.refers_to;
         const referred=refers.basis==='earlier_session'?`<span title="${escape(refers.note||'')}">指 本场之前</span>`:jump(refers.start,`指 ${formatTime(refers.start)}–${formatTime(refers.end)}`),compared=item.compare_to?jump(item.compare_to.start,`对照 ${formatTime(item.compare_to.start)}`):'';

@@ -163,7 +163,7 @@ def main(argv=None):
     instances_query.add_argument('--issue', action='append')
     instances_query.add_argument('--screen')
     instances_query.add_argument('--element')
-    instances_query.add_argument('--kind', choices=('confusion', 'obstacle', 'positive', 'negative', 'expectation', 'suggestion', 'self_correction', 'observation'))
+    instances_query.add_argument('--kind', choices=('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion', 'self_correction', 'observation'))
     instances_query.add_argument('--session')
     insight_validate = commands.add_parser('insight-validate', help='核对资料库洞察报告里的实例和议题引用')
     insight_validate.add_argument('vault')

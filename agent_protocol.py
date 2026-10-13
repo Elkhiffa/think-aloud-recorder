@@ -618,7 +618,7 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 raise ValueError('判断实例的 elements 必须是画面文字列表。')
             if not isinstance(tags, list) or any(not isinstance(tag, str) or tag not in issues for tag in tags):
                 raise ValueError('判断实例引用的议题标签不存在。')
-            if row.get('kind') not in ('confusion', 'obstacle', 'positive', 'negative', 'expectation', 'suggestion',
+            if row.get('kind') not in ('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion',
                                        'self_correction', 'observation'):
                 raise ValueError('判断实例类型无效。')
             if row.get('confidence') not in ('high', 'medium', 'low'):
