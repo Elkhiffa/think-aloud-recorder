@@ -42,11 +42,11 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .tree-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 24px}
 .kind-bar{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-left:8px}
 .kind-bar .kind-chip{font-size:13px;padding:1px 9px}
-.issue{border-top:1px solid var(--line);padding:12px 0}
+.issue{padding:10px 0}
 .issue,.group{scroll-margin-top:calc(var(--head,0px) + 8px)}
 .level-2{scroll-margin-top:calc(var(--head,0px) + var(--r1,0px) + 4px)}
 .level-3{scroll-margin-top:calc(var(--head,0px) + var(--r1,0px) + var(--r2,0px) + 4px)}
-.group{margin:8px 0 0 16px;padding-left:12px;border-left:2px solid var(--line)}
+.group{margin:6px 0 0 16px;padding-left:12px}
 .toggle{display:flex;width:100%;text-align:left;gap:8px;align-items:baseline;border:0;padding:4px 0;background:none;font-weight:400;color:var(--ink)}
 .toggle:hover{background:none;color:var(--accent)}
 .toggle::before{content:"▸";flex:none;color:var(--muted);transition:transform .12s}
