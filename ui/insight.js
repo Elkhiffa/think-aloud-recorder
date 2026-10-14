@@ -24,11 +24,18 @@
 
   // Thumbnails decode video frames natively; load lazily, two at a time.
   const thumbQueue=[];let thumbActive=0;
-  const thumbObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){thumbObserver.unobserve(entry.target);thumbQueue.push(entry.target);pumpThumbs();}},{rootMargin:'400px'});
+  // Decoded frames are kept per session and time, so re-rendering after a filter shows covers at once.
+  const thumbCache=new Map(),thumbKey=node=>node.dataset.session+'@'+node.dataset.time;
+  function showThumb(node,src){const img=document.createElement('img');img.alt='所指时刻画面';img.src=src;node.replaceChildren(img);}
+  const thumbObserver=new IntersectionObserver(entries=>{for(const entry of entries)if(entry.isIntersecting){thumbObserver.unobserve(entry.target);
+    const cached=thumbCache.get(thumbKey(entry.target));cached?showThumb(entry.target,cached):(thumbQueue.push(entry.target),pumpThumbs());}},{rootMargin:'400px'});
   function pumpThumbs(){
     while(thumbActive<2&&thumbQueue.length){
-      const button=thumbQueue.shift();thumbActive++;
-      call('thumbnail',button.dataset.session,Number(button.dataset.time)).then(src=>{const img=document.createElement('img');img.alt='所指时刻画面';img.src=src;button.replaceChildren(img);}).catch(()=>{button.textContent='无画面';}).finally(()=>{thumbActive--;pumpThumbs();});
+      const button=thumbQueue.shift();
+      if(!button.isConnected)continue;
+      const cached=thumbCache.get(thumbKey(button));if(cached){showThumb(button,cached);continue;}
+      thumbActive++;
+      call('thumbnail',button.dataset.session,Number(button.dataset.time)).then(src=>{thumbCache.set(thumbKey(button),src);showThumb(button,src);}).catch(()=>{button.textContent='无画面';}).finally(()=>{thumbActive--;pumpThumbs();});
     }
   }
   function thumb(session,time,caption){
