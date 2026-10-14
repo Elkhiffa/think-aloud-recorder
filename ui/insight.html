@@ -18,13 +18,14 @@
 <main class="split">
   <div class="left-col">
   <article id="report" class="pane report" tabindex="0" aria-label="分析报告"><p class="empty">正在读取…</p></article>
-  <section id="library" class="pane library" role="tabpanel" aria-labelledby="tabLibrary" tabindex="0" hidden></section>
+  <section id="library" class="pane library" role="tabpanel" aria-labelledby="tabLibrary" tabindex="0" hidden><div id="libraryList"></div><nav id="libNext" class="next-bar" aria-label="下一个分类" hidden></nav></section>
   </div>
   <section id="evidencePane" class="pane evidence" role="tabpanel" aria-labelledby="tabEvidence" tabindex="0">
     <div class="evidence-head">
     <div class="tree-bar">
       <button type="button" id="expandAll">全部展开</button>
       <button type="button" id="collapseAll">全部收起</button>
+      <div id="kindBar" class="kind-bar" role="group" aria-label="按判断类型筛选"></div>
     </div>
     <div id="filterBar" class="filter-bar" hidden></div>
     </div>

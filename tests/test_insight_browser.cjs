@@ -9,8 +9,9 @@ const row=(session,id,extra={})=>Object.assign({session_id:session,instance_id:i
 const instances=[row(S1,'i1',{statement:'清完提示后忘了目标 <img src=x>'}),row(S1,'i6',{refers_start:2,refers_end:300,said_start:600}),row(S2,'i1'),row(S2,'i2',{refers_basis:'earlier_session',refers_start:null,refers_end:null}),row(S1,'i3'),row(S2,'i9'),row(S2,'i5',{statement:'教学弹窗左半边多了一层灰色'}),row(S2,'i7',{statement:'染色方案存不下来',kind:'obstacle'})];
 const link=(session,id,reason='合成理由')=>({session_id:session,instance_id:id,reason});
 const overview={vault:'合成资料库',reports:[{name:'r.md',modified:1,bytes:10}],feedback:[],
-  tag_groups:[{id:'play',name:'活动 / 玩法'},{id:'system',name:'系统'}],
-  tags:[{id:'jhy',name:'江湖弈',group:'play',keywords:['江湖弈']},{id:'wll',name:'武林录',group:'play',keywords:[]},{id:'shop',name:'商店',group:'system',keywords:['商店']}],
+  tag_groups:[{id:'cross',name:'跨系统'},{id:'play',name:'活动 / 玩法'},{id:'system',name:'系统'}],
+  tags:[{id:'jhy',name:'江湖弈',group:'play',keywords:['江湖弈']},{id:'wll',name:'武林录',group:'play',keywords:[]},{id:'shop',name:'商店',group:'system',keywords:['商店']},
+    ...Array.from({length:60},(_,i)=>({id:'x'+i,name:'跨系统评价'+i,group:'cross',keywords:[]}))],
   instance_tags:{[S1+'/i1']:['jhy'],[S2+'/i7']:['jhy'],[S1+'/i3']:['wll'],[S2+'/i1']:['shop']},session_labels:{[S1]:'1008',[S2]:'1009'},instances,
   issues:[{id:'TA-01',title:'目标明确仍有摩擦',description:'合成议题',status:'confirmed',support:[link(S2,'i2')],counter:[],children:[
      {id:'TA-07',parent:'TA-01',title:'外观染色中的断点',description:'中间议题',status:'confirmed',support:[],counter:[],children:[
@@ -163,7 +164,7 @@ async function main(){
   await check('screen library: tag cards filter the tree, kind chips stack, filters clear',async()=>{
     await page.locator('#tabEvidence').click();await page.locator('#tabLibrary').click();
     assert.equal(await page.locator('#report').isHidden(),true);
-    assert.deepEqual(await page.locator('.lib-toggle>span:first-child').allTextContents(),['活动 / 玩法','系统']);
+    assert.deepEqual(await page.locator('.lib-toggle>span:first-child').allTextContents(),['跨系统','活动 / 玩法','系统']);
     assert.deepEqual(await page.locator('#lib-play .tag-name').allTextContents(),['江湖弈','武林录']);
     assert.equal(await page.locator('#lib-play .tag-card[data-tag="jhy"] .n').textContent(),'2');
     const coverBox=await page.locator('.tag-card[data-tag="jhy"] .cover').boundingBox(),nameBox=await page.locator('.tag-card[data-tag="jhy"] .tag-name').boundingBox();
@@ -174,12 +175,34 @@ async function main(){
     assert.deepEqual(await page.locator('#evidenceList .card').evaluateAll(cards=>cards.map(card=>card.dataset.key).sort()),[S1+'/i1',S2+'/i7'].sort());
     await page.locator('#issue-TA-01 .kinds [data-kind="obstacle"]').first().click();
     assert.deepEqual(await page.locator('#evidenceList .card').evaluateAll(cards=>cards.map(card=>card.dataset.key)),[S2+'/i7']);
-    assert.match(await page.locator('#filterBar').textContent(),/阻碍 ×/);
+    assert.equal(await page.locator('#kindBar [data-kind="obstacle"]').getAttribute('aria-pressed'),'true');
     await page.locator('.tag-card[data-tag="wll"]').click();
     assert.equal(await page.locator('#issue-BUG').count(),0,'kind filter still applies to the union of tags');
     await page.locator('[data-clear-all]').click();
     assert.equal(await page.locator('#filterBar').isHidden(),true);
     assert.equal(await page.locator('#issue-BUG').count(),1);
+  });
+  await check('the kind bar beside expand/collapse lists every kind with counts, multi-selects and clears',async()=>{
+    await page.locator('#tabEvidence').click();
+    assert.deepEqual(await page.locator('#kindBar .kind-chip').allTextContents(),['困惑 6','阻碍 1']);
+    await page.locator('#kindBar [data-kind="confusion"]').click();await page.locator('#kindBar [data-kind="obstacle"]').click();
+    assert.equal(await page.locator('#kindBar .kind-chip.active').count(),2);
+    assert.equal(await page.locator('#filterBar').isHidden(),true,'kinds live in the kind bar, not the tag filter line');
+    await page.locator('#kindBar [data-kind="confusion"]').click();
+    assert.deepEqual(await page.locator('#evidenceList .card').evaluateAll(cards=>[...new Set(cards.map(card=>card.dataset.key))]),[S2+'/i7']);
+    await page.locator('[data-clear-kinds]').click();
+    assert.equal(await page.locator('#kindBar .kind-chip.active').count(),0);
+  });
+  await check('screen library: the current dimension sticks on top and the next one waits at the bottom',async()=>{
+    await page.locator('#tabLibrary').click();await page.locator('#library').evaluate(pane=>pane.scrollTop=0);await page.waitForTimeout(100);
+    await page.waitForFunction(()=>!document.querySelector('#libNext').hidden);
+    assert.match(await page.locator('#libNext').textContent(),/活动 \/ 玩法/);
+    await page.locator('#library').evaluate(pane=>pane.scrollTop=300);await page.waitForTimeout(150);
+    const top=(await page.locator('#library').boundingBox()).y,head=await page.locator('#libgroup-cross>.lib-toggle').boundingBox();
+    assert.ok(Math.abs(head.y-top)<=2,'current dimension heading sticks to the top');
+    await page.locator('#libNext [data-lib-next]').click();await page.waitForTimeout(700);
+    const next=await page.locator('#libgroup-play>.lib-toggle').boundingBox();assert.ok(next.y>=top-2&&next.y<top+600,'next dimension is brought into view');
+    await page.locator('#library').evaluate(pane=>pane.scrollTop=0);
   });
   await check('right-click an evidence card sets the cover of its tag; citations clear filters to land',async()=>{
     await page.locator('#expandAll').click();

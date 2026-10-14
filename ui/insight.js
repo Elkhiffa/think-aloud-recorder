@@ -164,13 +164,24 @@
     return '<p class="kinds">'+found.map(([kind,n])=>`<button type="button" class="kind-chip kind-${escape(kind)}${state.filters.kinds.has(kind)?' active':''}" data-kind="${escape(kind)}" aria-pressed="${state.filters.kinds.has(kind)}">${escape(KIND[kind]||kind)} ${n}</button>`).join('')+'</p>';
   }
   const tagName=id=>state.tags.find(tag=>tag.id===id)?.name||id;
+  function renderKindBar(){
+    const found=new Map(),seen=new Set();
+    const walk=node=>{for(const link of node.support.concat(node.counter)){const k=key(link.session_id,link.instance_id);
+      if(seen.has(k))continue;seen.add(k);
+      const row=state.instances.get(k);if(!row)continue;
+      if(state.filters.tags.size&&!(state.instanceTags[k]||[]).some(tag=>state.filters.tags.has(tag)))continue;
+      found.set(row.kind,(found.get(row.kind)||0)+1);}node.children.forEach(walk);};
+    state.overview.issues.forEach(walk);
+    const kinds=Object.keys(KIND).filter(kind=>found.has(kind)||state.filters.kinds.has(kind));
+    $('kindBar').innerHTML=kinds.map(kind=>`<button type="button" class="kind-chip kind-${kind}${state.filters.kinds.has(kind)?' active':''}" data-kind="${kind}" aria-pressed="${state.filters.kinds.has(kind)}">${escape(KIND[kind])} ${found.get(kind)||0}</button>`).join('')+
+      (state.filters.kinds.size?'<button type="button" class="filter-clear" data-clear-kinds>清除类型</button>':'');
+  }
   function renderFilterBar(){
-    const chips=[...[...state.filters.tags].map(id=>`<button type="button" class="filter-chip" data-clear-tag="${escape(id)}" title="取消这个筛选">${escape(tagName(id))} ×</button>`),
-      ...[...state.filters.kinds].map(kind=>`<button type="button" class="filter-chip" data-clear-kind="${escape(kind)}" title="取消这个筛选">${escape(KIND[kind]||kind)} ×</button>`)];
+    const chips=[...state.filters.tags].map(id=>`<button type="button" class="filter-chip" data-clear-tag="${escape(id)}" title="取消这个筛选">${escape(tagName(id))} ×</button>`);
     $('filterBar').hidden=!chips.length;
     $('filterBar').innerHTML=chips.length?`<span class="hint">正在看：</span>${chips.join('')}<button type="button" class="filter-clear" data-clear-all>清除全部</button>`:'';
   }
-  function applyFilters(){renderFilterBar();renderEvidence();renderLibrary();}
+  function applyFilters(){renderKindBar();renderFilterBar();renderEvidence();renderLibrary();}
   function renderEvidence(){
     state.issues=new Map();
     const index=node=>{state.issues.set(node.id,node);node.children.forEach(index);};state.overview.issues.forEach(index);
@@ -192,7 +203,8 @@
     for(const level of [1,2,3]){const row=document.querySelector(`#evidenceList .level-${level}>.row`);if(row?.offsetHeight)pane.style.setProperty('--r'+level,row.offsetHeight+'px');}
   }
   const sections=(parent,level)=>[...parent.querySelectorAll(`:scope>section.level-${level},:scope>div>section.level-${level}`)];
-  function current(list,line){let found=-1;list.forEach((section,i)=>{if(section.getBoundingClientRect().top<=line)found=i;});return found;}
+  // Before any heading has scrolled past the line, the first section is the current one.
+  function current(list,line){let found=list.length?0:-1;list.forEach((section,i)=>{if(section.getBoundingClientRect().top<=line)found=i;});return found;}
   let stuckFrame=0;
   function updateStuck(){
     stuckFrame=0;
@@ -323,11 +335,11 @@
   }
   function renderLibrary(){
     if(!state.overview)return;
-    if(!state.tags.length){$('library').innerHTML='<p class="empty">资料库还没有系统 / 玩法标签。跨场次分析 agent 建好标签（tags.json）后点“刷新”。</p>';return;}
+    if(!state.tags.length){$('libraryList').innerHTML='<p class="empty">资料库还没有系统 / 玩法标签。跨场次分析 agent 建好标签（tags.json）后点“刷新”。</p>';scheduleLibStuck();return;}
     const keys=treeKeys();
     const byTag=new Map(state.tags.map(tag=>[tag.id,[]]));
     for(const k of keys)for(const tag of state.instanceTags[k]||[])byTag.get(tag)?.push(k);
-    $('library').innerHTML=state.tagGroups.map(group=>{
+    $('libraryList').innerHTML=state.tagGroups.map(group=>{
       const tags=state.tags.filter(tag=>tag.group===group.id).sort((a,b)=>byTag.get(b.id).length-byTag.get(a.id).length);
       const n=new Set(tags.flatMap(tag=>byTag.get(tag.id))).size;
       const cards=tags.map(tag=>{
@@ -336,15 +348,32 @@
         const image=cover?`<span class="thumb cover" data-session="${escape(cover.session_id)}" data-time="${cover.at}" data-caption="${escape(tag.name)}"></span>`:'<span class="cover empty-cover"></span>';
         return `<article class="tag-card${state.filters.tags.has(tag.id)?' active':''}${hits.length?'':' none'}" data-tag="${escape(tag.id)}" tabindex="0" role="button" aria-pressed="${state.filters.tags.has(tag.id)}">${image}<div class="tag-meta"><span class="tag-name" title="${escape(tag.name)}">${escape(tag.name)}</span><span class="n">${hits.length}</span>${flag({kind:'tag',id:tag.id})}</div></article>`;
       }).join('');
-      return `<section class="lib-group"><button type="button" class="lib-toggle" aria-expanded="true" aria-controls="lib-${escape(group.id)}"><span>${escape(group.name)}</span><span class="n">${n} 条</span></button><div class="lib-grid" id="lib-${escape(group.id)}">${cards}</div></section>`;
+      return `<section class="lib-group" id="libgroup-${escape(group.id)}" data-name="${escape(group.name)}" data-count="${n}"><button type="button" class="lib-toggle" aria-expanded="true" aria-controls="lib-${escape(group.id)}"><span>${escape(group.name)}</span><span class="n">${n} 条</span></button><div class="lib-grid" id="lib-${escape(group.id)}">${cards}</div></section>`;
     }).join('');
     document.querySelectorAll('#library .thumb[data-session]').forEach(node=>thumbObserver.observe(node));
+    scheduleLibStuck();
   }
+  // Like the evidence tree: the current dimension heading sticks on top, the next one waits at the bottom.
+  let libFrame=0;
+  function updateLibStuck(){
+    libFrame=0;
+    const pane=$('library'),bar=$('libNext');
+    if(pane.hidden){bar.hidden=true;return;}
+    const box=pane.getBoundingClientRect(),groups=[...document.querySelectorAll('#libraryList .lib-group')];
+    const i=current(groups,box.top+4),next=groups[i+1]||(i<0?groups[0]:null);
+    const bottom=box.bottom-(bar.hidden?0:bar.offsetHeight);
+    if(next&&next.getBoundingClientRect().top>bottom-4){
+      bar.innerHTML=`<button type="button" class="next level-1" data-lib-next="${escape(next.id)}">${escape(next.dataset.name)}<span class="n">${escape(next.dataset.count)} 条</span></button>`;
+      bar.hidden=false;
+    }else bar.hidden=true;
+  }
+  function scheduleLibStuck(){if(!libFrame)libFrame=requestAnimationFrame(updateLibStuck);}
   function selectLeft(name){
     for(const [tab,pane,id] of [['tabReport','report','report'],['tabLibrary','library','library']]){
       $(tab).setAttribute('aria-selected',String(id===name));$(pane).hidden=id!==name;
     }
     document.querySelector('.report-choice').hidden=name!=='report';
+    scheduleLibStuck();
   }
   function openMenu(card,x,y){
     const row=state.instances.get(card.dataset.key);if(!row)return;
@@ -426,7 +455,7 @@
       const previous=$('reportSelect').value;
       $('reportSelect').innerHTML=overview.reports.length?overview.reports.map(row=>`<option value="${escape(row.name)}">${escape(row.name)}</option>`).join(''):'<option value="">（没有报告）</option>';
       if(overview.reports.some(row=>row.name===previous))$('reportSelect').value=previous;
-      renderFilterBar();renderEvidence();renderFeedback();renderLibrary();
+      renderKindBar();renderFilterBar();renderEvidence();renderFeedback();renderLibrary();
       await openReport($('reportSelect').value);
       if(!state.report||!state.report.citations.some(row=>!row.resolved))status('');
     }catch(error){status(error.message,true);}
@@ -475,14 +504,26 @@
     }
     if(!event.target.closest('#menu'))$('menu').hidden=true;
     const libToggle=event.target.closest('.lib-toggle');
-    if(libToggle){const open=libToggle.getAttribute('aria-expanded')!=='true';libToggle.setAttribute('aria-expanded',String(open));$(libToggle.getAttribute('aria-controls')).hidden=!open;return;}
+    if(libToggle){
+      const open=libToggle.getAttribute('aria-expanded')!=='true';libToggle.setAttribute('aria-expanded',String(open));$(libToggle.getAttribute('aria-controls')).hidden=!open;
+      const group=libToggle.closest('.lib-group');
+      if(!open&&group.getBoundingClientRect().top<$('library').getBoundingClientRect().top)group.scrollIntoView({block:'start'});
+      scheduleLibStuck();return;
+    }
+    const libNext=event.target.closest('[data-lib-next]');
+    if(libNext){
+      const group=$(libNext.dataset.libNext),toggle=group.querySelector('.lib-toggle');
+      if(toggle.getAttribute('aria-expanded')!=='true'){toggle.setAttribute('aria-expanded','true');$(toggle.getAttribute('aria-controls')).hidden=false;}
+      group.scrollIntoView({block:'start',behavior:'smooth'});return;
+    }
     const tagCard=event.target.closest('[data-tag]');
     if(tagCard){const id=tagCard.dataset.tag;state.filters.tags.has(id)?state.filters.tags.delete(id):state.filters.tags.add(id);applyFilters();return;}
     const kindChip=event.target.closest('[data-kind]');
     if(kindChip){const kind=kindChip.dataset.kind;state.filters.kinds.has(kind)?state.filters.kinds.delete(kind):state.filters.kinds.add(kind);applyFilters();return;}
-    const clear=event.target.closest('[data-clear-tag],[data-clear-kind],[data-clear-all]');
+    const clear=event.target.closest('[data-clear-tag],[data-clear-kind],[data-clear-kinds],[data-clear-all]');
     if(clear){
       if(clear.hasAttribute('data-clear-all'))clearFilters();
+      else if(clear.hasAttribute('data-clear-kinds')){state.filters.kinds.clear();applyFilters();}
       else{clear.dataset.clearTag?state.filters.tags.delete(clear.dataset.clearTag):state.filters.kinds.delete(clear.dataset.clearKind);applyFilters();}
       return;
     }
@@ -508,6 +549,7 @@
   $('expandAll').onclick=()=>{document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,true));scheduleStuck();};
   $('collapseAll').onclick=()=>{document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,false));$('evidencePane').scrollTop=0;scheduleStuck();};
   $('evidencePane').addEventListener('scroll',scheduleStuck,{passive:true});
+  $('library').addEventListener('scroll',scheduleLibStuck,{passive:true});
   new ResizeObserver(()=>{measureRows();scheduleStuck();}).observe($('evidencePane'));
   $('reportSelect').onchange=()=>openReport($('reportSelect').value).catch(error=>status(error.message,true));
   $('refresh').onclick=load;

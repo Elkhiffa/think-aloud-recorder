@@ -39,7 +39,9 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .cite.unresolved{text-decoration:line-through;cursor:help}
 .empty,.hint{color:var(--muted)}
 .evidence-head{position:sticky;top:-16px;z-index:2;margin:-16px -24px 16px;background:var(--surface);border-bottom:1px solid var(--line)}
-.tree-bar{display:flex;gap:8px;align-items:center;padding:10px 24px}
+.tree-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 24px}
+.kind-bar{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-left:8px}
+.kind-bar .kind-chip{font-size:13px;padding:1px 9px}
 .issue{border-top:1px solid var(--line);padding:12px 0}
 .issue,.group{scroll-margin-top:calc(var(--head,0px) + 8px)}
 .level-2{scroll-margin-top:calc(var(--head,0px) + var(--r1,0px) + 4px)}
@@ -115,11 +117,11 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .filter-clear{font-size:12.5px;padding:0 8px}
 .library{padding-top:8px}
 .lib-group{margin:0 0 16px}
-.lib-toggle{display:flex;width:100%;gap:8px;align-items:baseline;border:0;border-bottom:1px solid var(--line);border-radius:0;background:none;padding:10px 0 6px;font-size:18px;font-weight:600;color:var(--heading);text-align:left}
+.lib-toggle{position:sticky;top:-8px;z-index:2;display:flex;width:100%;gap:8px;align-items:baseline;border:0;border-bottom:1px solid var(--line);border-radius:0;background:var(--surface);padding:10px 0 6px;font-size:18px;font-weight:600;color:var(--heading);text-align:left}
 .lib-toggle::before{content:"▸";color:var(--muted);font-size:14px;transition:transform .12s}
 .lib-toggle[aria-expanded=true]::before{transform:rotate(90deg)}
 .lib-toggle .n{margin-left:auto;font-size:13px;font-weight:400;color:var(--muted)}
-.lib-toggle:hover{background:none;color:var(--accent)}
+.lib-toggle:hover{background:var(--surface);color:var(--accent)}
 .lib-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-top:12px}
 .tag-card{cursor:pointer;border-radius:6px;padding:6px;border:1px solid transparent}
 .tag-card:hover{background:var(--soft)}
