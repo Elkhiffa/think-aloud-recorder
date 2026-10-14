@@ -67,7 +67,7 @@
     return {support,counter};
   }
   function countText(node,extra=0){const n=counts(node);return `支持 ${n.support+extra}`+(n.counter?` · 反例 ${n.counter}`:'');}
-  function toggle(id,text,n,expanded,level,code=''){return `<button type="button" class="toggle" aria-expanded="${expanded}" aria-controls="${id}-body" data-level="${level}"><span class="label">${text}</span><span class="n">${escape(n)}${code?`<span class="code">${escape(code)}</span>`:''}</span></button>`;}
+  function toggle(id,text,n,expanded,level,code=''){return `<button type="button" class="toggle" aria-expanded="${expanded}" aria-controls="${id}-body" data-level="${level}"><span class="label" title="${escape(text.replace(/<[^>]+>/g,''))}">${text}</span><span class="n">${escape(n)}${code?`<span class="code">${escape(code)}</span>`:''}</span></button>`;}
   const issueName=id=>state.issues.get(id)?.title||id;
   // The feedback entry stays outside the toggle button so it never expands or collapses the section.
   function flag(target){return `<button type="button" class="flag" data-flag="${escape(JSON.stringify(target))}" title="这里不对？写一句该怎么调">有问题</button>`;}
@@ -87,12 +87,12 @@
     const own=node.support.length+node.counter.length;
     if(own&&(node.children.length||level===1)){
       const name=node.children.length?'未归入下级':'证据';
-      body+=`<section class="group" id="issue-${escape(node.id)}-own" data-issue="${escape(node.id)}">${row('issue-'+node.id+'-own',name,`${own} 条`,false,level+1)}<div id="issue-${escape(node.id)}-own-body" hidden>${evidenceBlock(node)}</div></section>`;
+      body+=`<section class="group level-${level+1}" id="issue-${escape(node.id)}-own" data-issue="${escape(node.id)}">${row('issue-'+node.id+'-own',name,`${own} 条`,false,level+1)}<div id="issue-${escape(node.id)}-own-body" hidden>${evidenceBlock(node)}</div></section>`;
     }else if(own)body+=evidenceBlock(node);
     let extra=0;
     if(node.id==='BUG'&&state.overview.bug_unorganized.length){
       extra=state.overview.bug_unorganized.length;
-      body+=`<section class="group" id="issue-BUG-raw">${row('issue-BUG-raw','未整理的 bug 原话',`${extra} 处`,false,2)}<ul class="hits" id="issue-BUG-raw-body" hidden>`+
+      body+=`<section class="group level-2" id="issue-BUG-raw">${row('issue-BUG-raw','未整理的 bug 原话',`${extra} 处`,false,2)}<ul class="hits" id="issue-BUG-raw-body" hidden>`+
         state.overview.bug_unorganized.map(hit=>`<li>${jump(hit.session_id,hit.start,(state.labels[hit.session_id]||hit.session_id)+' '+formatTime(hit.start))}<span>“${escape(hit.text)}”${hit.state==='instance'?` <span class="badge">已是实例 ${escape(hit.instances.join('、'))}，未挂 BUG</span>`:''}</span></li>`).join('')+'</ul></section>';
     }
     if(!body)body='<p class="desc">暂无证据。</p>';
@@ -120,10 +120,45 @@
     const index=node=>{state.issues.set(node.id,node);node.children.forEach(index);};nodes.forEach(index);
     let html=nodes.map(node=>issueSection(node)).join('');
     const extra=cited();
-    if(extra.length)html+=`<section class="issue" id="issue-cited" data-issue="cited">${row('issue-cited','报告引用的其他证据',`${extra.length} 条`,true,1)}<div id="issue-cited-body"><div class="cards">${extra.map(k=>card(state.instances.get(k),null,'cited')).join('')}</div></div></section>`;
+    if(extra.length)html+=`<section class="issue level-1" id="issue-cited" data-issue="cited">${row('issue-cited','报告引用的其他证据',`${extra.length} 条`,true,1)}<div id="issue-cited-body"><div class="cards">${extra.map(k=>card(state.instances.get(k),null,'cited')).join('')}</div></div></section>`;
     $('evidenceList').innerHTML=html||'<p class="empty">资料库里还没有议题。</p>';
     document.querySelectorAll('#evidenceList .thumb[data-session]').forEach(button=>thumbObserver.observe(button));
+    measureRows();updateStuck();
   }
+
+  // Sticky rows: the current 洞察 / 议题 / 子议题 stay on top while their cards scroll; the next
+  // 议题 in this 洞察 and the next 洞察 wait at the bottom. Row heights feed the sticky offsets.
+  function measureRows(){
+    const pane=$('evidencePane');
+    for(const level of [1,2,3]){const row=document.querySelector(`#evidenceList .level-${level}>.row`);if(row)pane.style.setProperty('--r'+level,row.offsetHeight+'px');}
+  }
+  const sections=(parent,level)=>[...parent.querySelectorAll(`:scope>section.level-${level},:scope>div>section.level-${level}`)];
+  function current(list,line){let found=-1;list.forEach((section,i)=>{if(section.getBoundingClientRect().top<=line)found=i;});return found;}
+  let stuckFrame=0;
+  function updateStuck(){
+    stuckFrame=0;
+    const pane=$('evidencePane'),bar=$('nextBar');
+    if(pane.hidden){bar.hidden=true;return;}
+    const box=pane.getBoundingClientRect(),head=document.querySelector('.evidence-head').getBoundingClientRect().bottom;
+    const r1=parseFloat(pane.style.getPropertyValue('--r1'))||0;
+    const bottom=box.bottom-(bar.hidden?0:bar.offsetHeight);
+    const tops=[...$('evidenceList').children].filter(node=>node.matches('section'));
+    const i=current(tops,head+2),items=[];
+    const below=section=>section&&section.getBoundingClientRect().top>bottom-4;
+    if(i>=0){
+      const body=tops[i].querySelector(':scope>div[id$="-body"]');
+      if(body&&!body.hidden){
+        const subs=sections(body,2),j=current(subs,head+r1+2),next=subs[j+1];
+        if(below(next))items.push([next,2]);
+      }
+    }
+    const nextTop=tops[i+1]||(i<0?tops[0]:null);
+    if(below(nextTop))items.push([nextTop,1]);
+    bar.innerHTML=items.map(([section,level])=>{const toggle=section.querySelector(':scope>.row>.toggle');
+      return `<button type="button" class="next level-${level}" data-next="${escape(section.id)}">${toggle.querySelector('.label').innerHTML}<span class="n">${toggle.querySelector('.n').innerHTML}</span></button>`;}).join('');
+    bar.hidden=!items.length;
+  }
+  function scheduleStuck(){if(!stuckFrame)stuckFrame=requestAnimationFrame(updateStuck);}
   function setExpanded(button,expanded){
     button.setAttribute('aria-expanded',String(expanded));
     const body=$(button.getAttribute('aria-controls'));if(body)body.hidden=!expanded;
@@ -220,6 +255,7 @@
     for(const [tab,pane,id] of [['tabEvidence','evidencePane','evidence'],['tabFeedback','feedbackPane','feedback']]){
       $(tab).setAttribute('aria-selected',String(id===name));$(pane).hidden=id!==name;
     }
+    scheduleStuck();
   }
 
   // Feedback: agent output is accepted by default; the user only marks what is wrong and how to adjust it.
@@ -305,7 +341,14 @@
       return;
     }
     const button=event.target.closest('.toggle');
-    if(button){setExpanded(button,button.getAttribute('aria-expanded')!=='true');return;}
+    if(button){
+      const expanded=button.getAttribute('aria-expanded')!=='true';setExpanded(button,expanded);
+      const section=button.closest('section');
+      if(!expanded&&section.getBoundingClientRect().top<document.querySelector('.evidence-head').getBoundingClientRect().bottom)section.scrollIntoView({block:'start'});
+      scheduleStuck();return;
+    }
+    const next=event.target.closest('[data-next]');
+    if(next){const section=$(next.dataset.next);setExpanded(section.querySelector(':scope>.row>.toggle'),true);section.scrollIntoView({block:'start',behavior:'smooth'});return;}
     const flagButton=event.target.closest('[data-flag]');
     if(flagButton){openFlag(flagButton);return;}
     if(event.target.closest('[data-feedback-cancel]')){const form=event.target.closest('form');form.closest('.feedback-item')?renderFeedback():form.remove();return;}
@@ -327,8 +370,10 @@
   document.addEventListener('keydown',event=>{if(event.key==='Escape')$('lightbox').hidden=true;});
   // Cards and sections scroll to just below the sticky outline, whatever its current height.
   new ResizeObserver(()=>$('evidencePane').style.setProperty('--head',document.querySelector('.evidence-head').offsetHeight-16+'px')).observe(document.querySelector('.evidence-head'));
-  $('expandAll').onclick=()=>document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,true));
-  $('collapseAll').onclick=()=>document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,false));
+  $('expandAll').onclick=()=>{document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,true));scheduleStuck();};
+  $('collapseAll').onclick=()=>{document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,false));$('evidencePane').scrollTop=0;scheduleStuck();};
+  $('evidencePane').addEventListener('scroll',scheduleStuck,{passive:true});
+  new ResizeObserver(()=>{measureRows();scheduleStuck();}).observe($('evidencePane'));
   $('reportSelect').onchange=()=>openReport($('reportSelect').value).catch(error=>status(error.message,true));
   $('refresh').onclick=load;
   $('tabEvidence').onclick=()=>selectTab('evidence');

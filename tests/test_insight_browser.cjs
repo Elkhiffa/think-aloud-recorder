@@ -123,6 +123,21 @@ async function main(){
     await page.locator('.feedback-item [data-feedback-go]').click();
     assert.equal(await page.locator('#evidencePane').isVisible(),true);
   });
+  await check('while scrolling, the current 洞察 and 议题 stay on top and the next 洞察 waits at the bottom',async()=>{
+    await page.locator('#tabEvidence').click();await page.locator('#expandAll').click();
+    const card=page.locator('[id="issue-TA-01.1"] .card[data-key="'+S1+'/i6"]');
+    await page.locator('#evidencePane').evaluate(pane=>{const line=document.querySelector('.evidence-head').getBoundingClientRect().bottom;pane.scrollTop+=document.getElementById('issue-TA-01.1').getBoundingClientRect().top-line+120;});await page.waitForTimeout(200);
+    const head=await page.locator('.evidence-head').boundingBox();
+    const top1=await page.locator('#issue-TA-01>.row').boundingBox(),top2=await page.locator('[id="issue-TA-01.1"]>.row').boundingBox();
+    assert.ok(Math.abs(top1.y-(head.y+head.height))<=2,'洞察 row sticks under the toolbar');
+    assert.ok(Math.abs(top2.y-(top1.y+top1.height))<=2,'议题 row sticks under the 洞察 row');
+    const cardBox=await card.boundingBox();assert.ok(cardBox.y+cardBox.height>top2.y+top2.height,'card scrolls beneath the sticky rows');
+    await page.waitForFunction(()=>!document.querySelector('#nextBar').hidden);
+    assert.match(await page.locator('#nextBar').textContent(),/BUG/);
+    await page.locator('#nextBar [data-next="issue-BUG"]').click();await page.waitForTimeout(700);
+    const bug=await page.locator('#issue-BUG>.row').boundingBox();assert.ok(bug.y>=head.y+head.height-2&&bug.y<450,'next 洞察 is brought up into view');
+    await page.locator('#collapseAll').click();
+  });
   await check('narrow window keeps the tree without horizontal scroll',async()=>{
     await page.locator('#tabEvidence').click();await page.setViewportSize({width:800,height:900});
     assert.equal(await page.locator('#expandAll').isVisible(),true);
