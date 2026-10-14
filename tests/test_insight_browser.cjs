@@ -10,9 +10,9 @@ const instances=[row(S1,'i1',{statement:'清完提示后忘了目标 <img src=x>
 const link=(session,id,reason='合成理由')=>({session_id:session,instance_id:id,reason});
 const overview={vault:'合成资料库',reports:[{name:'r.md',modified:1,bytes:10}],feedback:[],session_labels:{[S1]:'1008',[S2]:'1009'},instances,
   issues:[{id:'TA-01',title:'目标明确仍有摩擦',description:'合成议题',status:'confirmed',support:[link(S2,'i2')],counter:[],children:[
-     {id:'TA-01.1',parent:'TA-01',title:'清完提示后忘了目标',description:'成立理由：合成',status:'confirmed',support:[link(S1,'i1'),link(S1,'i6')],counter:[link(S2,'i1','专注时少提示反而好')],children:[]},
      {id:'TA-07',parent:'TA-01',title:'外观染色中的断点',description:'中间议题',status:'confirmed',support:[],counter:[],children:[
-      {id:'TA-07.1',parent:'TA-07',title:'染色方案存不下来',description:'第三层',status:'confirmed',support:[link(S2,'i7')],counter:[],children:[]}]}]},
+      {id:'TA-07.1',parent:'TA-07',title:'染色方案存不下来',description:'第三层',status:'confirmed',support:[link(S2,'i7')],counter:[],children:[]}]},
+     {id:'TA-01.1',parent:'TA-01',title:'清完提示后忘了目标',description:'成立理由：见 1008 i6、i1 和 1009 i9；并入 TA-07 之外。',status:'confirmed',support:[link(S1,'i1'),link(S1,'i6')],counter:[link(S2,'i1','专注时少提示反而好')],children:[]}]},
     {id:'BUG',title:'Bug',description:'',status:'confirmed',support:[link(S1,'i3')],counter:[],children:[
      {id:'BUG.1',parent:'BUG',title:'疑似：教学弹窗多出遮挡',description:'疑似缺陷',status:'confirmed',support:[link(S2,'i5')],counter:[],children:[]}]}],
   bug_unorganized:[{session_id:S2,ref:'t000005',start:30,end:32,text:'现在有几个bug',instances:[],bug_instances:[],state:'raw'}]};
@@ -136,6 +136,24 @@ async function main(){
     assert.match(await page.locator('#nextBar').textContent(),/BUG/);
     await page.locator('#nextBar [data-next="issue-BUG"]').click();await page.waitForTimeout(700);
     const bug=await page.locator('#issue-BUG>.row').boundingBox();assert.ok(bug.y>=head.y+head.height-2&&bug.y<450,'next 洞察 is brought up into view');
+    // At the end of a 议题 its row is pushed up; it must slide under the 洞察 row, not cover it.
+    const covered=await page.locator('#evidencePane').evaluate(pane=>{
+      const section=document.getElementById('issue-TA-01.1'),row=document.querySelector('#issue-TA-01>.row');
+      pane.scrollTop+=section.getBoundingClientRect().bottom-row.getBoundingClientRect().bottom-10;
+      const box=row.getBoundingClientRect(),hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);
+      return hit.closest('.row')===row;});
+    assert.equal(covered,true,'洞察 row stays on top at the end of a 议题');
+    await page.locator('#collapseAll').click();
+  });
+  await check('busier 议题 come first; references in descriptions are quiet marks that locate the card',async()=>{
+    await page.locator('#collapseAll').click();await page.locator('#issue-TA-01>.row>.toggle').click();
+    const order=await page.locator('#issue-TA-01-body>section').evaluateAll(list=>list.map(node=>node.id));
+    assert.deepEqual(order.slice(0,2),['issue-TA-01.1','issue-TA-07']);
+    await page.locator('[id="issue-TA-01.1"]>.row>.toggle').click();
+    const desc=page.locator('[id="issue-TA-01.1-body"]>.desc');
+    assert.deepEqual(await desc.locator('.cite').allTextContents(),['1008 i6','i1','1009 i9','TA-07']);
+    await desc.locator('.cite',{hasText:'1009 i9'}).click();
+    await page.locator('#issue-cited .card[data-key="'+S2+'/i9"]').waitFor({state:'visible'});
     await page.locator('#collapseAll').click();
   });
   await check('narrow window keeps the tree without horizontal scroll',async()=>{

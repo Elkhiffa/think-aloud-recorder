@@ -49,12 +49,13 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .toggle::before{content:"▸";flex:none;color:var(--muted);transition:transform .12s}
 .toggle[aria-expanded=true]::before{transform:rotate(90deg)}
 .row{display:flex;align-items:baseline;gap:8px;background:var(--surface)}
-.level-1>.row,.level-2>.row,.level-3>.row{position:sticky;z-index:1}
-.level-1>.row{top:var(--head,0px)}
-.level-2>.row{top:calc(var(--head,0px) + var(--r1,0px))}
-.level-3>.row{top:calc(var(--head,0px) + var(--r1,0px) + var(--r2,0px))}
+/* A child row pushed out at the end of its section slides under its parent's row, never over it. */
+.level-1>.row,.level-2>.row,.level-3>.row{position:sticky}
+.level-1>.row{top:var(--head,0px);z-index:3}
+.level-2>.row{top:calc(var(--head,0px) + var(--r1,0px));z-index:2}
+.level-3>.row{top:calc(var(--head,0px) + var(--r1,0px) + var(--r2,0px));z-index:1}
 .toggle .label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.next-bar{position:sticky;bottom:-40px;z-index:2;margin:16px -24px -40px;padding:4px 24px 6px;background:var(--surface);border-top:1px solid var(--strong-line);display:grid;gap:2px}
+.next-bar{position:sticky;bottom:-40px;z-index:4;margin:16px -24px -40px;padding:4px 24px 6px;background:var(--surface);border-top:1px solid var(--strong-line);display:grid;gap:2px}
 .next{display:flex;gap:8px;align-items:baseline;border:0;padding:3px 0;background:none;text-align:left;color:var(--ink);min-width:0}
 .next:hover{background:none;color:var(--accent)}
 .next::before{content:"▾";color:var(--muted)}

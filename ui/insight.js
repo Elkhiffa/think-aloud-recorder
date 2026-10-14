@@ -82,8 +82,10 @@
   function issueSection(node,level=1){
     const status=node.status==='candidate'?' <span class="badge">待你定</span>':'';
     const title=node.id==='BUG'?'BUG':escape(node.title);
-    let body=node.description?`<p class="desc">${escape(node.description)}</p>`:'';
-    for(const child of node.children)body+=issueSection(child,level+1);
+    let body=node.description?`<p class="desc">${describe(node.description,node.id)}</p>`:'';
+    // 洞察 and 议题 levels list the busiest first; 子议题 keep the analyst's order.
+    const children=level<=1?byCount(node.children):node.children;
+    for(const child of children)body+=issueSection(child,level+1);
     const own=node.support.length+node.counter.length;
     if(own&&(node.children.length||level===1)){
       const name=node.children.length?'未归入下级':'证据';
@@ -99,9 +101,26 @@
     const n=node.id==='BUG'&&extra?countText(node)+` · 未整理 ${extra}`:countText(node);
     return `<section class="${level===1?'issue':'group'} level-${level}" id="issue-${escape(node.id)}" data-issue="${escape(node.id)}">${row('issue-'+node.id,`${title}${status}`,n,level===1,level,node.id==='BUG'?'':node.id,{kind:'issue',id:node.id})}<div id="issue-${escape(node.id)}-body"${level===1?'':' hidden'}>${body}</div></section>`;
   }
+  const total=node=>{const n=counts(node);return n.support+n.counter;};
+  const byCount=nodes=>[...nodes].sort((a,b)=>total(b)-total(a));
+  // Plain references inside agent-written descriptions become the same quiet marks as report citations.
+  function describe(text,issue){
+    let html=escape(text);
+    html=html.replace(/(?<![\w.-])(TA-\d{2}[A-Z]?(?:\.\d{1,3}){0,2}|N-\d{3}(?:\.\d{1,3}){0,2}|BUG\.\d{1,3})(?![\w.])/g,
+      (match,id)=>state.issues.has(id)?`<a class="cite" href="#" data-cite-issue="${id}">${id}</a>`:match);
+    const sessions=new Map(Object.entries(state.labels).map(([session,name])=>[name,session]));
+    html=html.replace(/(?<![\d·])(\d{4}(?:·\d{4})?) ?(i\d{1,3}(?:[、，, ]+i\d{1,3})*)/g,(match,name,ids)=>{
+      const session=sessions.get(name);if(!session)return match;
+      let first=true,found=false;
+      const out=ids.replace(/i\d{1,3}/g,id=>{if(!state.instances.has(key(session,id)))return id;found=true;const text=first?`${name} ${id}`:id;first=false;
+        return `<a class="cite" href="#" data-cite-instance="${session}/${id}" data-cite-in="${escape(issue)}">${text}</a>`;});
+      return found?(first?name+' ':'')+out:match;
+    });
+    return html;
+  }
   function orderedIssues(){
-    // BUG is a fixed issue; keep it last so design issues lead.
-    const nodes=state.overview.issues.filter(node=>node.id!=='BUG');
+    // BUG is a fixed issue; keep it last so design issues lead. The rest go busiest first.
+    const nodes=byCount(state.overview.issues.filter(node=>node.id!=='BUG'));
     const bug=state.overview.issues.find(node=>node.id==='BUG');
     return bug?nodes.concat(bug):nodes;
   }
@@ -130,7 +149,8 @@
   // 议题 in this 洞察 and the next 洞察 wait at the bottom. Row heights feed the sticky offsets.
   function measureRows(){
     const pane=$('evidencePane');
-    for(const level of [1,2,3]){const row=document.querySelector(`#evidenceList .level-${level}>.row`);if(row)pane.style.setProperty('--r'+level,row.offsetHeight+'px');}
+    // A hidden pane measures 0; keep the last real height so sticky rows never stack on one line.
+    for(const level of [1,2,3]){const row=document.querySelector(`#evidenceList .level-${level}>.row`);if(row?.offsetHeight)pane.style.setProperty('--r'+level,row.offsetHeight+'px');}
   }
   const sections=(parent,level)=>[...parent.querySelectorAll(`:scope>section.level-${level},:scope>div>section.level-${level}`)];
   function current(list,line){let found=-1;list.forEach((section,i)=>{if(section.getBoundingClientRect().top<=line)found=i;});return found;}
@@ -255,7 +275,7 @@
     for(const [tab,pane,id] of [['tabEvidence','evidencePane','evidence'],['tabFeedback','feedbackPane','feedback']]){
       $(tab).setAttribute('aria-selected',String(id===name));$(pane).hidden=id!==name;
     }
-    scheduleStuck();
+    measureRows();scheduleStuck();
   }
 
   // Feedback: agent output is accepted by default; the user only marks what is wrong and how to adjust it.
