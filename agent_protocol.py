@@ -557,7 +557,8 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
         from game_catalog import session_catalog
         issues = {row['id'] for row in read_registry(Path(folder).resolve().parent.parent)['issues']}
         catalog = session_catalog(folder)
-        screens = {row['id'] for row in catalog['screens']} if catalog is not None else set()
+        # 路径 3：目录改名后旧编号留作别名，引用旧编号的已提交结果仍然有效。
+        screens = {name for row in catalog['screens'] for name in [row['id']] + row.get('aliases', [])} if catalog is not None else set()
         instances, instance_ids = [], set()
         for row in _rows(value.get('instances'), 300, '判断实例'):
             if not isinstance(row, dict):

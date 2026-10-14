@@ -23,7 +23,7 @@
 
 所有命令输出 UTF-8 JSON：成功是 `{ok:true,data:...}`，失败是 `{ok:false,error:...}`。令牌不要写进任何文档。时间一律是“相对录像开始的秒数”。
 
-界面目录在 `VAULT/game-assets/<场次 session.json 的 game>/catalog.json`。每个界面的 `id` 是规范编号（完整导航路径），`aliases` 是曾用过的其他写法，`path_note` 是带层级注释的路径。目录不存在时，界面全部按规则自行命名。
+界面目录在 `VAULT/game-assets/<场次 session.json 的 game>/catalog.json`。每个界面的 `id` 是规范编号（按界面组命名，规则见 SKILL.md 第 4 步），`aliases` 是曾用过的其他写法，`path_note` 是带层级注释的路径。目录不存在时，界面全部按规则自行命名。
 
 情景文字是每 5 秒一帧的本地 OCR，有错字、会漏掉短暂状态，只能当线索。`frame` 截的是那一刻的静态画面，不证明前后过程。
 

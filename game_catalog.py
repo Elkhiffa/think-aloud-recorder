@@ -163,6 +163,48 @@ def confirm_proposed(vault, game, proposed, new_id=None, name=None, into=None):
     return dict(path=str(path), screen=screen, proposed=proposed, action='into' if into is not None else 'new')
 
 
+
+def rename_screen(vault, game, old, new_id=None, name=None, into=None):
+    """Give a catalog screen a new id, or fold it into another screen; the old id and its aliases stay as aliases."""
+    import agent_protocol as protocol
+    from session_metadata import metadata_lock
+    _text(old, '界面编号')
+    if (new_id is None) == (into is None):
+        raise ValueError('请选择“改为新编号”或“并入已有界面”其中一种。')
+    path = catalog_path(vault, game)
+    with metadata_lock(vault):
+        data = load_catalog(vault, game)
+        screens = {row['id']: row for row in data['screens']}
+        if old not in screens:
+            raise ValueError('目录中没有这个界面：' + old)
+        row = screens[old]
+        names = [old] + row.get('aliases', [])
+        if into is not None:
+            # 路径：按界面组规则统一目录时，发现两个目录条目是同一组界面。
+            if into == old or into not in screens:
+                raise ValueError('目录中没有可并入的界面：' + str(into))
+            if any(row['match'][key] for key in ('all_of', 'any_of', 'none_of')) or row.get('elements'):
+                raise ValueError('该界面有匹配词或元素，不能直接并入：' + old)
+            target = screens[into]
+            target['aliases'] = target.get('aliases', []) + [value for value in names if value not in target.get('aliases', [])]
+            data['screens'] = [item for item in data['screens'] if item['id'] != old]
+            screen = into
+        else:
+            # 路径：按界面组规则统一目录时，旧编号不合规则，改为新编号。
+            _text(new_id, '界面编号')
+            taken = {value for item in data['screens'] if item is not row
+                     for value in [item['id']] + item.get('aliases', [])}
+            if new_id in taken:
+                raise ValueError('界面编号已被占用：' + new_id)
+            row['id'] = new_id
+            row['aliases'] = [value for value in names if value != new_id]
+            row['name'] = (name or new_id.rpartition('/')[2]).strip()
+            screen = new_id
+        validate_catalog(data)
+        protocol._write(path.parent, path.name, data)
+    return dict(path=str(path), screen=screen, old=old, action='into' if into is not None else 'rename')
+
+
 def validate(vault, game):
     data = load_catalog(vault, game)
     return dict(path=str(catalog_path(vault, game)), game=data['game'],

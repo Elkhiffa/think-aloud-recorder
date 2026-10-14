@@ -79,6 +79,25 @@ class InsightReportTests(unittest.TestCase):
         self.assertEqual((first / protocol.RESULT).read_bytes(), before)
         self.assertEqual(protocol.preprocessing_status(first)['state'], 'complete')
 
+    def test_rename_catalog_screen_keeps_old_names_as_aliases(self):
+        """触发路径：按界面组规则统一目录时运行 catalog-rename → 旧编号和别名都还能查到同一界面；同一组的两个条目可以并成一个；场次结果字节不变。"""
+        self.write_catalog()
+        first = self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [], screen='bag')
+        game_catalog.confirm_proposed(self.vault, '合成游戏', '伙伴/萌主争锋', new_id='伙伴/萌主争锋')
+        before = (first / protocol.RESULT).read_bytes()
+        game_catalog.rename_screen(self.vault, '合成游戏', 'bag', new_id='背包/道具')
+        with self.assertRaisesRegex(ValueError, '已被占用'):
+            game_catalog.rename_screen(self.vault, '合成游戏', '伙伴/萌主争锋', new_id='bag')
+        game_catalog.rename_screen(self.vault, '合成游戏', '伙伴/萌主争锋', new_id='萌主争锋/单打独逗')
+        game_catalog.confirm_proposed(self.vault, '合成游戏', '同游/萌主争锋', new_id='同游/萌主争锋')
+        game_catalog.rename_screen(self.vault, '合成游戏', '同游/萌主争锋', into='萌主争锋/单打独逗')
+        screens = {row['id']: row for row in game_catalog.load_catalog(self.vault, '合成游戏')['screens']}
+        self.assertEqual(sorted(screens), ['背包/道具', '萌主争锋/单打独逗'])
+        self.assertEqual(screens['背包/道具']['aliases'], ['bag'])
+        self.assertEqual(screens['萌主争锋/单打独逗']['aliases'], ['伙伴/萌主争锋', '同游/萌主争锋'])
+        self.assertEqual(issues.query_instances(self.vault, screen='背包/道具')[0]['catalog_screen'], '背包/道具')
+        self.assertEqual((first / protocol.RESULT).read_bytes(), before)
+
     def test_insight_bridge_confirms_and_rejects_bad_times(self):
         """触发路径：洞察窗口里确认提议界面和候选议题、点证据时间 → 确认后列表刷新；有子议题的议题不能并入；无效时间不会去打开回看或解码画面。"""
         from insight_runtime import InsightAPI

@@ -129,6 +129,14 @@ def main(argv=None):
     confirm_target.add_argument('--new', dest='new_id')
     confirm_target.add_argument('--into')
     catalog_confirm.add_argument('--name')
+    catalog_rename = commands.add_parser('catalog-rename', help='把目录里的界面改为新编号或并入另一界面，旧编号保留为别名；不改写场次结果')
+    catalog_rename.add_argument('vault')
+    catalog_rename.add_argument('game')
+    catalog_rename.add_argument('old')
+    rename_target = catalog_rename.add_mutually_exclusive_group(required=True)
+    rename_target.add_argument('--new', dest='new_id')
+    rename_target.add_argument('--into')
+    catalog_rename.add_argument('--name')
     for action in ('list', 'add', 'update', 'merge', 'dismiss', 'link', 'unlink'):
         issue_command = commands.add_parser('issues-' + action, help='管理资料库级议题标签；合并保留结果及校准历史')
         issue_command.add_argument('vault')
@@ -307,6 +315,9 @@ def main(argv=None):
         elif name == 'catalog-confirm':
             from game_catalog import confirm_proposed
             value = confirm_proposed(args.vault, args.game, args.proposed, args.new_id, args.name, args.into)
+        elif name == 'catalog-rename':
+            from game_catalog import rename_screen
+            value = rename_screen(args.vault, args.game, args.old, args.new_id, args.name, args.into)
         elif name.startswith('issues-'):
             import issue_registry as issues
             if name == 'issues-list':
