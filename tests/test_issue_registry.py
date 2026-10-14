@@ -161,8 +161,9 @@ class IssueRegistryTests(unittest.TestCase):
         sub = issues.add_issue(self.vault, '代价：目标被替换', parent='TA-01')
         self.assertEqual((sub['id'], sub['parent']), ('TA-01.1', 'TA-01'))
         self.assertEqual(issues.add_issue(self.vault, '提示抢占操作', parent='TA-01')['id'], 'TA-01.2')
-        with self.assertRaisesRegex(ValueError, '不能再建子议题'):
-            issues.add_issue(self.vault, '更深一层', parent='TA-01.1')
+        self.assertEqual(issues.add_issue(self.vault, '第三层', parent='TA-01.1')['id'], 'TA-01.1.1')
+        with self.assertRaisesRegex(ValueError, '最多三层'):
+            issues.add_issue(self.vault, '第四层', parent='TA-01.1.1')
         with self.assertRaisesRegex(ValueError, '指定父议题'):
             issues.add_issue(self.vault, '没有父议题', 'TA-02.1')
         with self.assertRaisesRegex(ValueError, 'support 或 counter'):
@@ -175,6 +176,29 @@ class IssueRegistryTests(unittest.TestCase):
                           for row in rows], [('first', 'TA-01.1', 'support'), ('second', 'TA-01.1', 'counter')])
         with self.assertRaisesRegex(ValueError, '还有子议题'):
             issues.merge_issues(self.vault, 'TA-01', 'TA-02')
+
+    def test_move_issue_regroups_insights_without_touching_links(self):
+        """触发路径：重组洞察时 issues-move 把 TA-07 挪进 TA-01、把子议题归到新的中间议题下 → 编号和对应不变，按洞察查询带出所有下级；超过三层、成环、挪 BUG 被拒。"""
+        self.make_session('first', '2026-10-08T12:00:00+08:00', [])
+        issues.add_issue(self.vault, '外观染色中的断点', 'TA-07', 'confirmed')
+        sub = issues.add_issue(self.vault, '清包', parent='TA-01', status='confirmed')
+        issues.link_instances(self.vault, [dict(issue='TA-07', session_id='first', instance_id='i1')])
+        before = issues.read_links(self.vault)
+        issues.move_issue(self.vault, 'TA-07', 'TA-01')
+        middle = issues.add_issue(self.vault, '物料管理', parent='TA-01', status='confirmed')
+        self.assertEqual(middle['id'], 'TA-01.2')
+        issues.move_issue(self.vault, sub['id'], middle['id'])
+        self.assertEqual(issues.add_issue(self.vault, '重复确认', parent='TA-01')['id'], 'TA-01.3')
+        self.assertEqual(issues.read_links(self.vault), before)
+        self.assertEqual([row['issue_links'][0]['issue'] for row in issues.query_instances(self.vault, issue=['TA-01'])], ['TA-07'])
+        with self.assertRaisesRegex(ValueError, '自己或它的下级'):
+            issues.move_issue(self.vault, 'TA-01', 'TA-01.2')
+        with self.assertRaisesRegex(ValueError, '超过三层'):
+            issues.move_issue(self.vault, 'TA-01.2', 'TA-07')
+        with self.assertRaisesRegex(ValueError, '固定议题'):
+            issues.move_issue(self.vault, 'BUG', 'TA-01')
+        issues.move_issue(self.vault, 'TA-07', None)
+        self.assertNotIn('parent', next(row for row in issues.read_registry(self.vault)['issues'] if row['id'] == 'TA-07'))
 
     def test_bug_is_a_fixed_issue_single_session_can_tag(self):
         """触发路径：记录者在原话里说“这是 bug” → 单场次整理直接挂 BUG，BUG 不能改名或被合并。"""

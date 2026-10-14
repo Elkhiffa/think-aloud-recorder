@@ -15,6 +15,7 @@ FILE = 'issues.json'
 LINKS = 'issue-links.json'
 BUG = 'BUG'
 ROLES = ('support', 'counter')
+DEPTH = 3  # 洞察 → 议题 → 子议题
 
 
 def _bug_issue():
@@ -28,12 +29,38 @@ def _base(value):
 
 def _identifier(value):
     # 路径 2/3：命令行及外部 agent 只能引用用户 TA 标签、三位 N 候选标签、固定的 BUG，
-    # 以及它们下一级的子议题（父编号加 .n）。
+    # 以及它们下级的编号（最多再接两段 .n）。
     if isinstance(value, str):
-        base, dot, sub = value.partition('.')
-        if _base(base) and (not dot or re.fullmatch(r'\d{1,3}', sub)):
+        base, dot, rest = value.partition('.')
+        if _base(base) and (not dot or re.fullmatch(r'\d{1,3}(\.\d{1,3})?', rest)):
             return value
-    raise ValueError('议题 id 必须是 TA- 开头的用户编号、N- 加三位数字、BUG，或它们后接 .n 的子议题。')
+    raise ValueError('议题 id 必须是 TA- 开头的用户编号、N- 加三位数字、BUG，或它们后接一到两段 .n 的下级编号。')
+
+
+def _depth(rows, ident):
+    """Levels from the top down to this issue (top = 1); rejects cycles."""
+    parents = {row['id']: row.get('parent') for row in rows}
+    seen, current = set(), ident
+    while current is not None:
+        if current in seen:
+            raise ValueError('议题层级成环：' + ident)
+        seen.add(current)
+        current = parents.get(current)
+    return len(seen)
+
+
+def _height(rows, ident):
+    """Levels from this issue down to its deepest descendant (leaf = 1)."""
+    children = [row['id'] for row in rows if row.get('parent') == ident]
+    return 1 + max((_height(rows, child) for child in children), default=0)
+
+
+def descendants(rows, ident):
+    found, frontier = set(), {ident}
+    while frontier:
+        frontier = {row['id'] for row in rows if row.get('parent') in frontier} - found
+        found |= frontier
+    return found
 
 
 def _title(value):
@@ -68,13 +95,15 @@ def read_registry(vault):
         _status(row.get('status'))
         if not isinstance(row.get('description'), str):
             raise ValueError('议题 description 必须是字符串。')
-        # 路径 2/3：子议题只有一级，编号前缀必须就是它的父议题。
-        parent = ident.partition('.')[0] if '.' in ident else None
-        if row.get('parent') != parent:
-            raise ValueError('子议题必须以 parent 指向编号前缀，顶层议题不能带 parent：' + ident)
+        parent = row.get('parent')
+        if parent is not None and (not isinstance(parent, str) or ident == BUG):
+            raise ValueError('议题 parent 必须是上级编号，BUG 不能有上级：' + ident)
+    # 路径 2/3：洞察 → 议题 → 子议题最多三层；编号是工作代号，挪动层级后前缀不必等于上级。
     for row in data['issues']:
         if row.get('parent') and row['parent'] not in identifiers:
-            raise ValueError('子议题的父议题不存在：' + row['id'])
+            raise ValueError('议题的上级不存在：' + row['id'])
+        if _depth(data['issues'], row['id']) > DEPTH:
+            raise ValueError('议题最多三层：' + row['id'])
     # 路径 3：BUG 是固定议题，单场次整理可直接引用，未写入过的资料库也能读到它。
     if BUG not in identifiers:
         data['issues'].append(_bug_issue())
@@ -181,14 +210,17 @@ def add_issue(vault, title, ident=None, status='candidate', parent=None):
     with metadata_lock(vault):
         data = read_registry(vault)
         if parent is not None:
-            # 路径 3：跨场次分析把议题下的具体模式写成子议题，编号接在父议题后面。
-            if _find(data, parent).get('parent'):
-                raise ValueError('子议题下不能再建子议题。')
+            # 路径 3：跨场次分析把洞察或议题下的具体模式写成下级，编号接在上级后面。
+            _find(data, parent)
+            if _depth(data['issues'], parent) >= DEPTH:
+                raise ValueError('议题最多三层，子议题下不能再建下级。')
             if ident is None:
-                numbers = [int(row['id'].rpartition('.')[2]) for row in data['issues'] if row.get('parent') == parent]
+                # 挪动过层级的编号仍占用前缀，按编号而不是按现在的上级找下一个序号。
+                pattern = re.compile(re.escape(parent) + r'\.(\d{1,3})')
+                numbers = [int(match.group(1)) for row in data['issues'] if (match := pattern.fullmatch(row['id']))]
                 ident = f'{parent}.{max(numbers, default=0) + 1}'
-            if '.' not in _identifier(ident) or ident.partition('.')[0] != parent:
-                raise ValueError('子议题编号必须是父议题编号加 .n。')
+            if _identifier(ident).rpartition('.')[0] != parent:
+                raise ValueError('新建下级的编号必须是上级编号加 .n。')
         elif ident is None:
             numbers = [int(row['id'][2:]) for row in data['issues'] if re.fullmatch(r'N-\d{3}', row['id'])]
             number = max(numbers, default=0) + 1
@@ -206,6 +238,27 @@ def add_issue(vault, title, ident=None, status='candidate', parent=None):
         if parent is not None:
             row['parent'] = parent
         data['issues'].append(row)
+        protocol._write(vault, FILE, data)
+        return row
+
+
+def move_issue(vault, ident, parent=None):
+    """Put an existing issue under another parent (or back on top); codes, links and results stay."""
+    with metadata_lock(vault):
+        data = read_registry(vault)
+        row = _find(data, ident)
+        # 路径 1/3：重组洞察时把议题挪到别的洞察或新的中间议题下，证据跟着编号走。
+        if ident == BUG:
+            raise ValueError('BUG 是固定议题，不能挪动。')
+        if parent is not None:
+            _find(data, parent)
+            if parent == ident or parent in descendants(data['issues'], ident):
+                raise ValueError('不能把议题挪到它自己或它的下级下面。')
+            if _depth(data['issues'], parent) + _height(data['issues'], ident) > DEPTH:
+                raise ValueError('挪过去会超过三层。')
+            row['parent'] = parent
+        else:
+            row.pop('parent', None)
         protocol._write(vault, FILE, data)
         return row
 
@@ -344,8 +397,10 @@ def screen_names(vault, game):
 def query_instances(vault, issue=None, screen=None, element=None, kind=None, session=None):
     rows = []
     requested = set(issue or [])
-    # 路径 2/3：查父议题时一并带出它的子议题。
-    requested |= {row['id'] for row in read_registry(vault)['issues'] if row.get('parent') in requested}
+    # 路径 2/3：查洞察或议题时一并带出它下面所有层级。
+    registry = read_registry(vault)['issues']
+    for ident in list(requested):
+        requested |= descendants(registry, ident)
     sessions = _complete_results(vault)
     linked = {}
     for link in read_links(vault)['links']:

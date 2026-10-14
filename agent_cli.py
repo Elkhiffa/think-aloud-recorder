@@ -137,14 +137,19 @@ def main(argv=None):
     rename_target.add_argument('--new', dest='new_id')
     rename_target.add_argument('--into')
     catalog_rename.add_argument('--name')
-    for action in ('list', 'add', 'update', 'merge', 'dismiss', 'link', 'unlink'):
+    for action in ('list', 'add', 'update', 'move', 'merge', 'dismiss', 'link', 'unlink'):
         issue_command = commands.add_parser('issues-' + action, help='管理资料库级议题标签；合并保留结果及校准历史')
         issue_command.add_argument('vault')
         if action == 'add':
             issue_command.add_argument('--title', required=True)
             issue_command.add_argument('--id')
             issue_command.add_argument('--status', choices=('candidate', 'confirmed'), default='candidate')
-            issue_command.add_argument('--parent', help='建为该议题下的子议题')
+            issue_command.add_argument('--parent', help='建为该洞察或议题的下级')
+        elif action == 'move':
+            issue_command.add_argument('id')
+            move_target = issue_command.add_mutually_exclusive_group(required=True)
+            move_target.add_argument('--parent', help='挪到这个洞察或议题下')
+            move_target.add_argument('--top', action='store_true', help='挪回顶层，成为洞察')
         elif action == 'update':
             issue_command.add_argument('id')
             issue_command.add_argument('--title')
@@ -166,6 +171,13 @@ def main(argv=None):
             issue_command.add_argument('issue')
             issue_command.add_argument('--session', required=True)
             issue_command.add_argument('--instance', required=True)
+    feedback_list = commands.add_parser('feedback-list', help='读出用户在洞察窗口留下的反馈')
+    feedback_list.add_argument('vault')
+    feedback_list.add_argument('--open', action='store_true', help='只列未处理的')
+    feedback_resolve = commands.add_parser('feedback-resolve', help='按反馈调整后标记已处理，写明改了什么')
+    feedback_resolve.add_argument('vault')
+    feedback_resolve.add_argument('id')
+    feedback_resolve.add_argument('--note', required=True)
     instances_query = commands.add_parser('instances-query', help='按议题、界面或判断类型跨场次筛选已完成结果')
     instances_query.add_argument('vault')
     instances_query.add_argument('--issue', action='append')
@@ -326,6 +338,8 @@ def main(argv=None):
                 value = issues.add_issue(args.vault, args.title, args.id, args.status, args.parent)
             elif name == 'issues-update':
                 value = issues.update_issue(args.vault, args.id, args.title, args.description, args.status)
+            elif name == 'issues-move':
+                value = issues.move_issue(args.vault, args.id, None if args.top else args.parent)
             elif name == 'issues-merge':
                 value = issues.merge_issues(args.vault, args.from_id, args.into_id)
             elif name == 'issues-dismiss':
@@ -339,6 +353,12 @@ def main(argv=None):
                 value = issues.link_instances(args.vault, rows)
             else:
                 value = issues.unlink_instance(args.vault, args.issue, args.session, args.instance)
+        elif name == 'feedback-list':
+            from user_feedback import list_feedback
+            value = list_feedback(args.vault, args.open)
+        elif name == 'feedback-resolve':
+            from user_feedback import resolve_feedback
+            value = resolve_feedback(args.vault, args.id, args.note)
         elif name == 'instances-query':
             from issue_registry import query_instances
             value = query_instances(args.vault, args.issue, args.screen, args.element, args.kind, args.session)
