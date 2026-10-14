@@ -182,7 +182,47 @@
     $('filterBar').innerHTML=chips.length?`<span class="hint">正在看：</span>${chips.join('')}<button type="button" class="filter-clear" data-clear-all>清除全部</button>`:'';
   }
   function applyFilters(){renderKindBar();renderFilterBar();renderEvidence();renderLibrary();}
+  // Open/folded state outlives sections a filter hides for a while; expand/collapse all starts it over.
+  const openMemory=new Map();
+  // The last thing clicked in each pane is the anchor: after a filter re-renders, it goes back to the same height
+  // on screen; if it was filtered out, its nearest remaining ancestor takes its place.
+  const anchors={evidence:null,library:null};
+  const PANES={evidence:['evidenceList','evidencePane'],library:['libraryList','library']};
+  function anchorOf(item){
+    if(item.card)return document.querySelector(`#evidenceList .card[data-key="${CSS.escape(item.card)}"][data-issue="${CSS.escape(item.issue||'')}"]`)||document.querySelector(`#evidenceList .card[data-key="${CSS.escape(item.card)}"]`);
+    if(item.tag)return document.querySelector(`#libraryList .tag-card[data-tag="${CSS.escape(item.tag)}"]`);
+    return document.getElementById(item.id);
+  }
+  function remember(target){
+    for(const [name,[list,pane]] of Object.entries(PANES)){
+      if(!$(list).contains(target))continue;
+      const chain=[];
+      for(let node=target;node&&node!==$(list);node=node.parentElement){
+        if(node.matches('.card[data-key]'))chain.push({card:node.dataset.key,issue:node.dataset.issue});
+        else if(node.matches('.tag-card[data-tag]'))chain.push({tag:node.dataset.tag});
+        else if(node.matches('section[id]'))chain.push({id:node.id});
+      }
+      if(chain.length)anchors[name]={chain};
+    }
+  }
+  // Measured just before re-rendering, so scrolling after the click is respected.
+  function anchorOffset(name){
+    const anchor=anchors[name],pane=$(PANES[name][1]);
+    for(const item of anchor?.chain||[]){const node=anchorOf(item);if(node&&node.getClientRects().length)return node.getBoundingClientRect().top-pane.getBoundingClientRect().top;}
+    return null;
+  }
+  function relocate(name,offset){
+    const anchor=anchors[name],pane=$(PANES[name][1]);
+    if(!anchor||offset===null)return false;
+    for(const item of anchor.chain){
+      const node=anchorOf(item);
+      if(node&&node.getClientRects().length){pane.scrollTop+=node.getBoundingClientRect().top-pane.getBoundingClientRect().top-offset;return true;}
+    }
+    return false;
+  }
+  function openStates(selector){for(const button of document.querySelectorAll(selector))openMemory.set(button.getAttribute('aria-controls'),button.getAttribute('aria-expanded')==='true');return openMemory;}
   function renderEvidence(){
+    const opened=openStates('#evidenceList .toggle'),scroll=$('evidencePane').scrollTop,offset=anchorOffset('evidence');
     state.issues=new Map();
     const index=node=>{state.issues.set(node.id,node);node.children.forEach(index);};state.overview.issues.forEach(index);
     let nodes=orderedIssues();
@@ -191,6 +231,8 @@
     const extra=cited().filter(k=>passes(k));
     if(extra.length)html+=`<section class="issue level-1" id="issue-cited" data-issue="cited">${row('issue-cited','报告引用的其他证据',`${extra.length} 条`,true,1)}<div id="issue-cited-body"><div class="cards">${extra.map(k=>card(state.instances.get(k),null,'cited')).join('')}</div></div></section>`;
     $('evidenceList').innerHTML=html||(filtering()?'<p class="empty">没有符合当前筛选的证据。</p>':'<p class="empty">资料库里还没有议题。</p>');
+    document.querySelectorAll('#evidenceList .toggle').forEach(button=>{const id=button.getAttribute('aria-controls');if(opened.has(id))setExpanded(button,opened.get(id));});
+    $('evidencePane').scrollTop=scroll;relocate('evidence',offset);
     document.querySelectorAll('#evidenceList .thumb[data-session]').forEach(button=>thumbObserver.observe(button));
     measureRows();updateStuck();
   }
@@ -336,6 +378,7 @@
   function renderLibrary(){
     if(!state.overview)return;
     if(!state.tags.length){$('libraryList').innerHTML='<p class="empty">资料库还没有系统 / 玩法标签。跨场次分析 agent 建好标签（tags.json）后点“刷新”。</p>';scheduleLibStuck();return;}
+    const opened=openStates('#libraryList .lib-toggle'),scroll=$('library').scrollTop,offset=anchorOffset('library');
     const keys=treeKeys();
     const byTag=new Map(state.tags.map(tag=>[tag.id,[]]));
     for(const k of keys)for(const tag of state.instanceTags[k]||[])byTag.get(tag)?.push(k);
@@ -350,6 +393,9 @@
       }).join('');
       return `<section class="lib-group" id="libgroup-${escape(group.id)}" data-name="${escape(group.name)}" data-count="${n}"><button type="button" class="lib-toggle" aria-expanded="true" aria-controls="lib-${escape(group.id)}"><span>${escape(group.name)}</span><span class="n">${n} 条</span></button><div class="lib-grid" id="lib-${escape(group.id)}">${cards}</div></section>`;
     }).join('');
+    document.querySelectorAll('#libraryList .lib-toggle').forEach(button=>{const id=button.getAttribute('aria-controls');
+      if(opened.has(id)&&!opened.get(id)){button.setAttribute('aria-expanded','false');$(id).hidden=true;}});
+    $('library').scrollTop=scroll;relocate('library',offset);
     document.querySelectorAll('#library .thumb[data-session]').forEach(node=>thumbObserver.observe(node));
     scheduleLibStuck();
   }
@@ -461,6 +507,7 @@
     }catch(error){status(error.message,true);}
   }
 
+  document.addEventListener('click',event=>remember(event.target),true);
   document.addEventListener('click',event=>{
     const open=event.target.closest('[data-open-session]');
     if(open){
@@ -546,8 +593,8 @@
   });
   // Cards and sections scroll to just below the sticky outline, whatever its current height.
   new ResizeObserver(()=>$('evidencePane').style.setProperty('--head',document.querySelector('.evidence-head').offsetHeight-16+'px')).observe(document.querySelector('.evidence-head'));
-  $('expandAll').onclick=()=>{document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,true));scheduleStuck();};
-  $('collapseAll').onclick=()=>{document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,false));$('evidencePane').scrollTop=0;scheduleStuck();};
+  $('expandAll').onclick=()=>{openMemory.clear();document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,true));scheduleStuck();};
+  $('collapseAll').onclick=()=>{openMemory.clear();document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,false));$('evidencePane').scrollTop=0;scheduleStuck();};
   $('evidencePane').addEventListener('scroll',scheduleStuck,{passive:true});
   $('library').addEventListener('scroll',scheduleLibStuck,{passive:true});
   new ResizeObserver(()=>{measureRows();scheduleStuck();}).observe($('evidencePane'));

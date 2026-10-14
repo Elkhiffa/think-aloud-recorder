@@ -180,7 +180,8 @@ async function main(){
     assert.match(await page.locator('#filterBar').textContent(),/江湖弈 ×/);
     assert.equal(await page.locator('#issue-BUG').count(),0);
     assert.deepEqual(await page.locator('#evidenceList .card').evaluateAll(cards=>cards.map(card=>card.dataset.key).sort()),[S1+'/i1',S2+'/i7'].sort());
-    await page.locator('#issue-TA-01 .kinds [data-kind="obstacle"]').first().click();
+    await page.locator('#expandAll').click();
+    await page.locator('#issue-TA-01-body>.kinds [data-kind="obstacle"]').click();
     assert.deepEqual(await page.locator('#evidenceList .card').evaluateAll(cards=>cards.map(card=>card.dataset.key)),[S2+'/i7']);
     assert.equal(await page.locator('#kindBar [data-kind="obstacle"]').getAttribute('aria-pressed'),'true');
     await page.locator('.tag-card[data-tag="wll"]').click();
@@ -216,6 +217,36 @@ async function main(){
     const after=(await page.locator('#libgroup-play .tag-card').first().boundingBox()).width;
     assert.equal(after,before,'card width does not jump when the scrollbar comes and goes');
     await page.locator('#libgroup-cross>.lib-toggle').click();
+  });
+  await check('changing filters keeps what is open or folded and where each pane is scrolled',async()=>{
+    await page.locator('#tabLibrary').click();
+    await page.locator('#libgroup-system>.lib-toggle').click();
+    await page.locator('#library').evaluate(pane=>pane.scrollTop=200);
+    await page.locator('#collapseAll').click();await page.locator('#issue-TA-01>.row>.toggle').click();await page.locator('[id="issue-TA-07"]>.row>.toggle').click();
+    const before=await page.locator('#library').evaluate(pane=>pane.scrollTop);
+    await page.locator('#kindBar [data-kind="confusion"]').click();
+    assert.equal(await page.locator('#libgroup-system>.lib-toggle').getAttribute('aria-expanded'),'false');
+    assert.equal(await page.locator('#library').evaluate(pane=>pane.scrollTop),before);
+    await page.locator('#kindBar [data-kind="confusion"]').click();
+    assert.equal(await page.locator('#issue-TA-07-body').isVisible(),true,'opened 议题 stays open');
+    assert.equal(await page.locator('[id="issue-TA-01.1-body"]').isHidden(),true,'folded 议题 stays folded');
+    await page.locator('#libgroup-system>.lib-toggle').click();await page.locator('#library').evaluate(pane=>pane.scrollTop=0);
+  });
+  await check('after a filter re-renders, the last clicked card in each pane returns to the same height on screen',async()=>{
+    await page.locator('#tabLibrary').click();await page.locator('#expandAll').click();
+    const card=page.locator('[id="issue-TA-07.1"] .card[data-key="'+S2+'/i7"]');
+    await card.scrollIntoViewIfNeeded();await page.locator('#evidencePane').evaluate(pane=>pane.scrollBy(0,-120));
+    await card.locator('.statement').click();
+    const cardBefore=(await card.boundingBox()).y;
+    await page.locator('#library').evaluate(pane=>pane.scrollTop=400);
+    const tag=page.locator('.tag-card[data-tag="x30"]');await tag.locator('.tag-name').click();await tag.locator('.tag-name').click();
+    const tagBefore=(await tag.boundingBox()).y;
+    await page.locator('#kindBar [data-kind="obstacle"]').click();
+    const atLimit=await page.locator('#evidencePane').evaluate(pane=>pane.scrollTop===0||Math.abs(pane.scrollTop-(pane.scrollHeight-pane.clientHeight))<=1);
+    assert.ok(Math.abs((await card.boundingBox()).y-cardBefore)<=2||atLimit,'evidence card keeps its place unless the pane cannot scroll that far');
+    assert.ok(Math.abs((await tag.boundingBox()).y-tagBefore)<=2,'library card keeps its place');
+    await page.locator('#kindBar [data-kind="obstacle"]').click();
+    await page.locator('#library').evaluate(pane=>pane.scrollTop=0);
   });
   await check('right-click an evidence card sets the cover of its tag; citations clear filters to land',async()=>{
     await page.locator('#expandAll').click();
