@@ -40,7 +40,9 @@ class InsightReportTests(unittest.TestCase):
                     dict(start=5, end=6, text='我这边也有bug。', speaker_id=1),
                     dict(start=7, end=8, text='又是那个bug。', speaker_id=0),
                     dict(start=9, end=10, text='可能是 Cocos 出啥问题，文字也重叠了。', speaker_id=0),
-                    dict(start=10.5, end=11, text='那只能说偶现吧。', speaker_id=0)]
+                    dict(start=10.5, end=11, text='那只能说偶现吧。', speaker_id=0),
+                    dict(start=11.1, end=11.4, text='篮子太悬空了，价格还超框。', speaker_id=0),
+                    dict(start=11.5, end=11.8, text='这个都看不全了，图标也标错了。', speaker_id=0)]
         role = dict(transcript_id=transcript_id(segments), speaker_id=0, source='manual')
         self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', ['BUG'],
                           segments=segments, recorder_speaker=role)
@@ -49,9 +51,10 @@ class InsightReportTests(unittest.TestCase):
         rows = insight.bug_hits(self.vault)
         self.assertEqual([(row['session_id'][4:8], row['ref'], row['state']) for row in rows],
                          [('1008', 't000001', 'linked'), ('1008', 't000003', 'raw'), ('1008', 't000004', 'raw'), ('1008', 't000005', 'raw'),
+                          ('1008', 't000006', 'raw'), ('1008', 't000007', 'raw'),
                           ('1009', 't000001', 'instance')])
         tree = insight.evidence(self.vault)
-        self.assertEqual(len(tree['bug_unorganized']), 4)
+        self.assertEqual(len(tree['bug_unorganized']), 6)
         bug = next(node for node in tree['issues'] if node['id'] == 'BUG')
         self.assertEqual([row['instance_id'] for row in bug['support']], ['i1'])
         self.assertEqual(tree['session_labels'], {'20261008-120000-aaaaaa': '1008', '20261009-120000-bbbbbb': '1009'})
