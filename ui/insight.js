@@ -4,7 +4,8 @@
   const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const KIND={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
   const CONTEXT={hud:'HUD / 战斗 / 大世界',multi_screen:'跨多个界面',outside_game:'游戏外窗口',unknown:'认不出界面'};
-  const state={overview:null,instances:new Map(),labels:{},reports:[],report:null,issues:new Map(),feedback:[]};
+  const state={overview:null,instances:new Map(),labels:{},reports:[],report:null,issues:new Map(),feedback:[],
+    tags:[],tagGroups:[],instanceTags:{},filters:{kinds:new Set(),tags:new Set()}};
   let api=null;
 
   async function call(method,...args){
@@ -70,7 +71,7 @@
   function toggle(id,text,n,expanded,level,code=''){return `<button type="button" class="toggle" aria-expanded="${expanded}" aria-controls="${id}-body" data-level="${level}"><span class="label" title="${escape(text.replace(/<[^>]+>/g,''))}">${text}</span><span class="n">${escape(n)}${code?`<span class="code">${escape(code)}</span>`:''}</span></button>`;}
   const issueName=id=>state.issues.get(id)?.title||id;
   // The feedback entry stays outside the toggle button so it never expands or collapses the section.
-  function flag(target){return `<button type="button" class="flag" data-flag="${escape(JSON.stringify(target))}" title="这里不对？写一句该怎么调">有问题</button>`;}
+  function flag(target){return `<button type="button" class="flag" data-flag="${escape(JSON.stringify(target))}" title="有问题？写一句怎么调" aria-label="有问题？写一句怎么调"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M10.8 2.6a1.3 1.3 0 0 1 1.8 0l.8.8a1.3 1.3 0 0 1 0 1.8L6 12.6l-2.9.6.6-2.9z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg></button>`;}
   function row(id,text,n,expanded,level,code,target){return `<div class="row">${toggle(id,text,n,expanded,level,code)}${target?flag(target):''}</div>`;}
   function evidenceBlock(node){
     let html='';
@@ -82,7 +83,7 @@
   function issueSection(node,level=1){
     const status=node.status==='candidate'?' <span class="badge">待你定</span>':'';
     const title=node.id==='BUG'?'BUG':escape(node.title);
-    let body=node.description?`<p class="desc">${describe(node.description,node.id)}</p>`:'';
+    let body=kindChips(node)+(node.description?`<p class="desc">${describe(node.description,node.id)}</p>`:'');
     // 洞察 and 议题 levels list the busiest first; 子议题 keep the analyst's order.
     const children=level<=1?byCount(node.children):node.children;
     for(const child of children)body+=issueSection(child,level+1);
@@ -92,7 +93,7 @@
       body+=`<section class="group level-${level+1}" id="issue-${escape(node.id)}-own" data-issue="${escape(node.id)}">${row('issue-'+node.id+'-own',name,`${own} 条`,false,level+1)}<div id="issue-${escape(node.id)}-own-body" hidden>${evidenceBlock(node)}</div></section>`;
     }else if(own)body+=evidenceBlock(node);
     let extra=0;
-    if(node.id==='BUG'&&state.overview.bug_unorganized.length){
+    if(node.id==='BUG'&&state.overview.bug_unorganized.length&&!filtering()){
       extra=state.overview.bug_unorganized.length;
       body+=`<section class="group level-2" id="issue-BUG-raw">${row('issue-BUG-raw','未整理的 bug 原话',`${extra} 处`,false,2)}<ul class="hits" id="issue-BUG-raw-body" hidden>`+
         state.overview.bug_unorganized.map(hit=>`<li>${jump(hit.session_id,hit.start,(state.labels[hit.session_id]||hit.session_id)+' '+formatTime(hit.start))}<span>“${escape(hit.text)}”${hit.state==='instance'?` <span class="badge">已是实例 ${escape(hit.instances.join('、'))}，未挂 BUG</span>`:''}</span></li>`).join('')+'</ul></section>';
@@ -133,14 +134,45 @@
     for(const row of state.report?.citations||[])if(row.kind==='instance'&&row.resolved){const k=key(row.session_id,row.instance_id);if(!shown.has(k)&&!extra.includes(k))extra.push(k);}
     return extra;
   }
+  // Filters: judgment kinds and screen-library tags narrow every level at once; empty branches hide.
+  const filtering=()=>state.filters.kinds.size>0||state.filters.tags.size>0;
+  function passes(k,ignoreTags=false){
+    const row=state.instances.get(k);if(!row)return false;
+    if(state.filters.kinds.size&&!state.filters.kinds.has(row.kind))return false;
+    if(!ignoreTags&&state.filters.tags.size&&!(state.instanceTags[k]||[]).some(tag=>state.filters.tags.has(tag)))return false;
+    return true;
+  }
+  function prune(node){
+    const keep=link=>passes(key(link.session_id,link.instance_id));
+    return {...node,support:node.support.filter(keep),counter:node.counter.filter(keep),children:node.children.map(prune).filter(child=>total(child))};
+  }
+  function kindCounts(node,found=new Map()){
+    for(const link of node.support.concat(node.counter)){const row=state.instances.get(key(link.session_id,link.instance_id));if(row)found.set(row.kind,(found.get(row.kind)||0)+1);}
+    node.children.forEach(child=>kindCounts(child,found));
+    return found;
+  }
+  function kindChips(node){
+    const found=[...kindCounts(node)].sort((a,b)=>b[1]-a[1]);
+    if(!found.length)return '';
+    return '<p class="kinds">'+found.map(([kind,n])=>`<button type="button" class="kind-chip kind-${escape(kind)}${state.filters.kinds.has(kind)?' active':''}" data-kind="${escape(kind)}" aria-pressed="${state.filters.kinds.has(kind)}">${escape(KIND[kind]||kind)} ${n}</button>`).join('')+'</p>';
+  }
+  const tagName=id=>state.tags.find(tag=>tag.id===id)?.name||id;
+  function renderFilterBar(){
+    const chips=[...[...state.filters.tags].map(id=>`<button type="button" class="filter-chip" data-clear-tag="${escape(id)}" title="取消这个筛选">${escape(tagName(id))} ×</button>`),
+      ...[...state.filters.kinds].map(kind=>`<button type="button" class="filter-chip" data-clear-kind="${escape(kind)}" title="取消这个筛选">${escape(KIND[kind]||kind)} ×</button>`)];
+    $('filterBar').hidden=!chips.length;
+    $('filterBar').innerHTML=chips.length?`<span class="hint">正在看：</span>${chips.join('')}<button type="button" class="filter-clear" data-clear-all>清除全部</button>`:'';
+  }
+  function applyFilters(){renderFilterBar();renderEvidence();renderLibrary();}
   function renderEvidence(){
-    const nodes=orderedIssues();
     state.issues=new Map();
-    const index=node=>{state.issues.set(node.id,node);node.children.forEach(index);};nodes.forEach(index);
+    const index=node=>{state.issues.set(node.id,node);node.children.forEach(index);};state.overview.issues.forEach(index);
+    let nodes=orderedIssues();
+    if(filtering())nodes=nodes.map(prune).filter(node=>total(node));
     let html=nodes.map(node=>issueSection(node)).join('');
-    const extra=cited();
+    const extra=cited().filter(k=>passes(k));
     if(extra.length)html+=`<section class="issue level-1" id="issue-cited" data-issue="cited">${row('issue-cited','报告引用的其他证据',`${extra.length} 条`,true,1)}<div id="issue-cited-body"><div class="cards">${extra.map(k=>card(state.instances.get(k),null,'cited')).join('')}</div></div></section>`;
-    $('evidenceList').innerHTML=html||'<p class="empty">资料库里还没有议题。</p>';
+    $('evidenceList').innerHTML=html||(filtering()?'<p class="empty">没有符合当前筛选的证据。</p>':'<p class="empty">资料库里还没有议题。</p>');
     document.querySelectorAll('#evidenceList .thumb[data-session]').forEach(button=>thumbObserver.observe(button));
     measureRows();updateStuck();
   }
@@ -194,6 +226,7 @@
   function showEvidenceTab(){selectTab('evidence');}
   function goToIssue(id){
     showEvidenceTab();
+    if(!$('issue-'+id)&&filtering()){clearFilters();status('已清除筛选，以便定位这条引用。');}
     const section=revealSection(id);
     if(!section){status('右栏没有这个议题：'+id,true);return;}
     section.scrollIntoView({block:'start',behavior:'smooth'});
@@ -201,6 +234,7 @@
   function goToInstance(sessionId,instanceId,issue){
     showEvidenceTab();
     const k=key(sessionId,instanceId);
+    if(filtering()&&!document.querySelector(`#evidenceList .card[data-key="${CSS.escape(k)}"]`)){clearFilters();status('已清除筛选，以便定位这条引用。');}
     const all=[...document.querySelectorAll('#evidenceList .card')].filter(card=>card.dataset.key===k);
     const target=all.find(card=>card.dataset.issue===issue)||all.find(card=>issue&&card.dataset.issue.startsWith(issue+'.'))||all[0];
     if(!target){status('右栏没有这条证据：'+k,true);return;}
@@ -271,6 +305,50 @@
     if(missing)status(`报告里有 ${missing} 条引用在资料库中找不到，已用虚线标出。`,true);
   }
 
+  function clearFilters(){state.filters.kinds.clear();state.filters.tags.clear();applyFilters();}
+
+  // Screen library: tag dimensions are collapsible headings; tags are cover-on-top cards that filter the tree.
+  function treeKeys(){
+    const keys=[];const seen=new Set();
+    const walk=node=>{for(const link of node.support.concat(node.counter)){const k=key(link.session_id,link.instance_id);if(!seen.has(k)&&passes(k,true)){seen.add(k);keys.push(k);}}node.children.forEach(walk);};
+    orderedIssues().forEach(walk);
+    return keys;
+  }
+  function renderLibrary(){
+    if(!state.overview)return;
+    if(!state.tags.length){$('library').innerHTML='<p class="empty">资料库还没有系统 / 玩法标签。跨场次分析 agent 建好标签（tags.json）后点“刷新”。</p>';return;}
+    const keys=treeKeys();
+    const byTag=new Map(state.tags.map(tag=>[tag.id,[]]));
+    for(const k of keys)for(const tag of state.instanceTags[k]||[])byTag.get(tag)?.push(k);
+    $('library').innerHTML=state.tagGroups.map(group=>{
+      const tags=state.tags.filter(tag=>tag.group===group.id).sort((a,b)=>byTag.get(b.id).length-byTag.get(a.id).length);
+      const n=new Set(tags.flatMap(tag=>byTag.get(tag.id))).size;
+      const cards=tags.map(tag=>{
+        const hits=byTag.get(tag.id),row=state.instances.get(hits.find(k=>Number.isFinite(state.instances.get(k)?.frame_at??state.instances.get(k)?.refers_start))||'');
+        const cover=tag.cover||(row?{session_id:row.session_id,at:row.frame_at??row.refers_start}:null);
+        const image=cover?`<span class="thumb cover" data-session="${escape(cover.session_id)}" data-time="${cover.at}" data-caption="${escape(tag.name)}"></span>`:'<span class="cover empty-cover"></span>';
+        return `<article class="tag-card${state.filters.tags.has(tag.id)?' active':''}${hits.length?'':' none'}" data-tag="${escape(tag.id)}" tabindex="0" role="button" aria-pressed="${state.filters.tags.has(tag.id)}">${image}<div class="tag-meta"><span class="tag-name" title="${escape(tag.name)}">${escape(tag.name)}</span><span class="n">${hits.length}</span>${flag({kind:'tag',id:tag.id})}</div></article>`;
+      }).join('');
+      return `<section class="lib-group"><button type="button" class="lib-toggle" aria-expanded="true" aria-controls="lib-${escape(group.id)}"><span>${escape(group.name)}</span><span class="n">${n} 条</span></button><div class="lib-grid" id="lib-${escape(group.id)}">${cards}</div></section>`;
+    }).join('');
+    document.querySelectorAll('#library .thumb[data-session]').forEach(node=>thumbObserver.observe(node));
+  }
+  function selectLeft(name){
+    for(const [tab,pane,id] of [['tabReport','report','report'],['tabLibrary','library','library']]){
+      $(tab).setAttribute('aria-selected',String(id===name));$(pane).hidden=id!==name;
+    }
+    document.querySelector('.report-choice').hidden=name!=='report';
+  }
+  function openMenu(card,x,y){
+    const row=state.instances.get(card.dataset.key);if(!row)return;
+    const at=row.frame_at??row.refers_start??row.said_start,tags=state.instanceTags[card.dataset.key]||[];
+    $('menu').innerHTML=tags.length?tags.map(tag=>`<button type="button" role="menuitem" data-cover-tag="${escape(tag)}" data-cover-session="${escape(row.session_id)}" data-cover-at="${at}">设为「${escape(tagName(tag))}」封面</button>`).join('')
+      :'<button type="button" role="menuitem" disabled>设为封面（这条证据没有界面库标签）</button>';
+    $('menu').hidden=false;
+    const box=$('menu').getBoundingClientRect();
+    $('menu').style.left=Math.min(x,innerWidth-box.width-8)+'px';$('menu').style.top=Math.min(y,innerHeight-box.height-8)+'px';
+    $('menu').querySelector('button:not([disabled])')?.focus();
+  }
   function selectTab(name){
     for(const [tab,pane,id] of [['tabEvidence','evidencePane','evidence'],['tabFeedback','feedbackPane','feedback']]){
       $(tab).setAttribute('aria-selected',String(id===name));$(pane).hidden=id!==name;
@@ -334,12 +412,14 @@
     try{
       const overview=await call('get_overview');
       state.overview=overview;state.labels=overview.session_labels;state.reports=overview.reports;state.feedback=overview.feedback;
+      state.tags=overview.tags||[];state.tagGroups=overview.tag_groups||[];state.instanceTags=overview.instance_tags||{};
+      for(const id of [...state.filters.tags])if(!state.tags.some(tag=>tag.id===id))state.filters.tags.delete(id);
       state.instances=new Map(overview.instances.map(row=>[key(row.session_id,row.instance_id),row]));
       $('title').textContent='洞察 · '+overview.vault;document.title=$('title').textContent;
       const previous=$('reportSelect').value;
       $('reportSelect').innerHTML=overview.reports.length?overview.reports.map(row=>`<option value="${escape(row.name)}">${escape(row.name)}</option>`).join(''):'<option value="">（没有报告）</option>';
       if(overview.reports.some(row=>row.name===previous))$('reportSelect').value=previous;
-      renderEvidence();renderFeedback();
+      renderFilterBar();renderEvidence();renderFeedback();renderLibrary();
       await openReport($('reportSelect').value);
       if(!state.report||!state.report.citations.some(row=>!row.resolved))status('');
     }catch(error){status(error.message,true);}
@@ -379,6 +459,26 @@
       feedbackAction(feedbackButton.closest('.feedback-item'),action).catch(error=>status(error.message,true));
       return;
     }
+    const coverItem=event.target.closest('[data-cover-tag]');
+    if(coverItem){
+      $('menu').hidden=true;
+      call('set_cover',coverItem.dataset.coverTag,coverItem.dataset.coverSession,Number(coverItem.dataset.coverAt))
+        .then(tags=>{state.tags=tags;renderLibrary();status(`已把这张画面设为「${tagName(coverItem.dataset.coverTag)}」的封面。`);}).catch(error=>status(error.message,true));
+      return;
+    }
+    if(!event.target.closest('#menu'))$('menu').hidden=true;
+    const libToggle=event.target.closest('.lib-toggle');
+    if(libToggle){const open=libToggle.getAttribute('aria-expanded')!=='true';libToggle.setAttribute('aria-expanded',String(open));$(libToggle.getAttribute('aria-controls')).hidden=!open;return;}
+    const tagCard=event.target.closest('[data-tag]');
+    if(tagCard){const id=tagCard.dataset.tag;state.filters.tags.has(id)?state.filters.tags.delete(id):state.filters.tags.add(id);applyFilters();return;}
+    const kindChip=event.target.closest('[data-kind]');
+    if(kindChip){const kind=kindChip.dataset.kind;state.filters.kinds.has(kind)?state.filters.kinds.delete(kind):state.filters.kinds.add(kind);applyFilters();return;}
+    const clear=event.target.closest('[data-clear-tag],[data-clear-kind],[data-clear-all]');
+    if(clear){
+      if(clear.hasAttribute('data-clear-all'))clearFilters();
+      else{clear.dataset.clearTag?state.filters.tags.delete(clear.dataset.clearTag):state.filters.kinds.delete(clear.dataset.clearKind);applyFilters();}
+      return;
+    }
     const thumbButton=event.target.closest('.thumb[data-session]');
     if(thumbButton){
       $('lightboxCaption').textContent=thumbButton.dataset.caption;$('lightboxImage').removeAttribute('src');$('lightbox').hidden=false;
@@ -387,7 +487,15 @@
     }
     if(event.target.closest('#lightbox'))$('lightbox').hidden=true;
   });
-  document.addEventListener('keydown',event=>{if(event.key==='Escape')$('lightbox').hidden=true;});
+  document.addEventListener('keydown',event=>{
+    if(event.key==='Escape'){$('lightbox').hidden=true;$('menu').hidden=true;}
+    if((event.key==='Enter'||event.key===' ')&&event.target.matches?.('[data-tag]')){event.preventDefault();event.target.click();}
+  });
+  document.addEventListener('contextmenu',event=>{
+    const card=event.target.closest('#evidenceList .card');
+    if(!card)return;
+    event.preventDefault();openMenu(card,event.clientX,event.clientY);
+  });
   // Cards and sections scroll to just below the sticky outline, whatever its current height.
   new ResizeObserver(()=>$('evidencePane').style.setProperty('--head',document.querySelector('.evidence-head').offsetHeight-16+'px')).observe(document.querySelector('.evidence-head'));
   $('expandAll').onclick=()=>{document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,true));scheduleStuck();};
@@ -398,6 +506,8 @@
   $('refresh').onclick=load;
   $('tabEvidence').onclick=()=>selectTab('evidence');
   $('tabFeedback').onclick=()=>selectTab('feedback');
+  $('tabReport').onclick=()=>selectLeft('report');
+  $('tabLibrary').onclick=()=>selectLeft('library');
 
   function start(){
     if(api)return;

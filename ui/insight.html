@@ -3,6 +3,10 @@
 <body>
 <header class="topbar">
   <h1 id="title">洞察</h1>
+  <div class="tabs" role="tablist" aria-label="左栏内容">
+    <button type="button" role="tab" id="tabReport" aria-selected="true" aria-controls="report">报告</button>
+    <button type="button" role="tab" id="tabLibrary" aria-selected="false" aria-controls="library">界面库</button>
+  </div>
   <label class="report-choice"><span class="sr-only">选择报告</span><select id="reportSelect"></select></label>
   <button type="button" id="refresh" title="重新读取报告、议题和目录">刷新</button>
   <div class="tabs" role="tablist" aria-label="右栏内容">
@@ -12,13 +16,17 @@
   <p id="status" class="status" role="status" aria-live="polite"></p>
 </header>
 <main class="split">
+  <div class="left-col">
   <article id="report" class="pane report" tabindex="0" aria-label="分析报告"><p class="empty">正在读取…</p></article>
+  <section id="library" class="pane library" role="tabpanel" aria-labelledby="tabLibrary" tabindex="0" hidden></section>
+  </div>
   <section id="evidencePane" class="pane evidence" role="tabpanel" aria-labelledby="tabEvidence" tabindex="0">
     <div class="evidence-head">
     <div class="tree-bar">
       <button type="button" id="expandAll">全部展开</button>
       <button type="button" id="collapseAll">全部收起</button>
     </div>
+    <div id="filterBar" class="filter-bar" hidden></div>
     </div>
     <div id="evidenceList"></div>
     <nav id="nextBar" class="next-bar" aria-label="下一个议题" hidden></nav>
@@ -28,6 +36,7 @@
     <div id="feedbackList"></div>
   </section>
 </main>
+<div id="menu" class="menu" role="menu" hidden></div>
 <div id="lightbox" class="lightbox" hidden><img id="lightboxImage" alt="所指时刻的大图"><p id="lightboxCaption"></p></div>
 <script src="insight.js"></script>
 </body></html>

@@ -6,9 +6,12 @@ const root=path.join(__dirname,'..'),out=path.resolve(process.env.REVIEW_TEST_OU
 fs.mkdirSync(out,{recursive:true});
 const S1='20261008-120000-aaaaaa',S2='20261009-120000-bbbbbb';
 const row=(session,id,extra={})=>Object.assign({session_id:session,instance_id:id,said_start:12,refers_start:2,refers_end:4,refers_basis:'same_time',screen:'bag',catalog_screen:'bag',elements:[],kind:'confusion',statement:'合成陈述 '+id,issue_tags:[],issue_links:[],event_id:'e1',event_title:'合成活动'},extra);
-const instances=[row(S1,'i1',{statement:'清完提示后忘了目标 <img src=x>'}),row(S1,'i6',{refers_start:2,refers_end:300,said_start:600}),row(S2,'i1'),row(S2,'i2',{refers_basis:'earlier_session',refers_start:null,refers_end:null}),row(S1,'i3'),row(S2,'i9'),row(S2,'i5',{statement:'教学弹窗左半边多了一层灰色'}),row(S2,'i7',{statement:'染色方案存不下来'})];
+const instances=[row(S1,'i1',{statement:'清完提示后忘了目标 <img src=x>'}),row(S1,'i6',{refers_start:2,refers_end:300,said_start:600}),row(S2,'i1'),row(S2,'i2',{refers_basis:'earlier_session',refers_start:null,refers_end:null}),row(S1,'i3'),row(S2,'i9'),row(S2,'i5',{statement:'教学弹窗左半边多了一层灰色'}),row(S2,'i7',{statement:'染色方案存不下来',kind:'obstacle'})];
 const link=(session,id,reason='合成理由')=>({session_id:session,instance_id:id,reason});
-const overview={vault:'合成资料库',reports:[{name:'r.md',modified:1,bytes:10}],feedback:[],session_labels:{[S1]:'1008',[S2]:'1009'},instances,
+const overview={vault:'合成资料库',reports:[{name:'r.md',modified:1,bytes:10}],feedback:[],
+  tag_groups:[{id:'play',name:'活动 / 玩法'},{id:'system',name:'系统'}],
+  tags:[{id:'jhy',name:'江湖弈',group:'play',keywords:['江湖弈']},{id:'wll',name:'武林录',group:'play',keywords:[]},{id:'shop',name:'商店',group:'system',keywords:['商店']}],
+  instance_tags:{[S1+'/i1']:['jhy'],[S2+'/i7']:['jhy'],[S1+'/i3']:['wll'],[S2+'/i1']:['shop']},session_labels:{[S1]:'1008',[S2]:'1009'},instances,
   issues:[{id:'TA-01',title:'目标明确仍有摩擦',description:'合成议题',status:'confirmed',support:[link(S2,'i2')],counter:[],children:[
      {id:'TA-07',parent:'TA-01',title:'外观染色中的断点',description:'中间议题',status:'confirmed',support:[],counter:[],children:[
       {id:'TA-07.1',parent:'TA-07',title:'染色方案存不下来',description:'第三层',status:'confirmed',support:[link(S2,'i7')],counter:[],children:[]}]},
@@ -35,6 +38,7 @@ async function main(){
       thumbnail:async()=>({ok:true,data:pixel}),open_review:async(session,at)=>{window.__calls.push(['open_review',session,at]);return {ok:true,data:{ready:true}};},
       add_feedback:async request=>{window.__calls.push(['add_feedback',request]);window.__overview.feedback.push({id:'f'+window.__overview.feedback.length,created:'2026-10-14T18:00:00+08:00',status:'open',...request});return {ok:true,data:structuredClone(window.__overview.feedback)};},
       edit_feedback:async(id,text)=>{window.__calls.push(['edit_feedback',id,text]);window.__overview.feedback.find(item=>item.id===id).text=text;return {ok:true,data:structuredClone(window.__overview.feedback)};},
+      set_cover:async(tag,session,at)=>{window.__calls.push(['set_cover',tag,session,at]);const found=window.__overview.tags.find(item=>item.id===tag);found.cover={session_id:session,at};return {ok:true,data:structuredClone(window.__overview.tags)};},
       remove_feedback:async id=>{window.__calls.push(['remove_feedback',id]);window.__overview.feedback=window.__overview.feedback.filter(item=>item.id!==id);return {ok:true,data:structuredClone(window.__overview.feedback)};}}};
   },[overview,report]);
   const check=async(name,run)=>{await run();result.checks.push({name,pass:true});};
@@ -113,7 +117,7 @@ async function main(){
       {target:{kind:'instance',session_id:S2,instance_id:'i7',issue:'TA-07.1'},text:'界面名不对'}]);
     await page.locator('#tabFeedback').click();
     const first=page.locator('.feedback-item').first();
-    assert.match(await first.locator('.feedback-target').textContent(),/困惑 · 合成活动 1009 i7（在“染色方案存不下来”下）/);
+    assert.match(await first.locator('.feedback-target').textContent(),/阻碍 · 合成活动 1009 i7（在“染色方案存不下来”下）/);
     await first.locator('[data-feedback-edit]').click();await page.locator('#feedbackText').fill('界面名应为包裹/道具');
     await first.locator('button[type="submit"]').click();
     await page.waitForFunction(()=>document.querySelector('.feedback-text')?.textContent==='界面名应为包裹/道具');
@@ -155,6 +159,43 @@ async function main(){
     await desc.locator('.cite',{hasText:'1009 i9'}).click();
     await page.locator('#issue-cited .card[data-key="'+S2+'/i9"]').waitFor({state:'visible'});
     await page.locator('#collapseAll').click();
+  });
+  await check('screen library: tag cards filter the tree, kind chips stack, filters clear',async()=>{
+    await page.locator('#tabEvidence').click();await page.locator('#tabLibrary').click();
+    assert.equal(await page.locator('#report').isHidden(),true);
+    assert.deepEqual(await page.locator('.lib-toggle>span:first-child').allTextContents(),['活动 / 玩法','系统']);
+    assert.deepEqual(await page.locator('#lib-play .tag-name').allTextContents(),['江湖弈','武林录']);
+    assert.equal(await page.locator('#lib-play .tag-card[data-tag="jhy"] .n').textContent(),'2');
+    const coverBox=await page.locator('.tag-card[data-tag="jhy"] .cover').boundingBox(),nameBox=await page.locator('.tag-card[data-tag="jhy"] .tag-name').boundingBox();
+    assert.ok(nameBox.y>=coverBox.y+coverBox.height,'name sits below the cover, not on it');
+    await page.locator('.tag-card[data-tag="jhy"]').click();
+    assert.match(await page.locator('#filterBar').textContent(),/江湖弈 ×/);
+    assert.equal(await page.locator('#issue-BUG').count(),0);
+    assert.deepEqual(await page.locator('#evidenceList .card').evaluateAll(cards=>cards.map(card=>card.dataset.key).sort()),[S1+'/i1',S2+'/i7'].sort());
+    await page.locator('#issue-TA-01 .kinds [data-kind="obstacle"]').first().click();
+    assert.deepEqual(await page.locator('#evidenceList .card').evaluateAll(cards=>cards.map(card=>card.dataset.key)),[S2+'/i7']);
+    assert.match(await page.locator('#filterBar').textContent(),/阻碍 ×/);
+    await page.locator('.tag-card[data-tag="wll"]').click();
+    assert.equal(await page.locator('#issue-BUG').count(),0,'kind filter still applies to the union of tags');
+    await page.locator('[data-clear-all]').click();
+    assert.equal(await page.locator('#filterBar').isHidden(),true);
+    assert.equal(await page.locator('#issue-BUG').count(),1);
+  });
+  await check('right-click an evidence card sets the cover of its tag; citations clear filters to land',async()=>{
+    await page.locator('#expandAll').click();
+    await page.locator('[id="issue-TA-07.1"] .card[data-key="'+S2+'/i7"]').click({button:'right'});
+    assert.equal(await page.locator('#menu').isVisible(),true);
+    await page.locator('#menu [data-cover-tag="jhy"]').click();
+    assert.deepEqual((await page.evaluate(()=>window.__calls)).at(-1),['set_cover','jhy',S2,2]);
+    await page.waitForFunction(()=>document.querySelector('.tag-card[data-tag="jhy"] .cover')?.dataset.session);
+    assert.equal(await page.locator('.tag-card[data-tag="jhy"] .cover').getAttribute('data-session'),S2);
+    await page.locator('.tag-card[data-tag="wll"]').click();
+    await page.locator('#tabReport').click();
+    await page.locator('.cite',{hasText:'1008 i1'}).click();
+    await page.locator('#issue-TA-01\\.1 .card[data-key="'+S1+'/i1"]').waitFor({state:'visible'});
+    assert.equal(await page.locator('#filterBar').isHidden(),true);
+    assert.equal(await page.locator('.flag svg').count()>0,true);
+    assert.equal(await page.locator('.flag').first().getAttribute('aria-label'),'有问题？写一句怎么调');
   });
   await check('narrow window keeps the tree without horizontal scroll',async()=>{
     await page.locator('#tabEvidence').click();await page.setViewportSize({width:800,height:900});
