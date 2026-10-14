@@ -16,14 +16,10 @@
   <article id="report" class="pane report" tabindex="0" aria-label="分析报告"><p class="empty">正在读取…</p></article>
   <section id="evidencePane" class="pane evidence" role="tabpanel" aria-labelledby="tabEvidence" tabindex="0">
     <div class="evidence-head">
-    <div class="toc-bar">
-      <button type="button" id="tocToggle" aria-expanded="true" aria-controls="toc">目录</button>
-      <label class="toc-select"><span class="sr-only">跳到议题</span><select id="tocSelect"></select></label>
+    <div class="tree-bar">
       <button type="button" id="expandAll">全部展开</button>
       <button type="button" id="collapseAll">全部收起</button>
     </div>
-    <p class="legend">TA：你定义的议题 · N：agent 提议的候选议题 · 编号带 .n 的是子议题 · 标“候选”的等你确认</p>
-    <nav id="toc" class="toc" aria-label="议题目录"></nav>
     </div>
     <div id="evidenceList"></div>
   </section>

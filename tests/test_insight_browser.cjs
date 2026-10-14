@@ -40,11 +40,15 @@ async function main(){
   },[overview,report]);
   const check=async(name,run)=>{await run();result.checks.push({name,pass:true});};
   await page.goto(origin);await page.waitForSelector('#issue-TA-01');
-  await check('outline lists issues and sub-issues with counts; sub-issues start collapsed',async()=>{
-    assert.match(await page.locator('#toc').textContent(),/TA-01\.1 清完提示后忘了目标支持 2 · 反例 1/);
+  await check('tree leads with titles; issue codes stay small at the end; sub-issues start collapsed',async()=>{
+    const sub=page.locator('#issue-TA-01\\.1>.toggle');
+    assert.match(await sub.locator('.label').textContent(),/^清完提示后忘了目标/);
+    assert.equal(await sub.locator('.code').textContent(),'TA-01.1');
+    assert.match(await sub.locator('.n').textContent(),/^支持 2 · 反例 1/);
     assert.equal(await page.locator('#issue-TA-01-body').isVisible(),true);
     assert.equal(await page.locator('#issue-TA-01\\.1-body').isHidden(),true);
-    assert.match(await page.locator('#toc').textContent(),/BUG Bug/);
+    assert.equal(await page.locator('#issue-BUG>.toggle .label').textContent(),'BUG');
+    assert.equal(await page.locator('#toc').count(),0);
   });
   await check('report citation expands the collapsed sub-issue and scrolls to the card',async()=>{
     await page.locator('.cite',{hasText:'1008 i1'}).click();
@@ -69,12 +73,12 @@ async function main(){
     assert.equal(await page.locator('#issue-TA-01\\.1-body').isVisible(),true);
     assert.equal(await page.locator('#issue-BUG-raw-body').isVisible(),true);
   });
-  await check('outline link reveals its section and the outline folds away',async()=>{
+  await check('collapsed tree is the outline: collapse all, then open an issue and a sub-issue',async()=>{
     await page.locator('#collapseAll').click();
-    await page.locator('#toc a[data-target="TA-01.1"]').click();
-    assert.equal(await page.locator('#issue-TA-01\\.1').isVisible(),true);
-    await page.locator('#tocToggle').click();assert.equal(await page.locator('#toc').isHidden(),true);
-    await page.locator('#tocToggle').click();
+    assert.equal(await page.locator('#issue-TA-01-body').isHidden(),true);
+    await page.locator('#issue-TA-01>.toggle').click();
+    await page.locator('#issue-TA-01\\.1>.toggle').click();
+    assert.equal(await page.locator('#issue-TA-01\\.1-body').isVisible(),true);
   });
   await check('evidence times open the review at that moment',async()=>{
     await page.locator('#expandAll').click();
@@ -108,7 +112,7 @@ async function main(){
     assert.deepEqual((await page.evaluate(()=>window.__calls)).at(-1),['dismiss_issue','BUG.1']);
     const article=page.locator('#issueList .proposal[data-issue-id="TA-01.1"]');
     assert.equal(await article.locator('.shot').count(),3);
-    assert.match(await article.textContent(),/属于 TA-01/);
+    assert.match(await article.textContent(),/属于“目标明确仍有摩擦”/);
     await article.locator('[data-issue-action="title"]').click();
     await page.locator('#issueTitle').fill('清完提示后忘了原本目标');await page.locator('#issueList button[type="submit"]').click();
     await page.waitForFunction(()=>document.querySelector('#issueList h3')?.textContent.includes('原本目标'));
@@ -116,13 +120,12 @@ async function main(){
     await page.waitForFunction(()=>document.querySelector('#issueCount').textContent==='');
     const calls=await page.evaluate(()=>window.__calls);
     assert.deepEqual(calls.slice(-2),[['update_issue',{id:'TA-01.1',title:'清完提示后忘了原本目标'}],['update_issue',{id:'TA-01.1',status:'confirmed'}]]);
-    assert.equal(await page.locator('#toc a[data-target="TA-01.1"]').textContent().then(t=>t.includes('原本目标')),true);
+    assert.equal(await page.locator('#issue-TA-01\\.1>.toggle .label').textContent().then(t=>t.includes('原本目标')),true);
   });
-  await check('narrow window switches the outline to a select',async()=>{
+  await check('narrow window keeps the tree without horizontal scroll',async()=>{
     await page.locator('#tabEvidence').click();await page.setViewportSize({width:800,height:900});
-    assert.equal(await page.locator('#toc').isHidden(),true);
-    await page.locator('#tocSelect').selectOption('BUG');
-    assert.equal(await page.locator('#issue-BUG').isVisible(),true);
+    assert.equal(await page.locator('#expandAll').isVisible(),true);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     await page.screenshot({path:path.join(out,'insight-800.png')});
   });
   assert.deepEqual(result.errors,[]);

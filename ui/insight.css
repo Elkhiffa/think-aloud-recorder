@@ -38,25 +38,18 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .cite.unresolved{text-decoration:line-through;cursor:help}
 .empty,.hint{color:var(--muted)}
 .evidence-head{position:sticky;top:-16px;z-index:2;margin:-16px -24px 16px;background:var(--surface);border-bottom:1px solid var(--line)}
-.toc-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:12px 24px 8px}
-.toc-select{display:none}
-.legend{margin:0;padding:0 24px 8px;font-size:12.5px;color:var(--muted)}
-.toc{max-height:35vh;overflow:auto;padding:4px 24px 8px;background:var(--soft);border-top:1px solid var(--line);font-size:14px}
-.toc ol{list-style:none;margin:0;padding:0}
-.toc ol ol{padding-left:16px}
-.toc a{display:flex;gap:8px;justify-content:space-between;color:inherit;text-decoration:none;padding:2px 4px;border-radius:4px}
-.toc a:hover{background:var(--tint)}
-.toc a.active{background:var(--tint);font-weight:600}
-.toc .n{color:var(--muted);white-space:nowrap;font-size:13px}
+.tree-bar{display:flex;gap:8px;align-items:center;padding:10px 24px}
 .issue{border-top:1px solid var(--line);padding:12px 0}
 .issue,.group{scroll-margin-top:calc(var(--head,0px) + 8px)}
 .group{margin:8px 0 0 16px;padding-left:12px;border-left:2px solid var(--line)}
-.toggle{display:flex;width:100%;text-align:left;gap:8px;align-items:baseline;border:0;padding:4px 0;background:none;font-weight:600;color:var(--heading)}
+.toggle{display:flex;width:100%;text-align:left;gap:8px;align-items:baseline;border:0;padding:4px 0;background:none;font-weight:400;color:var(--ink)}
 .toggle:hover{background:none;color:var(--accent)}
 .toggle::before{content:"▸";flex:none;color:var(--muted);transition:transform .12s}
 .toggle[aria-expanded=true]::before{transform:rotate(90deg)}
-.issue>.toggle{font-size:17px}
-.toggle .n{margin-left:auto;font-weight:400;color:var(--muted);font-size:13px;white-space:nowrap}
+.issue>.toggle{font-size:16px;font-weight:600;color:var(--heading)}
+.group>.toggle{font-size:14.5px}
+.toggle .n{margin-left:auto;font-weight:400;color:var(--muted);font-size:12.5px;white-space:nowrap}
+.code{margin-left:8px;font-size:11px;font-weight:400;color:var(--muted);opacity:.7;letter-spacing:.02em}
 .badge{font-size:12px;font-weight:400;border:1px solid var(--line);border-radius:10px;padding:0 6px;color:var(--muted)}
 .desc{margin:4px 0 8px 18px;color:var(--muted);font-size:14px;white-space:pre-wrap;max-width:72ch}
 .cards{display:grid;gap:12px;margin:8px 0 8px 18px}
@@ -96,7 +89,5 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 @media (max-width:900px){
   .split{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr)}
   .report{border-right:0;border-bottom:1px solid var(--line)}
-  .toc,#tocToggle{display:none}
-  .toc-select{display:block}
   .card{grid-template-columns:minmax(0,1fr)}
 }

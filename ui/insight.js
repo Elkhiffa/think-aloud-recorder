@@ -67,7 +67,8 @@
     return {support,counter};
   }
   function countText(node,extra=0){const n=counts(node);return `支持 ${n.support+extra}`+(n.counter?` · 反例 ${n.counter}`:'');}
-  function toggle(id,text,n,expanded,level){return `<button type="button" class="toggle" aria-expanded="${expanded}" aria-controls="${id}-body" data-level="${level}">${text}<span class="n">${escape(n)}</span></button>`;}
+  function toggle(id,text,n,expanded,level,code=''){return `<button type="button" class="toggle" aria-expanded="${expanded}" aria-controls="${id}-body" data-level="${level}"><span class="label">${text}</span><span class="n">${escape(n)}${code?`<span class="code">${escape(code)}</span>`:''}</span></button>`;}
+  const issueName=id=>state.issues.get(id)?.title||id;
   function evidenceBlock(node){
     let html='';
     if(node.support.length)html+=`<div class="cards">${cards(node.support,node.id,'support')}</div>`;
@@ -79,7 +80,7 @@
     const desc=node.description?`<p class="desc">${escape(node.description)}</p>`:'';
     let body=desc;
     for(const child of node.children){
-      body+=`<section class="group" id="issue-${escape(child.id)}" data-issue="${escape(child.id)}">${toggle('issue-'+child.id,`${escape(child.id)} ${escape(child.title)}${child.status==='candidate'?' <span class="badge">候选</span>':''}`,countText(child),false,2)}`+
+      body+=`<section class="group" id="issue-${escape(child.id)}" data-issue="${escape(child.id)}">${toggle('issue-'+child.id,`${escape(child.title)}${child.status==='candidate'?' <span class="badge">候选</span>':''}`,countText(child),false,2,child.id)}`+
         `<div id="issue-${escape(child.id)}-body" hidden>${child.description?`<p class="desc">${escape(child.description)}</p>`:''}${evidenceBlock(child)}</div></section>`;
     }
     const own=node.support.length+node.counter.length;
@@ -92,7 +93,7 @@
         state.overview.bug_unorganized.map(hit=>`<li>${jump(hit.session_id,hit.start,(state.labels[hit.session_id]||hit.session_id)+' '+formatTime(hit.start))}<span>“${escape(hit.text)}”${hit.state==='instance'?` <span class="badge">已是实例 ${escape(hit.instances.join('、'))}，未挂 BUG</span>`:''}</span></li>`).join('')+'</ul></section>';
     }
     if(!body)body='<p class="desc">暂无证据。</p>';
-    return `<section class="issue" id="issue-${escape(node.id)}" data-issue="${escape(node.id)}">${toggle('issue-'+node.id,`${escape(node.id)} ${escape(node.title)}${status}`,node.id==='BUG'&&extra?countText(node)+` · 未整理 ${extra}`:countText(node),true,1)}<div id="issue-${escape(node.id)}-body">${body}</div></section>`;
+    return `<section class="issue" id="issue-${escape(node.id)}" data-issue="${escape(node.id)}">${toggle('issue-'+node.id,`${escape(node.id==='BUG'?'BUG':node.title)}${status}`,node.id==='BUG'&&extra?countText(node)+` · 未整理 ${extra}`:countText(node),true,1,node.id==='BUG'?'':node.id)}<div id="issue-${escape(node.id)}-body">${body}</div></section>`;
   }
   function orderedIssues(){
     // BUG is a fixed issue; keep it last so design issues lead.
@@ -117,10 +118,7 @@
     const extra=cited();
     if(extra.length)html+=`<section class="issue" id="issue-cited" data-issue="cited">${toggle('issue-cited','报告引用的其他证据',`${extra.length} 条`,true,1)}<div id="issue-cited-body"><div class="cards">${extra.map(k=>card(state.instances.get(k),null,'cited')).join('')}</div></div></section>`;
     $('evidenceList').innerHTML=html||'<p class="empty">资料库里还没有议题。</p>';
-    $('toc').innerHTML='<ol>'+nodes.map(node=>`<li><a href="#issue-${escape(node.id)}" data-target="${escape(node.id)}"><span>${escape(node.id)} ${escape(node.title)}</span><span class="n">${escape(countText(node))}</span></a>${node.children.length?'<ol>'+node.children.map(child=>`<li><a href="#issue-${escape(child.id)}" data-target="${escape(child.id)}"><span>${escape(child.id)} ${escape(child.title)}</span><span class="n">${escape(countText(child))}</span></a></li>`).join('')+'</ol>':''}</li>`).join('')+'</ol>';
-    $('tocSelect').innerHTML='<option value="">跳到议题…</option>'+nodes.flatMap(node=>[node,...node.children]).map(node=>`<option value="${escape(node.id)}">${node.parent?'　':''}${escape(node.id)} ${escape(node.title)}</option>`).join('');
     document.querySelectorAll('#evidenceList .thumb[data-session]').forEach(button=>thumbObserver.observe(button));
-    observeSections();
   }
   function setExpanded(button,expanded){
     button.setAttribute('aria-expanded',String(expanded));
@@ -150,20 +148,8 @@
     for(let node=target.parentElement;node&&node!==$('evidenceList');node=node.parentElement){
       if(node.matches('section.issue,section.group'))setExpanded(node.querySelector(':scope>.toggle'),true);
     }
-    status(all.length>1?`这条证据出现在 ${all.length} 处，已定位到 ${target.dataset.issue}。`:'');
+    status(all.length>1?`这条证据出现在 ${all.length} 处，已定位到“${escape(issueName(target.dataset.issue))}”。`:'');
     target.scrollIntoView({block:'start',behavior:'smooth'});flash(target);
-  }
-
-  // Scroll position highlights the current issue in the outline.
-  let sectionObserver=null;
-  function observeSections(){
-    sectionObserver?.disconnect();
-    sectionObserver=new IntersectionObserver(entries=>{
-      const visible=entries.filter(entry=>entry.isIntersecting).map(entry=>entry.target.dataset.issue);
-      if(!visible.length)return;
-      document.querySelectorAll('#toc a').forEach(a=>a.classList.toggle('active',a.dataset.target===visible[0]));
-    },{root:$('evidencePane'),rootMargin:'-20% 0px -70% 0px'});
-    document.querySelectorAll('#evidenceList section.issue,#evidenceList section.group[id^="issue-"]').forEach(section=>sectionObserver.observe(section));
   }
 
   // Minimal Markdown: headings, paragraphs, lists, quotes, tables, bold, code and the two citation forms.
@@ -296,8 +282,8 @@
       const shots=links.slice(0,6).map(link=>{const row=state.instances.get(key(link.session_id,link.instance_id));if(!row)return '';
         const at=row.frame_at??row.refers_start??row.said_start;
         return `<div class="shot">${thumb(row.session_id,at,label(row)+' · '+formatTime(at))}<p>${link.role==='counter'?'<span class="badge">反例</span> ':''}<strong>${escape(KIND[row.kind]||row.kind)}</strong> ${escape(label(row))} ${jump(row.session_id,at,formatTime(at))}</p><p>${escape(row.statement.slice(0,80))}${row.statement.length>80?'…':''}</p></div>`;}).join('');
-      return `<article class="proposal" data-issue-id="${escape(node.id)}"><h3>${escape(node.id)} ${escape(node.title)} <span class="count">${escape(countText(node))}</span></h3>`+
-        `${parent?`<p class="hint">属于 ${escape(parent.id)} ${escape(parent.title)}</p>`:''}${node.description?`<p class="desc">${escape(node.description)}</p>`:''}<div class="shots">${shots}</div>`+
+      return `<article class="proposal" data-issue-id="${escape(node.id)}"><h3>${escape(node.title)} <span class="count">${escape(countText(node))}</span><span class="code">${escape(node.id)}</span></h3>`+
+        `${parent?`<p class="hint">属于“${escape(parent.title)}”</p>`:''}${node.description?`<p class="desc">${escape(node.description)}</p>`:''}<div class="shots">${shots}</div>`+
         `${links.length>6?`<p class="hint">另有 ${links.length-6} 条证据，可在“证据”页签里查看。</p>`:''}`+
         `<div class="actions"><button type="button" data-issue-action="confirm">确认</button><button type="button" data-issue-action="title">改标题</button><button type="button" data-issue-action="merge">并入其他议题</button><button type="button" data-issue-action="dismiss">驳回</button><button type="button" data-issue-action="skip">暂不处理</button></div></article>`;
     }).join('');
@@ -373,8 +359,6 @@
     }
     const button=event.target.closest('.toggle');
     if(button){setExpanded(button,button.getAttribute('aria-expanded')!=='true');return;}
-    const tocLink=event.target.closest('#toc a');
-    if(tocLink){event.preventDefault();goToIssue(tocLink.dataset.target);return;}
     const issueButton=event.target.closest('[data-issue-action]');
     if(issueButton){
       if(issueButton.dataset.issueAction==='cancel')renderCandidates();
@@ -399,8 +383,6 @@
   document.addEventListener('keydown',event=>{if(event.key==='Escape')$('lightbox').hidden=true;});
   // Cards and sections scroll to just below the sticky outline, whatever its current height.
   new ResizeObserver(()=>$('evidencePane').style.setProperty('--head',document.querySelector('.evidence-head').offsetHeight-16+'px')).observe(document.querySelector('.evidence-head'));
-  $('tocToggle').onclick=()=>{const open=$('tocToggle').getAttribute('aria-expanded')!=='true';$('tocToggle').setAttribute('aria-expanded',String(open));$('toc').hidden=!open;};
-  $('tocSelect').onchange=()=>{if($('tocSelect').value)goToIssue($('tocSelect').value);$('tocSelect').value='';};
   $('expandAll').onclick=()=>document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,true));
   $('collapseAll').onclick=()=>document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,false));
   $('reportSelect').onchange=()=>openReport($('reportSelect').value).catch(error=>status(error.message,true));
