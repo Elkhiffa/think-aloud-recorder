@@ -100,7 +100,7 @@ v2 保留 v1 的 session_id、revision、summary、coverage、events、questions
 
 ### 议题标签与跨场次查询
 
-资料库根目录的 `issues.json` 保存 `{version:1, issues:[{id,title,description,status,parent?}]}`。用户编号以 `TA-` 开头；新提候选自动使用 `N-001` 等三位编号且只能以 candidate 创建。确认既有候选使用 `issues-update --status confirmed`。子议题只有一级，编号为父议题加 `.n`（如 `TA-04.5`），行内 `parent` 必须等于编号前缀；`issues-add --parent ID` 自动编号，`description` 写成立的理由。`BUG` 是固定议题，读取时总会出现，不能改名、改状态或合并；单场次整理只在记录者原话明说是 bug 或把问题归到程序、引擎本身时直接写 `issue_tags:["BUG"]`，其余议题标签仍只在跨场次分析时通过对应表挂。有子议题的议题须先合并或移走子议题才能合并。
+资料库根目录的 `issues.json` 保存 `{version:1, issues:[{id,title,description,status,parent?}]}`。用户编号以 `TA-` 开头；新提候选自动使用 `N-001` 等三位编号且只能以 candidate 创建。确认既有候选使用 `issues-update --status confirmed`。议题表最多三层：洞察（顶层）→ 议题 → 子议题，中间的议题层按需设置，行内 `parent` 指向上一级。`issues-add --parent ID` 新建下级并自动编号为上级编号加 `.n`（最多两段，如 `TA-01.11.2`），`description` 写成立的理由；`issues-move ID --parent P`（或 `--top`）把已有议题挪到新的上级，编号、对应和场次结果都不变，所以编号前缀不一定是现在的上级；超过三层、挪到自己下面、挪动 BUG 会被拒绝。按议题查询会带出它下面所有层级的证据。`BUG` 是固定议题，读取时总会出现，不能改名、改状态或合并；单场次整理只在记录者原话明说是 bug 或把问题归到程序、引擎本身时直接写 `issue_tags:["BUG"]`，其余议题标签仍只在跨场次分析时通过对应表挂。有下级的议题须先合并或移走下级才能合并。
 
 ```text
 issues-list VAULT
@@ -118,7 +118,7 @@ catalog-confirm VAULT GAME --proposed NAME (--new ID [--name NAME] | --into ID)
 
 以上均为 `agent_cli.py` 子命令。合并前备份原结果至 `agent-history`；追加绑定新摘要的校准记录，保留原条目，并保留分析快照。完成引用替换后再移除旧标签。资料库写入复用文件锁与原子替换。资料库根目录的 `issue-links.json` 是“议题 → 实例”对应表 `{version:1, links:[{issue,session_id,instance_id,result_sha256,reason,role}]}`，`role` 为 support（支持证据，缺省值）或 counter（反例），供跨场次分析在不改写各场结果的情况下归类；`issues-link` 整批校验后才写入，议题和实例都必须存在且场次已完成整理。每条对应绑定写入时的结果摘要，该场重新整理后旧对应不再生效，`issues-list` 为每个议题给出 links_active / links_stale。合并议题时对应表里的引用一起改写；被改写结果的场次，其余对应同时换绑到新摘要。查询只读取 complete 场次，不建立查询缓存；议题条件同时匹配实例自带的标签和有效对应，查父议题时一并匹配其子议题；多个 issue 取任一匹配，其余条件叠加。`--screen` 按目录编号或别名匹配，二者等价。返回 session_id、instance_id、said_start、refers_start/refers_end、screen、catalog_screen（screen 是目录编号或别名时为正式编号，否则为 null）、frame_at（第一条画面证据的时刻，没有则为 null）、elements、kind、statement、issue_tags（两种来源合并）、issue_links（议题、理由和角色）、event_id 和 event_title，按场次时间、所指起点排序。
 
-`issues-dismiss` 只用于候选议题（没有子议题、没有场次结果直接带这个标签）：移除该议题及其全部对应，场次结果不变。`bug-hits` 列出记录者本人原话中含 “bug”、“Cocos”、“引擎”、“报错”、“闪退”、“重叠”、“裁切”、“适配”、“歪了”、“偏了”、“偶现”、“不显示”、“没显示”、“超框”、“看不全”、“悬空”、“标错”（不分大小写；只是候选，是否算 bug 由 agent 判断）的转写段落；有说话人标注时只认记录者，没有标注时整段视为记录者。每条按原话引用对上实例，state 为 linked（实例已挂 BUG 或其子议题）、instance（成了实例但未挂）或 raw（没有成为实例）。
+`feedback-list VAULT [--open]` 读出用户在洞察窗口留下的反馈（资料库根目录 `feedback.json`，每条有 `id`、`target`（`{kind:"issue",id}` 或 `{kind:"instance",session_id,instance_id,issue?}`）、`text`、`status` 和处理说明），`feedback-resolve VAULT ID --note TEXT` 标记已处理。`issues-dismiss` 只用于候选议题（没有下级、没有场次结果直接带这个标签）：移除该议题及其全部对应，场次结果不变。`bug-hits` 列出记录者本人原话中含 “bug”、“Cocos”、“引擎”、“报错”、“闪退”、“重叠”、“裁切”、“适配”、“歪了”、“偏了”、“偶现”、“不显示”、“没显示”、“超框”、“看不全”、“悬空”、“标错”（不分大小写；只是候选，是否算 bug 由 agent 判断）的转写段落；有说话人标注时只认记录者，没有标注时整段视为记录者。每条按原话引用对上实例，state 为 linked（实例已挂 BUG 或其子议题）、instance（成了实例但未挂）或 raw（没有成为实例）。
 
 洞察报告由跨场次分析 agent 写入资料库根目录的 `洞察/*.md`（单个不超过 1 MB）；工具不撰写报告，只在洞察窗口展示并核对引用。实例引用写作 `[0924 i72](i:SESSION_ID/i72#TA-04.5)`，`#` 后可选写明证据所属议题；议题引用写作 `[TA-04.5](issue:TA-04.5)`。`insight-validate` 返回引用总数和找不到的引用（实例不存在、场次未完成整理或议题不存在）。
 
