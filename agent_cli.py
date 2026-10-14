@@ -171,6 +171,11 @@ def main(argv=None):
             issue_command.add_argument('issue')
             issue_command.add_argument('--session', required=True)
             issue_command.add_argument('--instance', required=True)
+    tags_report = commands.add_parser('tags-report', help='列出系统/玩法标签的条数、没有标签的证据和没打标签的活动')
+    tags_report.add_argument('vault')
+    tags_write = commands.add_parser('tags-write', help='校验后整份写入 tags.json；用户设的封面保留')
+    tags_write.add_argument('vault')
+    tags_write.add_argument('--file', required=True)
     feedback_list = commands.add_parser('feedback-list', help='读出用户在洞察窗口留下的反馈')
     feedback_list.add_argument('vault')
     feedback_list.add_argument('--open', action='store_true', help='只列未处理的')
@@ -353,6 +358,12 @@ def main(argv=None):
                 value = issues.link_instances(args.vault, rows)
             else:
                 value = issues.unlink_instance(args.vault, args.issue, args.session, args.instance)
+        elif name == 'tags-report':
+            from evidence_tags import report
+            value = report(args.vault)
+        elif name == 'tags-write':
+            from evidence_tags import write_tags
+            value = write_tags(args.vault, json.loads(Path(args.file).read_text(encoding='utf-8-sig')))
         elif name == 'feedback-list':
             from user_feedback import list_feedback
             value = list_feedback(args.vault, args.open)

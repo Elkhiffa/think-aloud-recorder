@@ -99,7 +99,7 @@ class InsightReportTests(unittest.TestCase):
         self.assertEqual((first / protocol.RESULT).read_bytes(), before)
 
     def test_insight_bridge_records_feedback_and_rejects_bad_times(self):
-        """触发路径：洞察窗口里在议题或证据卡上点“有问题”、点证据时间 → 反馈写进资料库并随概览返回；无效时间不会去打开回看或解码画面。"""
+        """触发路径：洞察窗口里在议题或证据卡上点铅笔提反馈、右键证据卡设标签封面、点证据时间 → 反馈和封面写进资料库并随概览返回；无效时间不会去打开回看或解码画面。"""
         from insight_runtime import InsightAPI
         self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [])
         opened = []
@@ -114,6 +114,14 @@ class InsightReportTests(unittest.TestCase):
         self.assertEqual(api.edit_feedback(items[0]['id'], '改成并进路径')['data'][0]['text'], '改成并进路径')
         self.assertEqual(api.get_overview()['data']['feedback'][0]['text'], '改成并进路径')
         self.assertEqual(api.remove_feedback(items[0]['id'])['data'], [])
+        import evidence_tags
+        evidence_tags.write_tags(self.vault, dict(version=1, groups=[dict(id='play', name='玩法')], tags=[
+            dict(id='wll', name='武林录', group='play', keywords=[])], activities={'20261008-120000-aaaaaa/e1': ['wll']},
+            assignments={}))
+        overview = api.get_overview()['data']
+        self.assertEqual((overview['tags'][0]['name'], overview['instance_tags']), ('武林录', {'20261008-120000-aaaaaa/i1': ['wll']}))
+        self.assertEqual(api.set_cover('wll', '20261008-120000-aaaaaa', 3)['data'][0]['cover'],
+                         dict(session_id='20261008-120000-aaaaaa', at=3))
         self.assertFalse(api.open_review('20261008-120000-aaaaaa', -1)['ok'])
         self.assertFalse(api.thumbnail('20261008-120000-aaaaaa', float('nan'))['ok'])
         api.open_review('20261008-120000-aaaaaa', 2)

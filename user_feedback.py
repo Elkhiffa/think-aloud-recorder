@@ -49,7 +49,12 @@ def _target(vault, value):
         if issue is not None:
             target['issue'] = issue
         return target
-    raise ValueError('反馈对象必须是议题或证据。')
+    if value.get('kind') == 'tag':
+        import evidence_tags
+        if value.get('id') not in {tag['id'] for tag in evidence_tags.read_tags(vault)['tags']}:
+            raise ValueError('标签不存在：' + str(value.get('id')))
+        return dict(kind='tag', id=value['id'])
+    raise ValueError('反馈对象必须是议题、证据或标签。')
 
 
 def _find(data, ident):

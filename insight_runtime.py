@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 import threading
 
+import evidence_tags
 import insight_report as insight
 import user_feedback
 
@@ -45,8 +46,11 @@ class InsightAPI:
     def get_overview(self):
         def work():
             evidence = insight.evidence(self._vault)
+            tags = evidence_tags.read_tags(self._vault)
             return dict(vault=self._vault.name, reports=insight.list_reports(self._vault),
-                        feedback=user_feedback.list_feedback(self._vault)['items'], **evidence)
+                        feedback=user_feedback.list_feedback(self._vault)['items'],
+                        tag_groups=tags['groups'], tags=tags['tags'],
+                        instance_tags=evidence_tags.instance_tags(self._vault, evidence['instances'], tags), **evidence)
         return self._call(work)
 
     def read_report(self, name):
@@ -59,6 +63,13 @@ class InsightAPI:
                 raise ValueError('反馈请求无效。')
             user_feedback.add_feedback(self._vault, request.get('target'), request.get('text'))
             return user_feedback.list_feedback(self._vault)['items']
+        return self._call(work)
+
+    def set_cover(self, tag_id, session_id, at):
+        def work():
+            # Path 1: right-click an evidence card -> use its frame as this tag's cover.
+            evidence_tags.set_cover(self._vault, tag_id, session_id, at)
+            return evidence_tags.read_tags(self._vault)['tags']
         return self._call(work)
 
     def edit_feedback(self, ident, text):
