@@ -148,6 +148,13 @@ async function main(){
       const box=row.getBoundingClientRect(),hit=document.elementFromPoint(box.left+box.width/2,box.top+box.height/2);
       return hit.closest('.row')===row;});
     assert.equal(covered,true,'洞察 row stays on top at the end of a 议题');
+    // Rows scrolled past must slide under the toolbar, never over it.
+    const toolbarCovered=await page.locator('#evidencePane').evaluate(pane=>{
+      const button=document.getElementById('expandAll'),bad=[];
+      for(let top=0;top<=pane.scrollHeight;top+=40){pane.scrollTop=top;const box=button.getBoundingClientRect();
+        if(!document.elementFromPoint(box.left+box.width/2,box.top+box.height/2)?.closest('.evidence-head'))bad.push(top);}
+      return bad;});
+    assert.deepEqual(toolbarCovered,[],'toolbar is never covered by sticky rows');
     await page.locator('#collapseAll').click();
   });
   await check('busier 议题 come first; references in descriptions are quiet marks that locate the card',async()=>{

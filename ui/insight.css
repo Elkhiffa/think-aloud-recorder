@@ -38,7 +38,7 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .cite:hover,.cite:focus-visible{color:var(--accent);background:var(--tint)}
 .cite.unresolved{text-decoration:line-through;cursor:help}
 .empty,.hint{color:var(--muted)}
-.evidence-head{position:sticky;top:-16px;z-index:2;margin:-16px -24px 16px;background:var(--surface);border-bottom:1px solid var(--line)}
+.evidence-head{position:sticky;top:-16px;z-index:5;margin:-16px -24px 16px;background:var(--surface);border-bottom:1px solid var(--line)}
 .tree-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 24px}
 .kind-bar{display:flex;flex-wrap:wrap;gap:4px 6px;align-items:center;margin-left:8px}
 .kind-bar .kind-chip{font-size:13px;padding:1px 9px}
