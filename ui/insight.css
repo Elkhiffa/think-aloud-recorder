@@ -46,8 +46,15 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .toggle:hover{background:none;color:var(--accent)}
 .toggle::before{content:"▸";flex:none;color:var(--muted);transition:transform .12s}
 .toggle[aria-expanded=true]::before{transform:rotate(90deg)}
-.issue>.toggle{font-size:16px;font-weight:600;color:var(--heading)}
-.group>.toggle{font-size:14.5px}
+.row{display:flex;align-items:baseline;gap:8px}
+.row>.toggle{flex:1;min-width:0}
+.level-1>.row>.toggle{font-size:16px;font-weight:600;color:var(--heading)}
+.level-2>.row>.toggle{font-size:15px;font-weight:500;color:var(--ink)}
+.group>.row>.toggle{font-size:14px}
+/* The feedback entry is always there but stays quiet until pointed at. */
+.flag{flex:none;border:0;background:none;padding:0 2px;font-size:12px;color:var(--muted);opacity:.55}
+.flag:hover,.flag:focus-visible{opacity:1;color:var(--accent);background:none}
+.row:hover>.flag{opacity:.9}
 .toggle .n{margin-left:auto;font-weight:400;color:var(--muted);font-size:12.5px;white-space:nowrap}
 .code{margin-left:8px;font-size:11px;font-weight:400;color:var(--muted);opacity:.7;letter-spacing:.02em}
 .badge{font-size:12px;font-weight:400;border:1px solid var(--line);border-radius:10px;padding:0 6px;color:var(--muted)}
@@ -72,17 +79,17 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .reason{font-size:13px;color:var(--muted)}
 .hits{margin:8px 0 0 18px;padding:0;list-style:none;display:grid;gap:6px}
 .hits li{display:flex;gap:8px;align-items:baseline;font-size:14px}
-.family{margin:0 0 24px;padding-top:12px;border-top:1px solid var(--line)}
-.family>h2{font-size:15px;color:var(--muted);margin:0 0 8px;font-weight:600}
-.proposal{border:1px solid var(--line);border-radius:6px;padding:12px;margin:0 0 12px}
-.proposal h3{margin:0 0 8px;font-size:16px;color:var(--heading)}
-.shots{display:flex;flex-wrap:wrap;gap:8px}
-.shot{width:200px;font-size:13px}
-.shot .thumb{width:200px}
-.shot p{margin:4px 0;color:var(--muted)}
-.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:12px}
-.actions form{display:flex;flex-wrap:wrap;gap:8px;align-items:center;width:100%}
-.actions input{flex:1 1 16ch}
+.feedback-form{margin:6px 0 10px 18px;display:grid;gap:6px;max-width:72ch}
+.feedback-form textarea{font:inherit;font-size:14px;border:1px solid var(--strong-line);border-radius:5px;padding:6px 8px;background:var(--surface);color:var(--ink);resize:vertical}
+.form-actions{display:flex;gap:8px}
+.feedback-item{border-top:1px solid var(--line);padding:10px 0}
+.feedback-item.resolved{opacity:.7}
+.feedback-target{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;margin:0;font-size:13px;color:var(--muted)}
+.feedback-target a{color:var(--ink);font-weight:500}
+.feedback-target .when{margin-left:auto}
+.feedback-text{margin:4px 0;max-width:72ch}
+.feedback-resolution{margin:0 0 4px;font-size:13px;color:var(--counter)}
+.feedback-item .feedback-form{margin-left:0}
 .lightbox{position:fixed;inset:0;z-index:10;background:rgba(20,18,15,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;cursor:zoom-out}
 .lightbox img{max-width:96vw;max-height:88vh}
 .lightbox p{color:#f6f0e6;margin:0}

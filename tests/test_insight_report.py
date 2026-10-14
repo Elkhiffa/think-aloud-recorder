@@ -98,31 +98,30 @@ class InsightReportTests(unittest.TestCase):
         self.assertEqual(issues.query_instances(self.vault, screen='背包/道具')[0]['catalog_screen'], '背包/道具')
         self.assertEqual((first / protocol.RESULT).read_bytes(), before)
 
-    def test_insight_bridge_confirms_and_rejects_bad_times(self):
-        """触发路径：洞察窗口里确认提议界面和候选议题、点证据时间 → 确认后列表刷新；有子议题的议题不能并入；无效时间不会去打开回看或解码画面。"""
+    def test_insight_bridge_records_feedback_and_rejects_bad_times(self):
+        """触发路径：洞察窗口里在议题或证据卡上点“有问题”、点证据时间 → 反馈写进资料库并随概览返回；无效时间不会去打开回看或解码画面。"""
         from insight_runtime import InsightAPI
-        self.write_catalog()
-        self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [], screen='兑换选择', proposed=True)
+        self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [])
         opened = []
         api = InsightAPI(self.vault, self.vault / 'app', lambda *args: opened.append(args) or {'ok': True})
         overview = api.get_overview()
         self.assertTrue(overview['ok'], overview)
-        self.assertEqual([group['games'] for group in overview['data']['proposed']], [['合成游戏']])
-        confirmed = api.confirm_proposed(dict(game='合成游戏', proposed='兑换选择', into='bag'))
-        self.assertEqual(confirmed['data']['proposed'], [])
+        self.assertEqual(overview['data']['feedback'], [])
+        self.assertNotIn('proposed', overview['data'])
+        items = api.add_feedback(dict(target=dict(kind='issue', id='TA-01'), text='这条该并进操作路径'))['data']
+        self.assertEqual([item['text'] for item in items], ['这条该并进操作路径'])
+        self.assertFalse(api.add_feedback(dict(target=dict(kind='issue', id='TA-99'), text='不存在'))['ok'])
+        self.assertEqual(api.edit_feedback(items[0]['id'], '改成并进路径')['data'][0]['text'], '改成并进路径')
+        self.assertEqual(api.get_overview()['data']['feedback'][0]['text'], '改成并进路径')
+        self.assertEqual(api.remove_feedback(items[0]['id'])['data'], [])
         self.assertFalse(api.open_review('20261008-120000-aaaaaa', -1)['ok'])
         self.assertFalse(api.thumbnail('20261008-120000-aaaaaa', float('nan'))['ok'])
         api.open_review('20261008-120000-aaaaaa', 2)
         self.assertEqual(opened, [('20261008-120000-aaaaaa', 2)])
-        sub = issues.add_issue(self.vault, '目标被替换', parent='TA-01')
-        self.assertTrue(api.update_issue(dict(id=sub['id'], status='confirmed'))['ok'])
-        self.assertEqual(issues.read_registry(self.vault)['issues'][-1]['status'], 'confirmed')
-        self.assertFalse(api.merge_issue('TA-01', 'TA-02')['ok'])
-        self.assertTrue(api.merge_issue(sub['id'], 'TA-02')['ok'])
         self.assertEqual(issues.query_instances(self.vault)[0]['frame_at'], 3)
 
     def test_dismissed_candidate_leaves_results_and_other_links(self):
-        """触发路径：用户在议题确认里判断疑似 bug 其实不是 bug → 驳回候选，它的对应一起移除，其他议题的对应和场次结果不变；已确认的议题不能驳回。"""
+        """触发路径：用户反馈某个疑似 bug 其实不是 bug，跨场次 agent 运行 issues-dismiss → 驳回候选，它的对应一起移除，其他议题的对应和场次结果不变；已确认的议题不能驳回。"""
         folder = self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [])
         before = (folder / protocol.RESULT).read_bytes()
         issues.add_issue(self.vault, '教学弹窗多出遮挡', parent='BUG')

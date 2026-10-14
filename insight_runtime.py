@@ -1,4 +1,4 @@
-"""Insight window bridge: one vault's reports and evidence, read-only except confirmed catalog names."""
+"""Insight window bridge: one vault's reports and evidence, read-only except the user's feedback."""
 import base64
 from contextlib import closing
 import hashlib
@@ -7,8 +7,8 @@ import math
 from pathlib import Path
 import threading
 
-import game_catalog
 import insight_report as insight
+import user_feedback
 
 
 THUMB_WIDTH = 480
@@ -45,60 +45,32 @@ class InsightAPI:
     def get_overview(self):
         def work():
             evidence = insight.evidence(self._vault)
-            games = {meta.get('game') for _, meta in self._sessions().values() if meta.get('game')}
             return dict(vault=self._vault.name, reports=insight.list_reports(self._vault),
-                        proposed=self._proposed(), games=sorted(games), **evidence)
+                        feedback=user_feedback.list_feedback(self._vault)['items'], **evidence)
         return self._call(work)
 
     def read_report(self, name):
         return self._call(lambda: insight.read_report(self._vault, name))
 
-    def _proposed(self):
-        sessions = self._sessions()
-        groups = insight.proposed_screens(self._vault)
-        for group in groups:
-            group['games'] = sorted({sessions[row['session_id']][1].get('game', '') for row in group['instances']})
-        return groups
-
-    def list_screens(self, game):
+    def add_feedback(self, request):
         def work():
-            if not game_catalog.catalog_path(self._vault, game).is_file():
-                return []
-            return [dict(id=row['id'], name=row['name'], aliases=row.get('aliases', []))
-                    for row in game_catalog.load_catalog(self._vault, game)['screens']]
-        return self._call(work)
-
-    def confirm_proposed(self, request):
-        def work():
-            # Path 1: the user confirms one proposed name; results stay untouched.
+            # Path 1: the user flags an issue or an evidence card and says how to adjust it.
             if not isinstance(request, dict):
-                raise ValueError('确认请求无效。')
-            result = game_catalog.confirm_proposed(
-                self._vault, request.get('game'), request.get('proposed'), request.get('new_id') or None,
-                request.get('name') or None, request.get('into') or None)
-            return dict(result=result, proposed=self._proposed())
+                raise ValueError('反馈请求无效。')
+            user_feedback.add_feedback(self._vault, request.get('target'), request.get('text'))
+            return user_feedback.list_feedback(self._vault)['items']
         return self._call(work)
 
-    def update_issue(self, request):
+    def edit_feedback(self, ident, text):
         def work():
-            # Path 1: the user confirms or retitles a candidate issue while reading its evidence.
-            import issue_registry
-            if not isinstance(request, dict):
-                raise ValueError('议题请求无效。')
-            return issue_registry.update_issue(self._vault, request.get('id'), request.get('title'), None,
-                                               request.get('status'))
+            user_feedback.edit_feedback(self._vault, ident, text)
+            return user_feedback.list_feedback(self._vault)['items']
         return self._call(work)
 
-    def dismiss_issue(self, ident):
+    def remove_feedback(self, ident):
         def work():
-            import issue_registry
-            return issue_registry.dismiss_issue(self._vault, ident)
-        return self._call(work)
-
-    def merge_issue(self, from_id, into_id):
-        def work():
-            import issue_registry
-            return issue_registry.merge_issues(self._vault, from_id, into_id)
+            user_feedback.remove_feedback(self._vault, ident)
+            return user_feedback.list_feedback(self._vault)['items']
         return self._call(work)
 
     def thumbnail(self, session_id, at, large=False):

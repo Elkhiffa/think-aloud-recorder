@@ -4,7 +4,7 @@
   const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
   const KIND={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
   const CONTEXT={hud:'HUD / 战斗 / 大世界',multi_screen:'跨多个界面',outside_game:'游戏外窗口',unknown:'认不出界面'};
-  const state={overview:null,instances:new Map(),labels:{},reports:[],report:null,issues:new Map(),hidden:new Set(),hiddenIssues:new Set()};
+  const state={overview:null,instances:new Map(),labels:{},reports:[],report:null,issues:new Map(),feedback:[]};
   let api=null;
 
   async function call(method,...args){
@@ -56,44 +56,48 @@
     return `<article class="card${counter?' counter':''}" data-key="${escape(key(row.session_id,row.instance_id))}" data-issue="${escape(issue||'')}">${thumb(row.session_id,at,label(row)+' · '+formatTime(at))}<div>`+
       `<h4 class="card-title"><span class="kind kind-${escape(row.kind)}">${escape(KIND[row.kind]||row.kind)}</span><span>${escape(row.event_title||'未归入活动')}</span>${counter?'<span class="badge">反例</span>':''}</h4>`+
       `<p class="statement">${escape(row.statement)}</p>`+
-      `<div class="aside"><span class="meta">${time}${earlier}${compare}<span>${escape(label(row))}</span></span><div>界面：${screen}</div>${link?.reason?`<div>归入理由：${escape(link.reason)}</div>`:''}</div></div></article>`;
+      `<div class="aside"><span class="meta">${time}${earlier}${compare}<span>${escape(label(row))}</span>${flag({kind:'instance',session_id:row.session_id,instance_id:row.instance_id,issue:issue&&issue!=='cited'?issue:undefined})}</span><div>界面：${screen}</div>${link?.reason?`<div>归入理由：${escape(link.reason)}</div>`:''}</div></div></article>`;
   }
   function cards(links,issue,role){
     return links.map(link=>{const row=state.instances.get(key(link.session_id,link.instance_id));return row?card(row,{...link,role},issue):'';}).join('');
   }
   function counts(node){
     let support=node.support.length,counter=node.counter.length;
-    for(const child of node.children){support+=child.support.length;counter+=child.counter.length;}
+    for(const child of node.children){const n=counts(child);support+=n.support;counter+=n.counter;}
     return {support,counter};
   }
   function countText(node,extra=0){const n=counts(node);return `支持 ${n.support+extra}`+(n.counter?` · 反例 ${n.counter}`:'');}
   function toggle(id,text,n,expanded,level,code=''){return `<button type="button" class="toggle" aria-expanded="${expanded}" aria-controls="${id}-body" data-level="${level}"><span class="label">${text}</span><span class="n">${escape(n)}${code?`<span class="code">${escape(code)}</span>`:''}</span></button>`;}
   const issueName=id=>state.issues.get(id)?.title||id;
+  // The feedback entry stays outside the toggle button so it never expands or collapses the section.
+  function flag(target){return `<button type="button" class="flag" data-flag="${escape(JSON.stringify(target))}" title="这里不对？写一句该怎么调">有问题</button>`;}
+  function row(id,text,n,expanded,level,code,target){return `<div class="row">${toggle(id,text,n,expanded,level,code)}${target?flag(target):''}</div>`;}
   function evidenceBlock(node){
     let html='';
     if(node.support.length)html+=`<div class="cards">${cards(node.support,node.id,'support')}</div>`;
     if(node.counter.length)html+=`<p class="subhead">反例</p><div class="cards">${cards(node.counter,node.id,'counter')}</div>`;
     return html;
   }
-  function issueSection(node){
-    const status=node.status==='candidate'?' <span class="badge">候选</span>':'';
-    const desc=node.description?`<p class="desc">${escape(node.description)}</p>`:'';
-    let body=desc;
-    for(const child of node.children){
-      body+=`<section class="group" id="issue-${escape(child.id)}" data-issue="${escape(child.id)}">${toggle('issue-'+child.id,`${escape(child.title)}${child.status==='candidate'?' <span class="badge">候选</span>':''}`,countText(child),false,2,child.id)}`+
-        `<div id="issue-${escape(child.id)}-body" hidden>${child.description?`<p class="desc">${escape(child.description)}</p>`:''}${evidenceBlock(child)}</div></section>`;
-    }
+  // 洞察 → 议题 → 子议题: one recursive section per level; leaves show their cards directly.
+  function issueSection(node,level=1){
+    const status=node.status==='candidate'?' <span class="badge">待你定</span>':'';
+    const title=node.id==='BUG'?'BUG':escape(node.title);
+    let body=node.description?`<p class="desc">${escape(node.description)}</p>`:'';
+    for(const child of node.children)body+=issueSection(child,level+1);
     const own=node.support.length+node.counter.length;
-    if(own&&node.children.length)body+=`<section class="group" id="issue-${escape(node.id)}-own" data-issue="${escape(node.id)}">${toggle('issue-'+node.id+'-own','未归入子议题',`${own} 条`,false,2)}<div id="issue-${escape(node.id)}-own-body" hidden>${evidenceBlock(node)}</div></section>`;
-    else if(own)body+=`<section class="group" id="issue-${escape(node.id)}-own" data-issue="${escape(node.id)}">${toggle('issue-'+node.id+'-own','证据',`${own} 条`,false,2)}<div id="issue-${escape(node.id)}-own-body" hidden>${evidenceBlock(node)}</div></section>`;
+    if(own&&(node.children.length||level===1)){
+      const name=node.children.length?'未归入下级':'证据';
+      body+=`<section class="group" id="issue-${escape(node.id)}-own" data-issue="${escape(node.id)}">${row('issue-'+node.id+'-own',name,`${own} 条`,false,level+1)}<div id="issue-${escape(node.id)}-own-body" hidden>${evidenceBlock(node)}</div></section>`;
+    }else if(own)body+=evidenceBlock(node);
     let extra=0;
     if(node.id==='BUG'&&state.overview.bug_unorganized.length){
       extra=state.overview.bug_unorganized.length;
-      body+=`<section class="group" id="issue-BUG-raw">${toggle('issue-BUG-raw','未整理的 bug 原话',`${extra} 处`,false,2)}<ul class="hits" id="issue-BUG-raw-body" hidden>`+
+      body+=`<section class="group" id="issue-BUG-raw">${row('issue-BUG-raw','未整理的 bug 原话',`${extra} 处`,false,2)}<ul class="hits" id="issue-BUG-raw-body" hidden>`+
         state.overview.bug_unorganized.map(hit=>`<li>${jump(hit.session_id,hit.start,(state.labels[hit.session_id]||hit.session_id)+' '+formatTime(hit.start))}<span>“${escape(hit.text)}”${hit.state==='instance'?` <span class="badge">已是实例 ${escape(hit.instances.join('、'))}，未挂 BUG</span>`:''}</span></li>`).join('')+'</ul></section>';
     }
     if(!body)body='<p class="desc">暂无证据。</p>';
-    return `<section class="issue" id="issue-${escape(node.id)}" data-issue="${escape(node.id)}">${toggle('issue-'+node.id,`${escape(node.id==='BUG'?'BUG':node.title)}${status}`,node.id==='BUG'&&extra?countText(node)+` · 未整理 ${extra}`:countText(node),true,1,node.id==='BUG'?'':node.id)}<div id="issue-${escape(node.id)}-body">${body}</div></section>`;
+    const n=node.id==='BUG'&&extra?countText(node)+` · 未整理 ${extra}`:countText(node);
+    return `<section class="${level===1?'issue':'group'} level-${level}" id="issue-${escape(node.id)}" data-issue="${escape(node.id)}">${row('issue-'+node.id,`${title}${status}`,n,level===1,level,node.id==='BUG'?'':node.id,{kind:'issue',id:node.id})}<div id="issue-${escape(node.id)}-body"${level===1?'':' hidden'}>${body}</div></section>`;
   }
   function orderedIssues(){
     // BUG is a fixed issue; keep it last so design issues lead.
@@ -114,9 +118,9 @@
     const nodes=orderedIssues();
     state.issues=new Map();
     const index=node=>{state.issues.set(node.id,node);node.children.forEach(index);};nodes.forEach(index);
-    let html=nodes.map(issueSection).join('');
+    let html=nodes.map(node=>issueSection(node)).join('');
     const extra=cited();
-    if(extra.length)html+=`<section class="issue" id="issue-cited" data-issue="cited">${toggle('issue-cited','报告引用的其他证据',`${extra.length} 条`,true,1)}<div id="issue-cited-body"><div class="cards">${extra.map(k=>card(state.instances.get(k),null,'cited')).join('')}</div></div></section>`;
+    if(extra.length)html+=`<section class="issue" id="issue-cited" data-issue="cited">${row('issue-cited','报告引用的其他证据',`${extra.length} 条`,true,1)}<div id="issue-cited-body"><div class="cards">${extra.map(k=>card(state.instances.get(k),null,'cited')).join('')}</div></div></section>`;
     $('evidenceList').innerHTML=html||'<p class="empty">资料库里还没有议题。</p>';
     document.querySelectorAll('#evidenceList .thumb[data-session]').forEach(button=>thumbObserver.observe(button));
   }
@@ -127,7 +131,7 @@
   function revealSection(id){
     const section=$('issue-'+id);if(!section)return null;
     for(let node=section;node&&node!==$('evidenceList');node=node.parentElement){
-      if(node.matches?.('section.issue,section.group'))setExpanded(node.querySelector(':scope>.toggle'),true);
+      if(node.matches?.('section.issue,section.group'))setExpanded(node.querySelector(':scope>.row>.toggle'),true);
     }
     return section;
   }
@@ -146,7 +150,7 @@
     const target=all.find(card=>card.dataset.issue===issue)||all.find(card=>issue&&card.dataset.issue.startsWith(issue+'.'))||all[0];
     if(!target){status('右栏没有这条证据：'+k,true);return;}
     for(let node=target.parentElement;node&&node!==$('evidenceList');node=node.parentElement){
-      if(node.matches('section.issue,section.group'))setExpanded(node.querySelector(':scope>.toggle'),true);
+      if(node.matches('section.issue,section.group'))setExpanded(node.querySelector(':scope>.row>.toggle'),true);
     }
     status(all.length>1?`这条证据出现在 ${all.length} 处，已定位到“${escape(issueName(target.dataset.issue))}”。`:'');
     target.scrollIntoView({block:'start',behavior:'smooth'});flash(target);
@@ -212,115 +216,58 @@
     if(missing)status(`报告里有 ${missing} 条引用在资料库中找不到，已用虚线标出。`,true);
   }
 
-  // Proposed screens: confirm while browsing; results stay untouched.
-  const families=groups=>{const map=new Map();for(const group of groups){if(state.hidden.has(group.name))continue;if(!map.has(group.family))map.set(group.family,[]);map.get(group.family).push(group);}return map;};
-  function renderProposed(){
-    const groups=state.overview.proposed;
-    const visible=groups.filter(group=>!state.hidden.has(group.name));
-    $('proposedCount').textContent=visible.length?`(${visible.length})`:'';
-    if(!visible.length){$('proposedList').innerHTML='<p class="empty">没有待确认的界面。</p>';return;}
-    let html='';
-    for(const [family,items] of families(groups)){
-      html+=`<section class="family">${items.length>1?`<h2>名称相近：${escape(family)}</h2>`:''}`+items.map(group=>{
-        const shots=group.instances.map(row=>{const at=row.frame_at??row.refers_start??row.said_start,name=(state.labels[row.session_id]||row.session_id)+' '+row.instance_id;
-          return `<div class="shot">${thumb(row.session_id,at,name+' · '+formatTime(at))}<p>${escape(name)} ${jump(row.session_id,at,formatTime(at))}</p><p>${escape(row.statement.slice(0,80))}${row.statement.length>80?'…':''}</p>${row.route?.length?`<p>路线：${escape(row.route.join(' -> '))}</p>`:''}</div>`;}).join('');
-        return `<article class="proposal" data-name="${escape(group.name)}" data-game="${escape(group.games[0]||'')}"><h3>${escape(group.name)} <span class="count">${group.instances.length} 处</span></h3><div class="shots">${shots}</div>`+
-          `<div class="actions"><button type="button" data-proposal="new">收为新界面</button><button type="button" data-proposal="into">并入已有界面</button><button type="button" data-proposal="skip">暂不处理</button></div></article>`;
-      }).join('')+'</section>';
-    }
-    $('proposedList').innerHTML=html;
-    document.querySelectorAll('#proposedList .thumb[data-session]').forEach(button=>thumbObserver.observe(button));
-  }
-  const screenLists=new Map();
-  async function screensFor(game){if(!screenLists.has(game))screenLists.set(game,await call('list_screens',game));return screenLists.get(game);}
-  async function proposalAction(article,action){
-    const name=article.dataset.name,game=article.dataset.game;
-    if(action==='skip'){state.hidden.add(name);renderProposed();return;}
-    const actions=article.querySelector('.actions');
-    if(action==='new'){
-      actions.innerHTML=`<form><label class="sr-only" for="newId">界面编号</label><input id="newId" name="id" value="${escape(name)}" required placeholder="完整导航路径，如 培养/装备/槽位调平"><label class="sr-only" for="newName">显示名称</label><input id="newName" name="name" placeholder="显示名称（默认取最后一级）"><button type="submit">确认收入</button><button type="button" data-proposal="cancel">取消</button></form>`;
-    }else{
-      const screens=await screensFor(game);
-      actions.innerHTML=`<form><label class="sr-only" for="intoId">已有界面</label><input id="intoId" name="into" list="screenOptions" required placeholder="搜索目录里的界面编号"><datalist id="screenOptions">${screens.map(row=>`<option value="${escape(row.id)}">${escape(row.name)}${row.aliases.length?'（'+escape(row.aliases.join('、'))+'）':''}</option>`).join('')}</datalist><button type="submit">确认并入</button><button type="button" data-proposal="cancel">取消</button></form>`;
-    }
-    const form=actions.querySelector('form');form.querySelector('input').focus();
-    form.onsubmit=async event=>{
-      event.preventDefault();const data=new FormData(form);
-      try{
-        const request={game,proposed:name};
-        if(action==='new'){request.new_id=String(data.get('id')).trim();request.name=String(data.get('name')||'').trim();}
-        else request.into=String(data.get('into')).trim();
-        const result=await call('confirm_proposed',request);
-        state.overview.proposed=result.proposed;screenLists.delete(game);
-        status(`已把“${name}”${action==='new'?'收为新界面 '+result.result.screen:'并入 '+result.result.screen}。`);
-        renderProposed();
-      }catch(error){status(error.message,true);}
-    };
-  }
-
   function selectTab(name){
-    for(const [tab,pane,id] of [['tabEvidence','evidencePane','evidence'],['tabIssues','issuesPane','issues'],['tabProposed','proposedPane','proposed']]){
+    for(const [tab,pane,id] of [['tabEvidence','evidencePane','evidence'],['tabFeedback','feedbackPane','feedback']]){
       $(tab).setAttribute('aria-selected',String(id===name));$(pane).hidden=id!==name;
     }
   }
 
-  // Candidate issues: decide while looking at their evidence, like proposed screens.
-  function candidates(){
-    const found=[];
-    const walk=(node,parent)=>{if(node.status==='candidate'&&!state.hiddenIssues.has(node.id))found.push({node,parent});node.children.forEach(child=>walk(child,node));};
-    state.overview.issues.forEach(node=>walk(node,null));
-    return found;
+  // Feedback: agent output is accepted by default; the user only marks what is wrong and how to adjust it.
+  function targetName(target){
+    if(target.kind==='issue')return issueName(target.id);
+    const row=state.instances.get(key(target.session_id,target.instance_id));
+    const where=target.issue?`（在“${issueName(target.issue)}”下）`:'';
+    return row?`${KIND[row.kind]||row.kind} · ${row.event_title||'未归入活动'} ${label(row)}${where}`:`${target.session_id} ${target.instance_id}${where}`;
   }
-  function renderCandidates(){
-    const found=candidates();
-    $('issueCount').textContent=found.length?`(${found.length})`:'';
-    $('confirmAll').hidden=found.length<2;$('confirmAll').textContent='全部确认';delete $('confirmAll').dataset.armed;
-    if(!found.length){$('issueList').innerHTML='<p class="empty">没有待确认的议题。</p>';return;}
-    $('issueList').innerHTML=found.map(({node,parent})=>{
-      const links=[...node.support.map(link=>({...link,role:'support'})),...node.counter.map(link=>({...link,role:'counter'}))];
-      for(const child of node.children)links.push(...child.support.map(link=>({...link,role:'support'})));
-      const shots=links.slice(0,6).map(link=>{const row=state.instances.get(key(link.session_id,link.instance_id));if(!row)return '';
-        const at=row.frame_at??row.refers_start??row.said_start;
-        return `<div class="shot">${thumb(row.session_id,at,label(row)+' · '+formatTime(at))}<p>${link.role==='counter'?'<span class="badge">反例</span> ':''}<strong>${escape(KIND[row.kind]||row.kind)}</strong> ${escape(label(row))} ${jump(row.session_id,at,formatTime(at))}</p><p>${escape(row.statement.slice(0,80))}${row.statement.length>80?'…':''}</p></div>`;}).join('');
-      return `<article class="proposal" data-issue-id="${escape(node.id)}"><h3>${escape(node.title)} <span class="count">${escape(countText(node))}</span><span class="code">${escape(node.id)}</span></h3>`+
-        `${parent?`<p class="hint">属于“${escape(parent.title)}”</p>`:''}${node.description?`<p class="desc">${escape(node.description)}</p>`:''}<div class="shots">${shots}</div>`+
-        `${links.length>6?`<p class="hint">另有 ${links.length-6} 条证据，可在“证据”页签里查看。</p>`:''}`+
-        `<div class="actions"><button type="button" data-issue-action="confirm">确认</button><button type="button" data-issue-action="title">改标题</button><button type="button" data-issue-action="merge">并入其他议题</button><button type="button" data-issue-action="dismiss">驳回</button><button type="button" data-issue-action="skip">暂不处理</button></div></article>`;
-    }).join('');
-    document.querySelectorAll('#issueList .thumb[data-session]').forEach(button=>thumbObserver.observe(button));
-  }
-  async function issueAction(article,action){
-    const id=article.dataset.issueId,node=state.issues.get(id);
-    if(action==='skip'){state.hiddenIssues.add(id);renderCandidates();return;}
-    if(action==='confirm'){await call('update_issue',{id,status:'confirmed'});status(`已确认 ${id}。`);await load();return;}
-    if(action==='dismiss'){
-      const button=article.querySelector('[data-issue-action="dismiss"]');
-      if(!button.dataset.armed){button.dataset.armed='1';button.textContent='再点一次驳回（移除这个候选和它的证据对应）';return;}
-      await call('dismiss_issue',id);status(`已驳回 ${id}。`);await load();return;
-    }
-    const actions=article.querySelector('.actions');
-    if(action==='title'){
-      actions.innerHTML=`<form><label class="sr-only" for="issueTitle">新标题</label><input id="issueTitle" name="title" required value="${escape(node.title)}"><button type="submit">保存标题</button><button type="button" data-issue-action="cancel">取消</button></form>`;
-    }else{
-      const descendants=new Set([id,...node.children.map(child=>child.id)]);
-      const options=[...state.issues.values()].filter(other=>!descendants.has(other.id)&&other.id!=='BUG');
-      actions.innerHTML=`<form><label class="sr-only" for="mergeInto">并入的议题</label><input id="mergeInto" name="into" list="issueOptions" required placeholder="搜索议题编号或标题"><datalist id="issueOptions">${options.map(other=>`<option value="${escape(other.id)}">${escape(other.title)}</option>`).join('')}</datalist><button type="submit">确认并入</button><button type="button" data-issue-action="cancel">取消</button></form>`;
-    }
-    const form=actions.querySelector('form');form.querySelector('input').focus();
+  function feedbackForm(value=''){return `<form class="feedback-form"><label class="sr-only" for="feedbackText">哪里不对、该怎么调</label><textarea id="feedbackText" name="text" rows="2" required maxlength="2000" placeholder="哪里不对、该怎么调，例如：这条应该归到“找不到入口”">${escape(value)}</textarea><div class="form-actions"><button type="submit">记下</button><button type="button" data-feedback-cancel>取消</button></div></form>`;}
+  function openFlag(button){
+    document.querySelectorAll('#evidenceList .feedback-form').forEach(form=>form.remove());
+    const target=JSON.parse(button.dataset.flag);
+    const anchor=button.closest('.row')||button.closest('.card');
+    anchor.insertAdjacentHTML('afterend',feedbackForm());
+    const form=anchor.nextElementSibling;form.querySelector('textarea').focus();
     form.onsubmit=async event=>{
-      event.preventDefault();const data=new FormData(form);
+      event.preventDefault();
       try{
-        if(action==='title'){await call('update_issue',{id,title:String(data.get('title')).trim()});status(`已修改 ${id} 的标题。`);}
-        else{const into=String(data.get('into')).trim();await call('merge_issue',id,into);status(`已把 ${id} 并入 ${into}，证据一起移过去了。`);}
-        await load();
+        state.feedback=await call('add_feedback',{target,text:String(new FormData(form).get('text')).trim()});
+        form.remove();renderFeedback();status(`已记下对“${targetName(target)}”的反馈，下一轮整理时会按它调整。`);
       }catch(error){status(error.message,true);}
     };
   }
-  async function confirmAll(){
-    const button=$('confirmAll'),found=candidates();
-    if(!button.dataset.armed){button.dataset.armed='1';button.textContent=`再点一次，确认全部 ${found.length} 个`;return;}
-    for(const {node} of found)await call('update_issue',{id:node.id,status:'confirmed'});
-    status(`已确认 ${found.length} 个议题。`);await load();
+  function renderFeedback(){
+    const open=state.feedback.filter(item=>item.status==='open').length;
+    $('feedbackCount').textContent=open?`(${open})`:'';
+    if(!state.feedback.length){$('feedbackList').innerHTML='<p class="empty">还没有反馈。在证据页任意议题或证据卡旁点“有问题”，写一句哪里不对、该怎么调。</p>';return;}
+    $('feedbackList').innerHTML=[...state.feedback].reverse().map(item=>`<article class="feedback-item${item.status==='open'?'':' resolved'}" data-feedback-id="${escape(item.id)}">`+
+      `<p class="feedback-target"><a href="#" data-feedback-go>${escape(targetName(item.target))}</a><span class="badge">${item.status==='open'?'待处理':'已处理'}</span><span class="when">${escape(item.created.slice(0,16).replace('T',' '))}</span></p>`+
+      `<p class="feedback-text">${escape(item.text)}</p>${item.resolution?`<p class="feedback-resolution">处理：${escape(item.resolution)}</p>`:''}`+
+      `${item.status==='open'?'<div class="form-actions"><button type="button" data-feedback-edit>修改</button><button type="button" data-feedback-remove>删除</button></div>':''}</article>`).join('');
+  }
+  async function feedbackAction(article,action){
+    const id=article.dataset.feedbackId,item=state.feedback.find(entry=>entry.id===id);
+    if(action==='go'){item.target.kind==='issue'?goToIssue(item.target.id):goToInstance(item.target.session_id,item.target.instance_id,item.target.issue||null);return;}
+    if(action==='remove'){
+      const button=article.querySelector('[data-feedback-remove]');
+      if(!button.dataset.armed){button.dataset.armed='1';button.textContent='再点一次删除';return;}
+      state.feedback=await call('remove_feedback',id);renderFeedback();status('已删除这条反馈。');return;
+    }
+    article.querySelector('.form-actions').outerHTML=feedbackForm(item.text);
+    const form=article.querySelector('form');form.querySelector('textarea').focus();
+    form.onsubmit=async event=>{
+      event.preventDefault();
+      try{state.feedback=await call('edit_feedback',id,String(new FormData(form).get('text')).trim());renderFeedback();status('已修改这条反馈。');}
+      catch(error){status(error.message,true);}
+    };
   }
   async function openReport(name){
     state.report=name?await call('read_report',name):null;
@@ -330,13 +277,13 @@
     status('正在读取资料库…');
     try{
       const overview=await call('get_overview');
-      state.overview=overview;state.labels=overview.session_labels;state.reports=overview.reports;
+      state.overview=overview;state.labels=overview.session_labels;state.reports=overview.reports;state.feedback=overview.feedback;
       state.instances=new Map(overview.instances.map(row=>[key(row.session_id,row.instance_id),row]));
       $('title').textContent='洞察 · '+overview.vault;document.title=$('title').textContent;
       const previous=$('reportSelect').value;
       $('reportSelect').innerHTML=overview.reports.length?overview.reports.map(row=>`<option value="${escape(row.name)}">${escape(row.name)}</option>`).join(''):'<option value="">（没有报告）</option>';
       if(overview.reports.some(row=>row.name===previous))$('reportSelect').value=previous;
-      renderEvidence();renderProposed();renderCandidates();
+      renderEvidence();renderFeedback();
       await openReport($('reportSelect').value);
       if(!state.report||!state.report.citations.some(row=>!row.resolved))status('');
     }catch(error){status(error.message,true);}
@@ -359,17 +306,14 @@
     }
     const button=event.target.closest('.toggle');
     if(button){setExpanded(button,button.getAttribute('aria-expanded')!=='true');return;}
-    const issueButton=event.target.closest('[data-issue-action]');
-    if(issueButton){
-      if(issueButton.dataset.issueAction==='cancel')renderCandidates();
-      else issueAction(issueButton.closest('.proposal'),issueButton.dataset.issueAction).catch(error=>status(error.message,true));
-      return;
-    }
-    const proposal=event.target.closest('[data-proposal]');
-    if(proposal){
-      const article=proposal.closest('.proposal');
-      if(proposal.dataset.proposal==='cancel')renderProposed();
-      else proposalAction(article,proposal.dataset.proposal).catch(error=>status(error.message,true));
+    const flagButton=event.target.closest('[data-flag]');
+    if(flagButton){openFlag(flagButton);return;}
+    if(event.target.closest('[data-feedback-cancel]')){const form=event.target.closest('form');form.closest('.feedback-item')?renderFeedback():form.remove();return;}
+    const feedbackButton=event.target.closest('[data-feedback-go],[data-feedback-edit],[data-feedback-remove]');
+    if(feedbackButton){
+      event.preventDefault();
+      const action=feedbackButton.hasAttribute('data-feedback-go')?'go':feedbackButton.hasAttribute('data-feedback-edit')?'edit':'remove';
+      feedbackAction(feedbackButton.closest('.feedback-item'),action).catch(error=>status(error.message,true));
       return;
     }
     const thumbButton=event.target.closest('.thumb[data-session]');
@@ -388,9 +332,7 @@
   $('reportSelect').onchange=()=>openReport($('reportSelect').value).catch(error=>status(error.message,true));
   $('refresh').onclick=load;
   $('tabEvidence').onclick=()=>selectTab('evidence');
-  $('tabProposed').onclick=()=>selectTab('proposed');
-  $('tabIssues').onclick=()=>selectTab('issues');
-  $('confirmAll').onclick=()=>confirmAll().catch(error=>status(error.message,true));
+  $('tabFeedback').onclick=()=>selectTab('feedback');
 
   function start(){
     if(api)return;
