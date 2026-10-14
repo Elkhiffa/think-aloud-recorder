@@ -88,29 +88,20 @@ def write_tags(vault, data):
                 assignments=len(data['assignments']))
 
 
-def _aliases(vault):
-    import game_catalog
-    found = {}
-    for path in (Path(vault).resolve() / 'game-assets').glob('*/catalog.json'):
-        for row in game_catalog.load_catalog(vault, path.parent.name)['screens']:
-            found.setdefault(row['id'], []).extend(row.get('aliases', []))
-    return found
-
-
 def instance_tags(vault, rows=None, data=None):
     """Map 'session/instance' -> sorted tag ids: activity tags ∪ keyword hits ∪ add − remove."""
     import issue_registry
     data = data or read_tags(vault)
     rows = issue_registry.query_instances(vault) if rows is None else rows
-    aliases = _aliases(vault)
     keywords = [(tag['id'], tag.get('keywords', [])) for tag in data['tags']]
     result = {}
     for row in rows:
         key = row['session_id'] + '/' + row['instance_id']
         tags = set(data['activities'].get(row['session_id'] + '/' + row['event_id'], []))
-        # 路径 2：同一玩法的界面路径写法不一（活动（燕语江湖）/活动/江湖弈、江湖弈/对局），按关键词都能找到。
-        texts = [row.get('screen') or '', row.get('catalog_screen') or '', *row.get('route', []),
-                 *aliases.get(row.get('catalog_screen'), [])]
+        # 路径 2：同一玩法的界面写法不一（活动（燕语江湖）/活动/江湖弈、江湖弈/对局），按关键词都能找到。
+        # 关键词只看证据所在的界面：目录里有的用正式编号（旧写法如“伙伴/萌主争锋/…”只用来对应，不再带出“伙伴”），
+        # 目录里没有的用原始写法；跳转路径是“从哪儿来”，交给活动标签，不参与匹配。
+        texts = [row.get('catalog_screen') or row.get('screen') or '']
         tags |= {tag for tag, words in keywords if any(word in text for word in words for text in texts)}
         change = data['assignments'].get(key, {})
         tags = (tags | set(change.get('add', []))) - set(change.get('remove', []))

@@ -17,7 +17,8 @@ def table(**extra):
     data = dict(version=1, groups=[dict(id='system', name='系统'), dict(id='play', name='活动 / 玩法')],
                 tags=[dict(id='jhy', name='江湖弈', group='play', keywords=['江湖弈']),
                       dict(id='wll', name='武林录', group='play', keywords=['武林录']),
-                      dict(id='shop', name='商店', group='system', keywords=['商店'])],
+                      dict(id='shop', name='商店', group='system', keywords=['商店']),
+                      dict(id='partner', name='伙伴', group='system', keywords=['伙伴/'])],
                 activities={}, assignments={})
     data.update(extra)
     return data
@@ -35,7 +36,7 @@ class EvidenceTagTests(unittest.TestCase):
     make_session = registry_tests.IssueRegistryTests.make_session
 
     def test_tags_follow_keywords_activities_and_manual_changes(self):
-        """触发路径：用户在界面库点“江湖弈”或“武林录” → 路径写法不一的江湖弈界面都要命中；从武林录进入的副本战斗（没有界面名）和自带名字的结算界面靠活动标签找到；误命中可以逐条去掉。"""
+        """触发路径：用户在界面库点“江湖弈”“武林录”或“伙伴” → 写法不一的江湖弈界面都要命中；从武林录进入的副本战斗（没有界面名）和自带名字的结算界面靠活动标签找到；按旧写法“伙伴/萌主争锋/…”记录、已对应到“萌主争锋/…”的界面不带出“伙伴”；跳转路径不参与匹配；误命中可以逐条去掉。"""
         path = game_catalog.catalog_path(self.vault, '合成游戏')
         path.parent.mkdir(parents=True)
         protocol._write(path.parent, path.name, dict(version=1, game='合成游戏', screens=[
@@ -48,9 +49,13 @@ class EvidenceTagTests(unittest.TestCase):
                 row('i4', event='e2', screen='镇守结算', catalog='镇守结算'),
                 row('i5', screen='商店/外观', catalog='商店/外观'),
                 row('i6', screen='棋盘', route=['活动（燕语江湖）/活动/江湖弈', '棋盘']),
-                row('i7', screen='背包/道具', catalog='背包/道具')]
+                row('i7', screen='背包/道具', catalog='背包/道具'),
+                row('i8', screen='伙伴/萌主争锋/单打独逗/备战', catalog='萌主争锋/单打独逗/备战'),
+                row('i9', screen='伙伴/同游', catalog=None),
+                row('i10', screen='包裹/道具', route=['商店/外观', '包裹/道具'])]
         found = tags.instance_tags(self.vault, rows, data)
-        self.assertEqual(found, {'s1/i1': ['jhy'], 's1/i2': ['jhy'], 's1/i3': ['wll'], 's1/i4': ['wll'], 's1/i6': ['jhy']})
+        self.assertEqual(found, {'s1/i1': ['jhy'], 's1/i2': ['jhy'], 's1/i3': ['wll'], 's1/i4': ['wll'], 's1/i6': ['jhy'],
+                                 's1/i9': ['partner']})
 
     def test_write_validates_and_keeps_user_covers(self):
         """触发路径：agent 用 tags-write 整份重写标签表 → 写坏的表整份拒绝；用户在洞察窗口右键设好的封面不会被覆盖；用户能对某个标签提反馈。"""
