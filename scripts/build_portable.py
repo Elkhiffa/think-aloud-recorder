@@ -33,6 +33,7 @@ ROOT_FILES = (
     'transcription_runtime.py', 'speaker_roles.py', 'microphone_monitor.py', 'agent_protocol.py', 'event_edits.py', 'agent_cli.py',
     'visual_nodes.py', 'visual_change.py', 'visual_evidence.py', 'visual_compare.py', 'player.html', 'requirements-lock.txt',
     'issue_registry.py', 'game_catalog.py', 'context_track.py', 'insight_report.py', 'insight_runtime.py',
+    'evidence_tags.py', 'user_feedback.py',
     'input_capture.py', 'input_capture_windows.py', 'input_capture_devices.py', 'session_metadata.py',
     'updater.py', 'update_installer.py',
     'vocabulary_agent.py', 'vocabulary_ipc.py', 'docs/vocabulary-agent.md',

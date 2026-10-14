@@ -70,6 +70,21 @@ class PackagingTests(unittest.TestCase):
         return build(self.root, self.base / directory, candidate=candidate,
                      launcher=b'MZ synthetic launcher fixture')
 
+    def test_every_repo_module_imported_by_packaged_code_is_packaged(self):
+        """触发路径：发布构建按白名单打包 → 新加的模块（如 evidence_tags、user_feedback）忘了登记时，装好的软件一打开相关窗口就报缺模块。"""
+        import ast
+        root = Path(__file__).resolve().parents[1]
+        local = {path.stem for path in root.glob('*.py')}
+        missing = set()
+        for name in ROOT_FILES:
+            if not name.endswith('.py') or '/' in name:
+                continue
+            for node in ast.walk(ast.parse((root / name).read_text(encoding='utf-8'))):
+                modules = [alias.name for alias in node.names] if isinstance(node, ast.Import) else                     [node.module] if isinstance(node, ast.ImportFrom) and node.module and not node.level else []
+                missing |= {module.split('.')[0] + '.py' for module in modules
+                            if module.split('.')[0] in local and module.split('.')[0] + '.py' not in ROOT_FILES}
+        self.assertEqual(missing, set())
+
     def test_excludes_credentials_models_obs_config_vault_caches_and_obsidian(self):
         contaminants = (
             'config.json', 'portable.json', '.env', 'secret.dpapi', 'state/models.json',
