@@ -203,6 +203,12 @@ async function main(){
     await page.locator('#libNext [data-lib-next]').click();await page.waitForTimeout(700);
     const next=await page.locator('#libgroup-play>.lib-toggle').boundingBox();assert.ok(next.y>=top-2&&next.y<top+600,'next dimension is brought into view');
     await page.locator('#library').evaluate(pane=>pane.scrollTop=0);
+    // Collapsing a dimension may remove the scrollbar; the reserved gutter keeps card sizes still.
+    const before=(await page.locator('#libgroup-play .tag-card').first().boundingBox()).width;
+    await page.locator('#libgroup-cross>.lib-toggle').click();
+    const after=(await page.locator('#libgroup-play .tag-card').first().boundingBox()).width;
+    assert.equal(after,before,'card width does not jump when the scrollbar comes and goes');
+    await page.locator('#libgroup-cross>.lib-toggle').click();
   });
   await check('right-click an evidence card sets the cover of its tag; citations clear filters to land',async()=>{
     await page.locator('#expandAll').click();

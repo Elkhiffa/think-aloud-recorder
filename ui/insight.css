@@ -1,6 +1,6 @@
 /* Insight window: same paper palette as the review window. */
-:root{color-scheme:light;--bg:#ede7db;--surface:#fcfaf5;--soft:#f4efe6;--tint:#f2e8dc;--ink:#292722;--heading:#292722;--muted:#716c63;--line:#dcd5c9;--strong-line:#c7bfb1;--accent:#b64b37;--counter:#38715a;--counter-bg:#e5ede6;--mark:#fbe7c6}
-@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#302b25;--surface:#26231f;--soft:#2d2924;--tint:#41352b;--ink:#eae4da;--heading:#f6f0e6;--muted:#c0b6a8;--line:#4d453b;--strong-line:#716455;--accent:#eeaa90;--counter:#add0ba;--counter-bg:#2e3b32;--mark:#5a4627}}
+:root{color-scheme:light;--bg:#ede7db;--surface:#fcfaf5;--soft:#f4efe6;--fill1:#efe8dc;--fill2:#f4efe6;--fill3:#f8f4ed;--desc:#857f75;--tint:#f2e8dc;--ink:#292722;--heading:#292722;--muted:#716c63;--line:#dcd5c9;--strong-line:#c7bfb1;--accent:#b64b37;--counter:#38715a;--counter-bg:#e5ede6;--mark:#fbe7c6}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:#302b25;--surface:#26231f;--soft:#2d2924;--fill1:#37312a;--fill2:#312c26;--fill3:#2c2823;--desc:#a59c90;--tint:#41352b;--ink:#eae4da;--heading:#f6f0e6;--muted:#c0b6a8;--line:#4d453b;--strong-line:#716455;--accent:#eeaa90;--counter:#add0ba;--counter-bg:#2e3b32;--mark:#5a4627}}
 *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--strong-line) transparent}
 html,body{width:100%;height:100%;margin:0;overflow:hidden}
 body{font:15px/1.65 "Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif;color:var(--ink);background:var(--surface);display:flex;flex-direction:column}
@@ -21,7 +21,7 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .status:empty{display:none}
 .status.error{color:var(--accent)}
 .split{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
-.pane{min-height:0;overflow:auto;overscroll-behavior:contain;padding:16px 24px 40px;overflow-wrap:anywhere}
+.pane{min-height:0;overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain;padding:16px 24px 40px;overflow-wrap:anywhere}
 .left-col{min-height:0;display:flex;flex-direction:column;border-right:1px solid var(--line)}
 .left-col>.pane{flex:1}
 .report h1,.report h2,.report h3,.report h4{color:var(--heading);line-height:1.45;margin:24px 0 8px;font-weight:600}
@@ -51,7 +51,10 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .toggle:hover{background:none;color:var(--accent)}
 .toggle::before{content:"▸";flex:none;color:var(--muted);transition:transform .12s}
 .toggle[aria-expanded=true]::before{transform:rotate(90deg)}
-.row{display:flex;align-items:baseline;gap:8px;background:var(--surface)}
+.row{display:flex;align-items:baseline;gap:8px;background:var(--surface);border-radius:6px;padding:3px 8px 3px 6px;margin:2px 0}
+.level-1>.row{background:var(--fill1)}
+.level-2>.row{background:var(--fill2)}
+.level-3>.row{background:var(--fill3)}
 /* A child row pushed out at the end of its section slides under its parent's row, never over it. */
 .level-1>.row,.level-2>.row,.level-3>.row{position:sticky}
 .level-1>.row{top:var(--head,0px);z-index:3}
@@ -69,6 +72,7 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .level-1>.row>.toggle{font-size:16px;font-weight:600;color:var(--heading)}
 .level-2>.row>.toggle{font-size:15px;font-weight:500;color:var(--ink)}
 .group>.row>.toggle{font-size:14px}
+.level-2>.row>.toggle{font-size:14.5px;font-weight:500}
 /* The feedback entry is always there but stays quiet until pointed at. */
 .flag{flex:none;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border:0;border-radius:4px;background:none;padding:0;color:var(--muted);opacity:.55}
 .flag:hover,.flag:focus-visible{opacity:1;color:var(--accent);background:none}
@@ -76,7 +80,7 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .toggle .n{margin-left:auto;font-weight:400;color:var(--muted);font-size:12.5px;white-space:nowrap}
 .code{margin-left:8px;font-size:11px;font-weight:400;color:var(--muted);opacity:.7;letter-spacing:.02em}
 .badge{font-size:12px;font-weight:400;border:1px solid var(--line);border-radius:10px;padding:0 6px;color:var(--muted)}
-.desc{margin:4px 0 8px 18px;color:var(--muted);font-size:14px;white-space:pre-wrap;max-width:72ch}
+.desc{margin:4px 0 8px 18px;color:var(--desc);font-size:13.5px;line-height:1.7;white-space:pre-wrap}
 .cards{display:grid;gap:12px;margin:8px 0 8px 18px}
 .subhead{margin:12px 0 0 18px;font-size:13px;color:var(--muted);font-weight:600}
 .card{display:grid;grid-template-columns:160px minmax(0,1fr);gap:12px;padding:12px;border:1px solid var(--line);border-radius:6px;background:var(--surface);scroll-margin-top:calc(var(--head,0px) + var(--r1,0px) + var(--r2,0px) + var(--r3,0px) + 12px)}
@@ -117,11 +121,11 @@ select,input{border:1px solid var(--line);border-radius:5px;padding:4px 8px;back
 .filter-clear{font-size:12.5px;padding:0 8px}
 .library{padding-top:8px}
 .lib-group{margin:0 0 16px}
-.lib-toggle{position:sticky;top:-8px;z-index:2;display:flex;width:100%;gap:8px;align-items:baseline;border:0;border-bottom:1px solid var(--line);border-radius:0;background:var(--surface);padding:10px 0 6px;font-size:18px;font-weight:600;color:var(--heading);text-align:left}
+.lib-toggle{position:sticky;top:-8px;z-index:2;display:flex;width:100%;gap:8px;align-items:baseline;border:0;border-radius:6px;background:var(--fill1);padding:8px 12px;font-size:18px;font-weight:600;color:var(--heading);text-align:left}
 .lib-toggle::before{content:"▸";color:var(--muted);font-size:14px;transition:transform .12s}
 .lib-toggle[aria-expanded=true]::before{transform:rotate(90deg)}
 .lib-toggle .n{margin-left:auto;font-size:13px;font-weight:400;color:var(--muted)}
-.lib-toggle:hover{background:var(--surface);color:var(--accent)}
+.lib-toggle:hover{background:var(--fill1);color:var(--accent)}
 .lib-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;margin-top:12px}
 .tag-card{cursor:pointer;border-radius:6px;padding:6px;border:1px solid transparent}
 .tag-card:hover{background:var(--soft)}
