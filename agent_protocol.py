@@ -1129,6 +1129,10 @@ class StatusStore:
     def put(self, key, signature, value):
         value = {k: v for k, v in value.items() if k != 'result'}
         with self._lock:
+            entry = self._entries.get(key)
+            if value.get('state') == 'checking' and entry and entry[0] == signature:
+                # A poll racing the background check keeps the check's answer.
+                return
             self._entries.pop(key, None)
             # Only leases expire; every other status changes only with a file in the signature.
             expiry = value.get('expires_at', value.get('reanalysis', {}).get('expires_at'))
