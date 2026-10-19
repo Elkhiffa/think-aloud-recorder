@@ -1422,11 +1422,15 @@ class DesktopService:
                 return self._error('当前没有本应用接管的录制。')
             session = self._active
             cfg = deepcopy(session.meta['settings'])
+        timer = recorder.StageTimer()
 
         def work():
+            timer.mark('queued')
             try:
-                session.stop()
+                session.stop(mark=timer.mark)
+                self._record_timing('stop', timer, ok=True)
             except Exception:
+                self._record_timing('stop', timer, ok=False)
                 # Keep the active handle unless OBS proves this recording ended.
                 session.finish_inputs(interrupted=True,error='停止录制时连接中断，操作采集已停止。')
                 try:

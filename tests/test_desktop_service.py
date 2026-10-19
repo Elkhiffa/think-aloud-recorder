@@ -681,7 +681,7 @@ class DesktopServiceTests(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         self.addCleanup(release.set)
 
-        def finishing_stop():
+        def finishing_stop(mark=None):
             entered.set()
             self.assertTrue(release.wait(5))
 
@@ -1072,7 +1072,7 @@ class DesktopServiceTests(unittest.TestCase):
                 errors.append(error)
 
         thread = threading.Thread(target=finish)
-        with patch.object(session, 'stop', side_effect=lambda: (entered.set(), release.wait(3))) as stop:
+        with patch.object(session, 'stop', side_effect=lambda mark=None: (entered.set(), release.wait(3))) as stop:
             try:
                 thread.start()
                 self.assertTrue(entered.wait(2))

@@ -998,11 +998,13 @@ class Session:
                 s.finish_inputs(s._video_seconds,interrupted=True,error='录制启动未确认，操作采集已停止。')
                 s.update(state='失败',error=str(e));raise
             return s
-    def stop(self):
+    def stop(self,mark=None):
         with obs_connection(False) as r:
+            _mark(mark,'obs_connect')
             directory=Path(r.send('GetRecordDirectory').record_directory)
             if directory.resolve()!=self.path.resolve():raise RuntimeError('OBS 录制目录不属于本场次，已拒绝停止其他录制。')
             self.close_microphone_monitor()
+            _mark(mark,'microphone_monitor_closed')
             before=time.perf_counter()
             status=r.get_record_status()
             after=time.perf_counter()
@@ -1011,6 +1013,7 @@ class Session:
             except RuntimeError:pass
             # Stop listeners before a stop request can block or lose acknowledgement.
             self.finish_inputs(self._video_seconds)
+            _mark(mark,'inputs_finished')
             if status.output_active:
                 self.update(state='保存中')
                 # Native listener shutdown and sidecar flush may take seconds.
@@ -1018,19 +1021,25 @@ class Session:
                 stop_before=time.perf_counter()
                 try:
                     output=Path(r.stop_record().output_path)
+                    _mark(mark,'stop_request')
                     self.update(recording_file=output.name)
                     for _ in range(120):
                         if not r.get_record_status().output_active:break
                         time.sleep(0.5)
                     else:raise RuntimeError('OBS 尚未完成停止，请稍后重试。')
+                    _mark(mark,'output_stopped')
                     if self._input_clock_events is not None:
                         self._input_stop_boundary=self._input_clock_events.boundary(stop_before)
                 finally:self.close_input_clock_events()
             else:self.close_input_clock_events()
+            _mark(mark,'clock_events_closed')
             self.adopt_recording()
+            _mark(mark,'adopt_recording')
             # Release capture devices after recording; a later session rebuilds them.
             for item in r.get_input_list().inputs:r.remove_input(item['inputName'])
+            _mark(mark,'inputs_removed')
             self.prepare_video()
+            _mark(mark,'prepare_video')
     def adopt_recording(self):
         raw=self.path/'原始录像.mkv'
         if not raw.exists():
