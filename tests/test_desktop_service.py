@@ -177,6 +177,9 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertTrue(all(type(ms) is int and ms >= 0 for _, ms in record['stages']))
         for private in (str(self.vault), 'window-id', 'mic-id', 'private-obs-password', 'Synthetic'):
             self.assertNotIn(private, lines[-1])
+        self.assertTrue(self.service._request_readiness())
+        self.wait()
+        self.assertEqual(len((self.root / 'state/timings.jsonl').read_text(encoding='utf-8').splitlines()), len(lines))
 
     def fresh_shared_vault(self):
         self.service.root = self.root / 'recorder-version'

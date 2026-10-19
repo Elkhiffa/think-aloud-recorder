@@ -793,6 +793,18 @@ class AgentProtocolTests(unittest.TestCase):
         value, needs_check = agent.list_status(self.folder, self.meta, agent.StatusStore(cache, 'new'))
         self.assertEqual((value['state'], needs_check), ('checking', True))
 
+    def test_damaged_saved_status_entries_are_dropped_and_saving_still_works(self):
+        """触发路径：操作系统 → 同步盘或断电留下内容损坏但版本号仍匹配的本机缓存 → 应用启动后列表核对并保存 → 损坏条目被丢弃、保存照常 → 不修后台核对线程每次保存都会出错，缓存永远写不进去。"""
+        self.complete()
+        cache = self.root / 'state' / 'preprocessing-status.json'
+        cache.parent.mkdir(parents=True)
+        cache.write_text(json.dumps(dict(version='v1', entries={'broken': 'x', 'short': [1]})), encoding='utf-8')
+        store = agent.StatusStore(cache, 'v1')
+        agent.warm_status(self.folder, store)
+        store.save()
+        saved = json.loads(cache.read_text(encoding='utf-8'))['entries']
+        self.assertEqual(set(saved), {str(self.folder)})
+
     def test_issue_registry_change_rechecks_cached_status(self):
         """触发路径：外部 agent → 用 agent_cli 修改资料库 issues.json → 已缓存的整理状态引用的议题可能已删除 → 状态重新核对 → 不修会继续显示议题已失效的结果为已完成。"""
         self.complete()

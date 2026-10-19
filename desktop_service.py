@@ -1035,8 +1035,11 @@ class DesktopService:
                                 self._readiness.update(ready=False, checking=False)
                                 return
                         result = self._run_automatic_readiness(invalidate=invalidate, generation=generation)
-                        self._record_timing('readiness', timer, invalidate=invalidate, ready=bool(result and result.get('ready')),
-                                            errors=[item['code'] for item in (result or {}).get('errors', [])])
+                        # Routine 5 s refreshes would push start/stop history out of the bounded file;
+                        # only checks the user waits for (return, save, after stop) are recorded.
+                        if invalidate:
+                            self._record_timing('readiness', timer, ready=bool(result and result.get('ready')),
+                                                errors=[item['code'] for item in (result or {}).get('errors', [])])
                 finally:
                     self._timing.timer = None
                     with self._lock:

@@ -1112,7 +1112,9 @@ class StatusStore:
         try:
             data = json.loads(self.path.read_text(encoding='utf-8'))
             if isinstance(data, dict) and data.get('version') == self.version and isinstance(data.get('entries'), dict):
-                self._entries = data['entries']
+                # Path 5: a damaged entry is dropped instead of breaking every later save.
+                self._entries = {key: entry for key, entry in data['entries'].items()
+                                 if isinstance(entry, list) and len(entry) == 3 and isinstance(entry[2], dict)}
         except (OSError, ValueError):
             # Path 4/5: a missing, partial or older-version cache only means a fresh check.
             pass
