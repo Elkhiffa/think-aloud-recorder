@@ -2,7 +2,7 @@
 
 Recorder and viewer have separate, restricted bridges.
 
-Every public method returns `{ok: true, data: ...}` or `{ok: false, error: "user-readable message"}`. JavaScript uses `window.pywebview.api`. Never return or log saved secrets. Long operations launch a tracked background task; the UI polls `get_state()` every 1 second. Mutations are rejected while recording or a conflicting task is running. Native directory/file dialogs are handled by the service via `set_window(window)`.
+Every public method returns `{ok: true, data: ...}` or `{ok: false, error: "user-readable message"}`. JavaScript uses `window.pywebview.api`. Never return or log saved secrets. Long operations launch a tracked background task; the UI polls `get_state()` every 1 second; while `readiness.checking` is true it polls again 250 ms after each poll, at most 12 times per check. Readiness checks and starts append per-stage durations (no settings, paths or device names) to the app's `state/timings.jsonl`; `recorder.Session.start` and `configure_scene` accept an optional `mark(stage_name)` callable for this. Mutations are rejected while recording or a conflicting task is running. Native directory/file dialogs are handled by the service via `set_window(window)`.
 
 `get_state()` data:
 - `presets`: list of {id,name,vault}; `active_preset_id`: current stable ID or null. Presets independently save complete user-facing settings. Secret/model resources remain app-scoped.
