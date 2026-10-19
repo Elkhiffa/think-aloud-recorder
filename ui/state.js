@@ -6,6 +6,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
   const FIELDS = ['game','vault','preset','source','window','monitor','mic','language','hotwords','hotword_files','hotword_manual','transcription_provider','record_inputs'];
+  const GENERAL_KEYS = ['source','monitor','mic','preset','language','transcription_provider','record_inputs'];
   const clone = value => JSON.parse(JSON.stringify(value));
   const splitWords = text => String(text||'').replace(/^\uFEFF/,'').split(/[,，;；、\r\n]+/).map(word=>word.normalize('NFC').trim()).filter(Boolean);
   const vocabularyWords = draft => [...new Set([...(draft?.hotword_files||[]).flatMap(file=>file.words||[]),...splitWords(draft?.hotword_manual)].map(word=>word.normalize('NFC').trim()).filter(Boolean))];
@@ -74,12 +75,24 @@
       this.step=1;
       return this.draft;
     }
-    cancelDraft() { this.draft=null;this.editingId=null;this.step=1;this.confirmedVault=''; }
+    cancelDraft() { this.draft=null;this.editingId=null;this.step=1;this.confirmedVault='';this.addedGeneralIds=[];this.baseline=null; }
+    // Dirty tracking for the settings page: compared against the draft as it was opened.
+    snapshotBaseline() { this.baseline=this.draft?JSON.stringify(this.draft):null; }
+    get dirty() { return !!this.draft&&this.baseline!==null&&JSON.stringify(this.draft)!==this.baseline; }
     updateDraft(key,value) { if(this.draft&&FIELDS.includes(key)){if(['source','window','monitor','mic'].includes(key))this.deviceChoiceRevision++;this.draft[key]=key==='record_inputs'?value===true:value;if(this.draft.source!=='游戏窗口')this.draft.record_inputs=false;if(key==='hotwords')this.draft.hotword_manual=value;if(['hotwords','hotword_files','hotword_manual'].includes(key))this.syncVocabulary();} }
     syncVocabulary() { if(this.draft)this.draft.hotwords=vocabularyWords(this.draft).join('\n'); }
     addVocabularyFiles(files) { if(!this.draft)return 0;const ids=new Set(this.draft.hotword_files.map(file=>file.id));let count=0;for(const file of files||[]){if(!ids.has(file.id)){this.draft.hotword_files.push(clone(file));ids.add(file.id);count++;}}this.syncVocabulary();return count; }
     removeVocabularyFile(id) { if(this.draft){this.draft.hotword_files=this.draft.hotword_files.filter(file=>file.id!==id);this.syncVocabulary();} }
     presetPayload() { if(!this.draft)throw new Error('没有正在编辑的预设。');return {...clone(this.draft),name:this.draft.game.trim(),game:this.draft.game.trim(),...(this.draftVocabularyRevision?{expected_vocabulary_revision:this.draftVocabularyRevision}:{}),...(this.sameVault(this.confirmedVault,this.draft.vault)?{confirmed_vault:this.confirmedVault}:{})}; }
+    // Settings are split: general keys are shared by every game, a game keeps its name, window, folder and vocabulary.
+    get generalIds() { return new Set((this.saved.general_hotword_files||[]).map(file=>file.id).concat(this.addedGeneralIds||[])); }
+    markGeneral(files) { this.addedGeneralIds=[...(this.addedGeneralIds||[]),...(files||[]).map(file=>file.id)]; }
+    generalFiles() { const ids=this.generalIds;return (this.draft?.hotword_files||[]).filter(file=>ids.has(file.id)); }
+    gameFiles() { const ids=this.generalIds;return (this.draft?.hotword_files||[]).filter(file=>!ids.has(file.id)); }
+    generalPayload() { if(!this.draft)throw new Error('没有正在编辑的设置。');const d=clone(this.draft);return {...Object.fromEntries(GENERAL_KEYS.map(key=>[key,d[key]])),general_hotword_files:clone(this.generalFiles()),...(this.draftVocabularyRevision?{expected_vocabulary_revision:this.draftVocabularyRevision}:{})}; }
+    gamePayload() { if(!this.draft)throw new Error('没有正在编辑的游戏。');const d=this.draft;return {name:d.game.trim(),game:d.game.trim(),window:d.window,vault:d.vault,hotword_manual:d.hotword_manual,game_hotword_files:clone(this.gameFiles()),...(this.draftVocabularyRevision?{expected_vocabulary_revision:this.draftVocabularyRevision}:{}),...(this.sameVault(this.confirmedVault,d.vault)?{confirmed_vault:this.confirmedVault}:{})}; }
+    validateGame() { const d=this.draft;if(!d)return '请先打开设置。';if(!d.game.trim())return '请填写游戏名称。';if(d.source!=='整个显示器'&&!d.window)return '请选择游戏窗口。';if(!d.vault)return '请选择保存位置。';if(this.needsVaultConfirmation)return '发现已有资料库。请先选择“使用已有资料库”，或选择其他位置。';return ''; }
+    validateGeneral() { const d=this.draft;if(!d)return '请先打开设置。';if(!d.mic)return '请选择麦克风。';if(d.source==='整个显示器'&&!d.monitor)return '请选择要录制的显示器。';if(!['local','qwen'].includes(d.transcription_provider))return '请选择本地转写或 Qwen 转写。';return ''; }
     startPayload() { return {}; }
     validateStep(step=this.step) {
       const d=this.draft;if(!d)return '请先打开录制设置。';
@@ -112,5 +125,5 @@
     }
     return '已保存的'+({mic:'麦克风',monitor:'显示器',window:'游戏窗口'}[kind]||'选择');
   }
-  return {State,FIELDS,defaults,splitWords,vocabularyWords,updateView,lastInstallView,matchedWindowValue,inventoryView,savedDeviceLabel};
+  return {State,FIELDS,GENERAL_KEYS,defaults,splitWords,vocabularyWords,updateView,lastInstallView,matchedWindowValue,inventoryView,savedDeviceLabel};
 });

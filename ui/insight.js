@@ -5,7 +5,7 @@
   const KIND={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
   const CONTEXT={hud:'HUD / 战斗 / 大世界',multi_screen:'跨多个界面',outside_game:'游戏外窗口',unknown:'认不出界面'};
   const state={overview:null,instances:new Map(),labels:{},reports:[],report:null,issues:new Map(),feedback:[],
-    tags:[],tagGroups:[],instanceTags:{},filters:{kinds:new Set(),tags:new Set()}};
+    tags:[],tagGroups:[],instanceTags:{},filters:{kinds:new Set(),tags:new Set(),session:null,sessionLabel:''}};
   let api=null;
 
   async function call(method,...args){
@@ -142,9 +142,10 @@
     return extra;
   }
   // Filters: judgment kinds and screen-library tags narrow every level at once; empty branches hide.
-  const filtering=()=>state.filters.kinds.size>0||state.filters.tags.size>0;
+  const filtering=()=>state.filters.kinds.size>0||state.filters.tags.size>0||!!state.filters.session;
   function passes(k,ignoreTags=false){
     const row=state.instances.get(k);if(!row)return false;
+    if(state.filters.session&&row.session_id!==state.filters.session)return false;
     if(state.filters.kinds.size&&!state.filters.kinds.has(row.kind))return false;
     if(!ignoreTags&&state.filters.tags.size&&!(state.instanceTags[k]||[]).some(tag=>state.filters.tags.has(tag)))return false;
     return true;
@@ -178,6 +179,7 @@
   }
   function renderFilterBar(){
     const chips=[...state.filters.tags].map(id=>`<button type="button" class="filter-chip" data-clear-tag="${escape(id)}" title="取消这个筛选">${escape(tagName(id))} ×</button>`);
+    if(state.filters.session)chips.unshift(`<button type="button" class="filter-chip" data-clear-session title="取消这个筛选">只看 ${escape(state.filters.sessionLabel||state.filters.session)} ×</button>`);
     $('filterBar').hidden=!chips.length;
     $('filterBar').innerHTML=chips.length?`<span class="hint">正在看：</span>${chips.join('')}<button type="button" class="filter-clear" data-clear-all>清除全部</button>`:'';
   }
@@ -366,7 +368,7 @@
     if(missing)status(`报告里有 ${missing} 条引用在资料库中找不到，已用虚线标出。`,true);
   }
 
-  function clearFilters(){state.filters.kinds.clear();state.filters.tags.clear();applyFilters();}
+  function clearFilters(){state.filters.kinds.clear();state.filters.tags.clear();state.filters.session=null;state.filters.sessionLabel='';applyFilters();}
 
   // Screen library: tag dimensions are collapsible headings; tags are cover-on-top cards that filter the tree.
   function treeKeys(){
@@ -567,9 +569,10 @@
     if(tagCard){const id=tagCard.dataset.tag;state.filters.tags.has(id)?state.filters.tags.delete(id):state.filters.tags.add(id);applyFilters();return;}
     const kindChip=event.target.closest('[data-kind]');
     if(kindChip){const kind=kindChip.dataset.kind;state.filters.kinds.has(kind)?state.filters.kinds.delete(kind):state.filters.kinds.add(kind);applyFilters();return;}
-    const clear=event.target.closest('[data-clear-tag],[data-clear-kind],[data-clear-kinds],[data-clear-all]');
+    const clear=event.target.closest('[data-clear-tag],[data-clear-kind],[data-clear-kinds],[data-clear-all],[data-clear-session]');
     if(clear){
       if(clear.hasAttribute('data-clear-all'))clearFilters();
+      else if(clear.hasAttribute('data-clear-session')){state.filters.session=null;state.filters.sessionLabel='';applyFilters();}
       else if(clear.hasAttribute('data-clear-kinds')){state.filters.kinds.clear();applyFilters();}
       else{clear.dataset.clearTag?state.filters.tags.delete(clear.dataset.clearTag):state.filters.kinds.delete(clear.dataset.clearKind);applyFilters();}
       return;
@@ -605,11 +608,15 @@
   $('tabReport').onclick=()=>selectLeft('report');
   $('tabLibrary').onclick=()=>selectLeft('library');
 
+  // The standalone insight window follows the shared appearance setting too (the desk sets it itself).
+  if(!document.documentElement.dataset.theme){let choice='system';try{choice=localStorage.getItem('recorder-theme')||'system';}catch(_){}document.documentElement.dataset.theme=choice==='dark'||choice!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
   function start(){
     if(api)return;
     api=window.pywebview.api;
     api.ready().catch(()=>{});
     load();
   }
+  // The desk window's 场次 tab jumps here: reveal an insight, or show only one session's evidence.
+  window.insightBridge={goToIssue,showSession(id,label){state.filters.session=id;state.filters.sessionLabel=label||'';showEvidenceTab();applyFilters();},reload:load};
   if(window.pywebview?.api)start();else window.addEventListener('pywebviewready',start);
 })();

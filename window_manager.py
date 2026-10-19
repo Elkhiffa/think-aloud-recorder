@@ -289,12 +289,14 @@ class WindowManager:
         from review_runtime import ReviewAPI, prepare_window
         page, payload = prepare_window(self.service.root, session, initial_time)
         api = ReviewAPI(session.path, payload, self.service.root / 'state/review-layout.json')
+        chrome = self._chrome_for(api)
         try:
             window = self.webview.create_window(
                 payload['title'] + ' · ' + payload['id'] + ' · 回看', url=page.as_uri(),
                 js_api=api, **self._review_window_options(), min_size=(560, 540),
-                frameless=False, resizable=True, text_select=True,
-                background_color='#fcfaf5')
+                frameless=True, easy_drag=False, shadow=True, resizable=True, text_select=True,
+                background_color='#f3ede1')
+            self._bind_chrome(chrome, window)
             with self._lock:
                 self._viewers[window.uid] = window
 
@@ -320,10 +322,11 @@ class WindowManager:
         from insight_runtime import InsightAPI
         api = InsightAPI(vault, self.service.root, self.service.review_at)
         # Registered with the viewers so the update flow closes it like a review.
+        # The standalone insight page keeps the native frame: it has no title bar of its own.
         window = self.webview.create_window(
             '洞察 · ' + vault.name, url=(self.service.root / 'ui' / 'insight.html').as_uri(),
             js_api=api, **self._review_window_options(), min_size=(560, 540),
-            frameless=False, resizable=True, text_select=True, background_color='#fcfaf5')
+            frameless=False, resizable=True, text_select=True, background_color='#f3ede1')
         with self._lock:
             self._viewers[window.uid] = window
 
@@ -337,6 +340,93 @@ class WindowManager:
         if api._error:
             raise RuntimeError(api._error)
         return {'ready': True}
+
+    @staticmethod
+    def _chrome_for(api):
+        """Bridge the window buttons onto a page's API before its window exists."""
+        from window_chrome import CHROME_METHODS, WindowChrome
+        chrome = WindowChrome(frame_color='#f3ede1')
+        for name in CHROME_METHODS:
+            setattr(api, name, getattr(chrome, name))
+        return chrome
+
+    @staticmethod
+    def _bind_chrome(chrome, window):
+        chrome.bind(window)
+
+        def prepare():
+            try:
+                chrome.prepare()
+            except Exception:
+                pass  # Cosmetic: the page's own window buttons still work.
+        window.events.loaded += prepare
+
+    def open_desk(self, vault, tab='sessions'):
+        """The desk (资料台) is a single window: a second request switches its tab and brings it forward."""
+        import json
+        from pathlib import Path
+        with self._lock:
+            if self._updating:
+                raise RuntimeError('应用正在退出以完成更新。')
+            desk = getattr(self, '_desk', None)
+        if desk is not None:
+            window, api, chrome = desk
+            api.tab = tab
+            if api.vault != Path(vault).resolve():
+                api.rebind(vault)
+                window.evaluate_js('location.reload()')
+            else:
+                window.evaluate_js('window.deskShow&&window.deskShow(%s)' % json.dumps(tab))
+            try:
+                chrome.bring_to_front()
+            except Exception:
+                pass
+            return {'ready': True}
+        from desk_runtime import DeskAPI
+        from window_chrome import CHROME_METHODS, WindowChrome
+        api = DeskAPI(self.service, vault, self.service.root, tab)
+        chrome = WindowChrome(frame_color='#f3ede1')
+        for name in CHROME_METHODS:
+            setattr(api, name, getattr(chrome, name))
+        window = self.webview.create_window(
+            '资料台 · ' + Path(vault).name, url=(self.service.root / 'ui' / 'desk.html').as_uri(),
+            js_api=api, **self._review_window_options(), min_size=(960, 600),
+            frameless=True, easy_drag=False, shadow=True, resizable=True, text_select=True, background_color='#f3ede1')
+        chrome.bind(window)
+
+        def prepare():
+            try:
+                chrome.prepare()
+            except Exception:
+                pass  # Cosmetic: the page's own window buttons still work.
+        window.events.loaded += prepare
+        with self._lock:
+            self._viewers[window.uid] = window
+            self._desk = (window, api, chrome)
+
+        def closed():
+            with self._viewer_changed:
+                self._viewers.pop(window.uid, None)
+                if getattr(self, '_desk', None) and self._desk[0] is window:
+                    self._desk = None
+                self._viewer_changed.notify_all()
+        window.events.closed += closed
+        if not api._ready.wait(15):
+            raise RuntimeError('资料台尚未确认加载完成，请查看新窗口中的提示。')
+        if api._error:
+            raise RuntimeError(api._error)
+        return {'ready': True}
+
+    def desk_follow(self, vault):
+        """Called after the main window switches game: an open desk moves to that game's library."""
+        from pathlib import Path
+        desk = getattr(self, '_desk', None)
+        if desk is None:
+            return
+        window, api, _ = desk
+        if api.vault != Path(vault).resolve():
+            api.rebind(vault)
+            window.evaluate_js('location.reload()')
 
     def review_count(self):
         with self._lock:return len(self._viewers)

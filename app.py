@@ -3,19 +3,23 @@ from pathlib import Path
 import sys
 from contextlib import contextmanager
 
-BRIDGE_METHODS = ('get_state', 'get_microphone_state', 'refresh_device_inventory', 'refresh_devices', 'save_settings', 'save_preset', 'select_preset', 'choose_directory',
+BRIDGE_METHODS = ('get_state', 'get_microphone_state', 'refresh_device_inventory', 'refresh_devices', 'save_settings', 'save_preset', 'save_general', 'select_preset', 'choose_directory',
                   'import_hotwords', 'choose_hotword_files', 'open_dictionary_site', 'open_bailian_console',
                   'start_recording', 'stop_recording',
-                  'process_session', 'open_review', 'open_insight', 'rename_session', 'package_session', 'open_folder',
+                  'process_session', 'open_review', 'open_insight', 'open_desk', 'rename_session', 'package_session', 'open_folder',
                   'open_raw', 'save_cloud_key', 'verify_cloud_key', 'recover_cloud_task',
                   'model_action', 'update_action')
 
 
 class DesktopAPI:
     """Only these methods cross into JavaScript; paths/window/lifecycle stay private."""
-    def __init__(self, service):
+    def __init__(self, service, chrome=None):
         for name in BRIDGE_METHODS:
             setattr(self, name, getattr(service, name))
+        if chrome is not None:
+            from window_chrome import CHROME_METHODS
+            for name in CHROME_METHODS:
+                setattr(self, name, getattr(chrome, name))
 
 
 @contextmanager
@@ -43,9 +47,18 @@ def main():
         return run_window(root)
 
 
+def _prepare_chrome(chrome, client_size):
+    """Native window styling is cosmetic: if it fails, the window keeps working with its page buttons."""
+    try:
+        chrome.prepare(client_size=client_size)
+    except Exception:
+        pass
+
+
 def main_window_options(webview):
-    """A narrow, taller library window, bounded by the actual monitor work area."""
-    options = dict(width=920, height=1040, min_size=(720, 600))
+    """A compact recorder page (720x600 of page; the sizing border is added outside it),
+    bounded by the actual monitor work area."""
+    options = dict(width=720, height=600, min_size=(720, 600))
     try:
         screen = list(webview.screens)[0]
         width, height = screen.width, screen.height
@@ -59,7 +72,7 @@ def main_window_options(webview):
                     height = value
         if type(width) is int and type(height) is int and width >= 360 and height >= 400:
             available_width, available_height = width - 32, height - 48
-            options.update(width=min(920, available_width), height=min(1040, available_height),
+            options.update(width=min(720, available_width), height=min(600, available_height),
                            min_size=(min(720, available_width), min(600, available_height)), screen=screen)
     except Exception:
         pass
@@ -70,18 +83,25 @@ def run_window(root):
     import webview
     from desktop_service import DesktopService
 
+    from window_chrome import WindowChrome
     service = DesktopService(root)
+    chrome = WindowChrome(frame_color='#f3ede1')
+    options = main_window_options(webview)
     window = webview.create_window(
         'Think Aloud · 体验记录器', url=(root / 'ui' / 'index.html').as_uri(),
-        js_api=DesktopAPI(service), **main_window_options(webview),
-        frameless=False, background_color='#fcfaf5', text_select=True,
+        js_api=DesktopAPI(service, chrome), **options,
+        frameless=True, easy_drag=False, shadow=True, background_color='#f3ede1', text_select=True,
     )
+    chrome.bind(window)
+    # The page draws its own title bar; Windows keeps moving, sizing and snapping (window_chrome).
+    window.events.loaded += lambda: _prepare_chrome(chrome, (options['width'], options['height']))
     from window_manager import WindowManager
     windows = WindowManager(service, webview)
     windows.bind_main(window)
     service.set_window(window)
     service.set_review_opener(windows.open_review)
     service.set_insight_opener(windows.open_insight)
+    service.set_desk_hooks(windows.open_desk, windows.desk_follow)
     service.set_update_lifecycle(windows.review_count, windows.close_for_update)
     from update_installer import acknowledge_start
     window.events.loaded += lambda: acknowledge_start(root)

@@ -256,8 +256,13 @@
     const label=value==='dark'?'切换浅色模式':'切换深色模式';
     $('themeButton').setAttribute('aria-label',label);$('themeButton').title=label;
     try{localStorage.setItem('recorder-theme',value);}catch(_){}
+    frameColor();
   }
-  try{setTheme(localStorage.getItem('recorder-theme')==='dark'?'dark':'light');}catch(_){setTheme('light');}
+  function frameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--b-paper').trim();try{window.pywebview?.api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
+  function storedTheme(){try{const value=localStorage.getItem('recorder-theme');return value==='dark'||value==='light'?value:(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');}catch(_){return 'light';}}
+  { const value=storedTheme();document.documentElement.dataset.theme=value;const label=value==='dark'?'切换浅色模式':'切换深色模式';$('themeButton').setAttribute('aria-label',label);$('themeButton').title=label;frameColor(); }
+  window.addEventListener('pywebviewready',frameColor);
+  for(const [id,name] of [['winMin','win_minimize'],['winMax','win_toggle_maximize'],['winClose','win_close']])$(id).addEventListener('click',()=>{try{window.pywebview?.api?.[name]?.()?.catch?.(()=>{});}catch(_){}});
   $('themeButton').addEventListener('click',()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark'));
   const copySplit=$('copySplit'),fileActions=$('fileActions'),fileActionsToggle=$('fileActionsToggle');
   document.body.append(fileActions);

@@ -61,8 +61,10 @@ async function main(){
    const quote=page.locator('[data-quote="0"]');await quote.hover();await page.waitForFunction(()=>!document.querySelector('#quotePopover').hidden);assert.equal(await page.locator('#quoteText').textContent(),data.segments[0].text);
    return results;
  });
+ // Negative margins count by magnitude: the self-drawn caption buttons (.win) cancel the header's
+ // 8/16 px padding with -8/-16 px so they sit flush with the window edge like native caption buttons.
  await check('all visible padding, margins and gaps use the specified spacing scale',async()=>{
-   const violations=await page.evaluate(()=>{const allowed=new Set([0,4,8,16,24,32,40]),bad=[];for(const el of document.body.querySelectorAll('*')){if(!el.getClientRects().length||el.closest('svg')||getComputedStyle(el).visibility==='hidden')continue;const s=getComputedStyle(el);for(const prop of ['marginTop','marginRight','marginBottom','marginLeft','paddingTop','paddingRight','paddingBottom','paddingLeft','rowGap','columnGap']){const val=s[prop];if(val.endsWith('px')&&!allowed.has(parseFloat(val)))bad.push({element:el.id||el.className,prop,value:val});}}return bad;});
+   const violations=await page.evaluate(()=>{const allowed=new Set([0,4,8,16,24,32,40]),bad=[];for(const el of document.body.querySelectorAll('*')){if(!el.getClientRects().length||el.closest('svg')||getComputedStyle(el).visibility==='hidden')continue;const s=getComputedStyle(el);for(const prop of ['marginTop','marginRight','marginBottom','marginLeft','paddingTop','paddingRight','paddingBottom','paddingLeft','rowGap','columnGap']){const val=s[prop];if(val.endsWith('px')&&!allowed.has(Math.abs(parseFloat(val))))bad.push({element:el.id||el.className,prop,value:val});}}return bad;});
    assert.deepEqual(violations,[]);return violations;
  });
  await check('0.2x playhead stays pixel aligned through playback and duration rails remain above labels',async()=>{

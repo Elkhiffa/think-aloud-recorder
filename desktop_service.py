@@ -36,6 +36,9 @@ PUBLIC_KEYS = ('game', 'vault', 'preset', 'source', 'window', 'monitor', 'mic',
 EDITABLE_KEYS = set(PUBLIC_KEYS) - {'configured'}
 PRESET_KEYS = ('preset', 'source', 'window', 'monitor', 'mic', 'language', 'hotwords',
                'hotword_files', 'hotword_manual', 'record_inputs')
+# Settings shared by every game. Each game keeps only its name, window, folder and its own vocabulary;
+# saving general settings writes these keys into every game so recording keeps reading one preset.
+GENERAL_KEYS = ('source', 'monitor', 'mic', 'preset', 'language', 'transcription_provider', 'record_inputs')
 SUSPECT_STATES = {'录制中', '启动中', '保存中'}
 READINESS_MAX_AGE = 15
 
@@ -254,6 +257,9 @@ class DesktopService:
         result['vault'] = str(Path(self._cfg['vault']).resolve())
         result['configured'] = bool(self._cfg.get('configured'))
         result['vocabulary_revision'] = vocabulary_agent.revision(self._cfg)
+        result['general_hotword_files'] = self._general_files()
+        result['game_hotword_files'] = self._game_files(self._cfg)
+        result['library_root'] = self._cfg.get('library_root', '')
         result['games'] = {
             name: {key: deepcopy(values[key]) for key in PRESET_KEYS if key in values}
             for name, values in self._cfg.get('games', {}).items()
@@ -384,8 +390,9 @@ class DesktopService:
         self._config_file_revision = vocabulary_agent.file_digest(path)
 
     def _preset_list(self):
-        return [dict(id=ident, name=value.get('name', value.get('game', '')),
-                     vault=value.get('vault', '')) for ident, value in self._cfg.get('presets', {}).items()]
+        return [dict(id=ident, name=value.get('name', value.get('game', '')), vault=value.get('vault', ''),
+                     window=value.get('window', ''), game_hotword_files=self._game_files(value))
+                for ident, value in self._cfg.get('presets', {}).items()]
 
     def _session_paths(self):
         vault = Path(self._cfg['vault']).resolve()
@@ -451,6 +458,27 @@ class DesktopService:
             raise ValueError('场次文件不存在或不属于此场次。')
         return file
 
+    def _insight_summary(self):
+        """Top-level insight count and newest report for the main page; re-read only when files change."""
+        try:
+            vault = Path(self._cfg['vault']).resolve()
+            issues, reports = vault / 'issues.json', vault / '洞察'
+            key = (str(vault), issues.stat().st_mtime_ns if issues.is_file() else 0,
+                   reports.stat().st_mtime_ns if reports.is_dir() else 0)
+            cached = getattr(self, '_insight_cache', None)
+            if cached and cached[0] == key:
+                return cached[1]
+            from insight_report import list_reports
+            from issue_registry import read_registry
+            top = [row for row in read_registry(vault)['issues'] if not row.get('parent') and row.get('status') != 'dismissed']
+            latest = (list_reports(vault) or [None])[0]
+            value = dict(insights=len(top), latest=dict(name=latest['name'], modified=latest['modified']) if latest else None)
+        except Exception:
+            value = dict(insights=0, latest=None)
+            key = None
+        self._insight_cache = (key, value)
+        return value
+
     def get_state(self):
         try:
             with self._lock:
@@ -493,6 +521,7 @@ class DesktopService:
                          'total_bytes', 'error', 'source', 'revision')}
                 model['error'] = self._safe_text(model.get('error'))
                 return ok(dict(config=self._public_config(), sessions=sessions, closing=self._exit_pending,
+                               insight=self._insight_summary(),
                                updates=self._update_snapshot(model),
                                default_vault=self._default_vault(),
                                default_hotword_files=deepcopy(self._default_hotword_files),
@@ -1022,6 +1051,84 @@ class DesktopService:
             except Exception as error:
                 return self._error(error)
 
+    def _general_files(self, cfg=None):
+        """Vocabulary shared by all games; before the split it is the bundled UI/UX list in use."""
+        cfg = self._cfg if cfg is None else cfg
+        if isinstance(cfg.get('general_hotword_files'), list):
+            return deepcopy(cfg['general_hotword_files'])
+        bundled = {item.get('id') for item in getattr(self, '_default_hotword_files', [])}
+        return [deepcopy(item) for item in cfg.get('hotword_files', []) if item.get('id') in bundled]
+
+    @staticmethod
+    def _merge_files(general, game):
+        seen, merged = set(), []
+        for item in [*general, *game]:
+            if isinstance(item, dict) and item.get('id') not in seen:
+                seen.add(item.get('id'))
+                merged.append(item)
+        return merged
+
+    def _game_files(self, preset, cfg=None):
+        general = {item.get('id') for item in self._general_files(cfg)}
+        return [deepcopy(item) for item in preset.get('hotword_files', []) if item.get('id') not in general]
+
+    def save_general(self, payload):
+        """Save settings shared by every game: devices, recording, transcription, UI/UX vocabulary, library root."""
+        with self._lock:
+            try:
+                self._guard()
+            except Exception as error:
+                return self._error(error)
+        with self._operation_lock, self._lock:
+            try:
+                self._guard()
+                if not isinstance(payload, dict):
+                    raise ValueError('设置格式不正确。')
+                payload = dict(payload)
+                expected = payload.pop('expected_vocabulary_revision', None)
+                if expected is not None and expected != vocabulary_agent.revision(self._cfg):
+                    raise ValueError('词库已被其他操作更新。请关闭并重新打开设置后保存，避免覆盖新词条。')
+                general_files = payload.pop('general_hotword_files', None)
+                library_root = payload.pop('library_root', None)
+                if set(payload) - set(GENERAL_KEYS):
+                    raise ValueError('通用设置包含不支持的字段。')
+                if payload.get('source') == '整个显示器':
+                    payload['record_inputs'] = False
+                cfg = deepcopy(self._cfg)
+                old_general = self._general_files(cfg)
+                new_general = old_general if general_files is None else general_files
+                if not isinstance(new_general, list):
+                    raise ValueError('通用词库格式不正确。')
+                if library_root is not None:
+                    if not isinstance(library_root, str):
+                        raise ValueError('资料总库位置必须是文件夹路径。')
+                    cfg['library_root'] = str(self._validate_vault(library_root)) if library_root.strip() else ''
+                for ident, preset in cfg.get('presets', {}).items():
+                    base = deepcopy(cfg)
+                    base.update({key: deepcopy(preset[key]) for key in PUBLIC_KEYS if key in preset})
+                    update = deepcopy(payload)
+                    if base.get('source') == '整个显示器' and 'source' not in payload:
+                        update.pop('record_inputs', None)
+                    update['hotword_files'] = self._merge_files(new_general, self._game_files(preset, cfg))
+                    update['hotword_manual'] = preset.get('hotword_manual', '')
+                    merged = self._validated_settings(update, base)
+                    cfg['presets'][ident] = {**self._preset_snapshot(merged), 'name': preset.get('name') or merged['game']}
+                cfg['general_hotword_files'] = deepcopy(new_general)
+                selected = cfg.get('presets', {}).get(cfg.get('active_preset_id'))
+                if selected:
+                    cfg.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
+                else:
+                    cfg.update(self._validated_settings(deepcopy(payload), cfg) if payload else {})
+                self._persist(cfg)
+                self._cfg = cfg
+                self._invalidate_device_inventory()
+                self._readiness.update(ready=False, checking=True, checked_at=None)
+                self._request_readiness()
+                self._progress('通用设置已保存，所有游戏都会使用。', status='已保存')
+                return ok(self._public_config())
+            except Exception as error:
+                return self._error(error)
+
     def save_preset(self, payload, preset_id=None):
         with self._lock:
             try:
@@ -1050,11 +1157,16 @@ class DesktopService:
                     selected = base['presets'][preset_id]
                     self._normalize_input_choice(selected)
                     base.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
-                elif not {'hotword_files', 'hotword_manual', 'hotwords'}.intersection(payload):
-                    # Only an omitted new-preset choice receives bundled defaults.
-                    # Explicit removal and all existing presets keep their snapshots.
-                    base['hotword_files'] = deepcopy(self._default_hotword_files)
+                elif not {'hotword_files', 'hotword_manual', 'hotwords', 'game_hotword_files'}.intersection(payload):
+                    # Only an omitted new-preset choice receives defaults: the shared
+                    # vocabulary (bundled UI/UX before any general choice was saved).
+                    base['hotword_files'] = self._general_files() or deepcopy(self._default_hotword_files)
                     base['hotword_manual'] = ''
+                if 'game_hotword_files' in payload:
+                    game_files = payload.pop('game_hotword_files')
+                    if not isinstance(game_files, list):
+                        raise ValueError('游戏词库格式不正确。')
+                    payload['hotword_files'] = self._merge_files(self._general_files(), game_files)
                 data = self._save(payload, ident, base)
                 self._devices = {'mic': [], 'window': [], 'monitor': []}
                 self._device_defaults = {'monitor': '', 'mic': ''}
@@ -1088,7 +1200,13 @@ class DesktopService:
                 self._device_defaults = {'monitor': '', 'mic': ''}
                 self._readiness.update(ready=False, checking=True, checked_at=None, errors=[])
                 self._request_readiness()
-                self._progress('已切换录制预设，正在检查保存的配置。', status='已切换预设')
+                self._progress('已切换游戏，正在检查保存的配置。', status='已切换游戏')
+                follow = getattr(self, '_desk_follow', None)
+                if follow is not None:
+                    try:
+                        follow(Path(cfg['vault']).resolve())
+                    except Exception:
+                        pass  # An open desk failing to follow must not undo the switch.
                 return ok(dict(active_preset_id=id, config=self._public_config()))
             except Exception as error:
                 return self._error(error)
@@ -1513,6 +1631,36 @@ class DesktopService:
 
     def set_insight_opener(self, opener):
         self._insight_opener = opener
+
+    def open_desk(self, tab='sessions'):
+        """Open (or bring forward) the single desk window on the current game's 场次 or 洞察 tab."""
+        if tab not in ('sessions', 'insight'):
+            return self._error(ValueError('资料台只有“场次”和“洞察”两个页签。'))
+        admitted = False
+        try:
+            with self._lock:
+                if self._closed.is_set() or self._exit_pending:
+                    raise RuntimeError('记录器正在关闭。')
+                vault = Path(self._cfg['vault']).resolve()
+                if not (vault / '场次').is_dir():
+                    raise RuntimeError('当前游戏还没有场次。')
+                opener = getattr(self, '_desk_opener', None)
+                if opener is None:
+                    raise RuntimeError('资料台尚未就绪。')
+                self._review_opening += 1
+                admitted = True
+            return ok(opener(vault, tab))
+        except Exception as error:
+            return self._error(error)
+        finally:
+            if admitted:
+                with self._lock:
+                    self._review_opening -= 1
+
+    def set_desk_hooks(self, opener, follow):
+        """The desk follows the current game: `follow(vault)` runs after the game is switched."""
+        self._desk_opener = opener
+        self._desk_follow = follow
 
     def rename_session(self, id, name):
         try:

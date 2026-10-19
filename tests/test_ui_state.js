@@ -1,5 +1,7 @@
 'use strict';
 // Synthetic front-end state and bridge tests. No browser, capture, or network.
+// Session-list rules (row actions, filters, processing badges, row dates) live in ui/desk.js and are
+// covered by tests/test_desk_ui.js; this file covers the main window, including its latest-session block.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -84,31 +86,62 @@ test('wizard explains input capture boundary and does not enable it while select
   assert.equal(f.calls.some(call=>call.name==='start_recording'),false);
 });
 
-test('playable processing session allows review and naming but keeps reprocessing blocked',async()=>{
+// Row actions moved to the desk window (tests/test_desk_ui.js). The main window keeps the latest
+// session only: review it, and never offer a second transcription while one is running.
+test('latest session: a playable processing session opens review but offers no re-transcription',async()=>{
   const sessions=[{id:'pending-text',game:'Game',session_name:'Door <attempt>',state:'转写中',can_review:true},{id:'no-video',game:'Game',state:'转写中',can_review:false}];
   const f=await fixture(snapshot({sessions,background_jobs:sessions.map(s=>({session_id:s.id,state:'running'}))}));
-  assert.equal(f.run("sessionActionBlocked('pending-text','review')"),false);
-  assert.equal(f.run("sessionActionBlocked('pending-text','rename')"),false);
-  assert.equal(f.run("sessionActionBlocked('pending-text','process')"),true);
-  assert.equal(f.run("sessionActionBlocked('no-video','review')"),true);
-  const html=f.elements.get('sessionList').innerHTML;
-  assert.ok(html.includes('Door &lt;attempt&gt;'));assert.ok(html.includes('data-session-action="rename"'));
-  assert.ok(html.includes('data-session-action="review" data-id="pending-text"'));
-  assert.ok(!html.includes('data-session-action="review" data-id="no-video"'));
-  f.elements.get('search').value='door';f.elements.get('search').oninput();
-  assert.ok(!f.elements.get('sessionList').innerHTML.includes('data-id="no-video"'));
+  const last=f.elements.get('lastSession');
+  assert.ok(last.innerHTML.includes('Door &lt;attempt&gt;'));assert.ok(!last.innerHTML.includes('Door <attempt>'));
+  assert.equal(findTag(last,'data-last-review','pending-text').disabled,false);
+  assert.equal(findTag(last,'data-last-process'),null);assert.equal(findTag(last,'data-copy-handoff'),null);
+  assert.match(last.innerHTML,/<li class="now">转写中<\/li>/);
+  click(last,'data-last-review');await settle();
+  assert.deepEqual(plain(f.calls.filter(c=>c.name==='open_review').map(c=>c.args)),[['pending-text']]);
+  f.data.snapshot.sessions=[sessions[1],sessions[0]];await f.run('poll()');
+  assert.equal(findTag(last,'data-last-review','no-video').disabled,true);
+  assert.equal(findTag(last,'data-last-process'),null);
+  assert.equal(f.calls.some(c=>c.name==='process_session'),false);
 });
 
-test('external preprocessing badges never change recording state or disable review',async()=>{
+test('latest session: external preprocessing labels never change recording state or disable review',async()=>{
   const sessions=['none','processing','complete','failed','stale'].map((state,i)=>({id:'agent-'+i,
     game:'原始名称',state:'可回看',can_review:true,preprocessing:{state,...(state==='none'?{}:{label:'外部 <整理>',reason:'保留原始素材'})}}));
-  const f=await fixture(snapshot({sessions}));
-  for(const s of sessions){assert.equal(f.run(`sessionKind(store.snapshot.sessions.find(s=>s.id==='${s.id}'))`),'ready');assert.equal(f.run(`sessionActionBlocked('${s.id}','review')`),false);}
-  const html=f.elements.get('sessionList').innerHTML;
-  assert.equal((html.match(/class="session-progress preprocessing-badge"/g)||[]).length,3);
-  assert.match(f.run("sessionDetail(store.snapshot.sessions.find(s=>s.id==='agent-2'))"), /外部 &lt;整理&gt;/);
-  assert.equal((html.match(/data-session-action="review"/g)||[]).length,5);
-  assert.match(html,/外部 &lt;整理&gt;/);assert.equal((html.match(/<strong>原始名称/g)||[]).length,5);
+  const f=await fixture(snapshot({sessions}));const last=f.elements.get('lastSession');const titles=new Set();
+  for(const s of sessions){
+    assert.equal(f.run(`sessionKind(store.snapshot.sessions.find(s=>s.id==='${s.id}'))`),'ready');
+    assert.equal(f.run(`canReview(store.snapshot.sessions.find(s=>s.id==='${s.id}'))`),true);
+    f.data.snapshot.sessions=[s,...sessions.filter(other=>other!==s)];await f.run('poll()');
+    assert.equal(findTag(last,'data-last-review',s.id).disabled,false);
+    assert.equal(findTag(last,'data-last-process'),null,'a finished transcription is not offered again');
+    assert.doesNotMatch(last.innerHTML,/<整理>/);
+    if(['failed','stale'].includes(s.preprocessing.state))assert.match(last.innerHTML,/<li class="fail">外部 &lt;整理&gt;<\/li>/);
+    titles.add(/<h3>(.*?)<\/h3>/.exec(last.innerHTML)[1]);
+  }
+  assert.equal(titles.size,1,'the external label never replaces the session title');assert.doesNotMatch([...titles][0],/外部/);
+});
+
+test('latest session: handoff copy names the session folder; start and retry transcription need confirmation',async()=>{
+  const ready={id:'ready',game:'Game',state:'可回看',can_review:true,path:'D:\\Saved\\sessions\\ready',preprocessing:{state:'none'}};
+  const f=await fixture(snapshot({sessions:[ready]}));const last=f.elements.get('lastSession');
+  assert.equal(findTag(last,'data-last-process'),null);
+  await click(last,'data-copy-handoff','ready');await settle();
+  assert.match(f.data.clipboard,/场次文件夹：D:\\Saved\\sessions\\ready/);assert.match(f.data.clipboard,/资料库：D:\\Saved/);
+  assert.equal(f.calls.some(c=>['process_session','open_review'].includes(c.name)),false);
+  f.data.snapshot.sessions=[{id:'failed',game:'Game',state:'失败',error:'Cloud <failure>',can_review:false}];await f.run('poll()');
+  assert.ok(findTag(last,'data-last-process','failed'));assert.equal(findTag(last,'data-last-review','failed').disabled,true);
+  assert.match(last.innerHTML,/>重试转写</);assert.match(last.innerHTML,/Cloud &lt;failure&gt;/);
+  click(last,'data-last-process','failed');
+  assert.equal(f.elements.get('actionDialog').open,true);assert.match(f.elements.get('actionBody').innerHTML,/上传这次的麦克风录音到 Qwen/);
+  assert.equal(f.calls.some(c=>c.name==='process_session'),false,'nothing is uploaded before confirmation');
+  await f.elements.get('actionFooter').children.find(button=>button.textContent==='开始整理').onclick();
+  assert.deepEqual(plain(f.calls.filter(c=>c.name==='process_session').map(c=>c.args)),[['failed']]);
+  f.data.snapshot.sessions=[{id:'pending',game:'Game',state:'待转写',can_review:false}];await f.run('poll()');
+  assert.match(last.innerHTML,/>开始转写</);
+  f.data.snapshot.config.transcription_provider='later';await f.run('poll()');
+  click(last,'data-last-process','pending');assert.equal(f.elements.get('actionDialog').open,true);
+  assert.equal(f.elements.get('actionFooter').children.some(button=>button.textContent==='开始整理'),false);
+  assert.equal(f.calls.filter(c=>c.name==='process_session').length,1);
 });
 
 test('new preset is independent; editing and cancellation preserve every saved setting',()=>{
@@ -134,16 +167,18 @@ function firstUseVault(exists=true){return snapshot({presets:[],active_preset_id
   config:{...snapshot().config,vault:'D:\\Shared\\think-aloud-database',configured:false},
   default_vault:{path:'D:\\Shared\\think-aloud-database',exists,is_directory:exists,requires_confirmation:exists},
   readiness:{ready:false,checking:false,errors:[{message:'请先完成设置'}]}});}
+const fillFirstUse="store.updateDraft('game','New Game');store.updateDraft('window','window-id');store.updateDraft('mic','mic-id')";
 
 test('existing sibling database requires explicit reuse, bound to the path and cleared on cancellation',async()=>{
-  const f=await fixture(firstUseVault());
-  f.run("store.updateDraft('game','New Game');store.updateDraft('window','window-id');store.updateDraft('mic','mic-id');setStep(3)");
+  const f=await fixture(firstUseVault());assert.equal(f.run('sheetMode'),'first');
+  f.run(fillFirstUse);toStep(f,'vault');
   assert.equal(f.elements.get('reuseVaultNotice').classList.contains('hidden'),false);
   assert.equal(f.elements.get('wizardNext').disabled,true);assert.equal(f.calls.some(c=>c.name==='save_preset'),false);
   f.elements.get('reuseVault').onclick();assert.equal(f.elements.get('wizardNext').disabled,false);
   assert.equal(f.run('store.presetPayload().confirmed_vault'),'D:\\Shared\\think-aloud-database');
   await f.run('poll()');assert.equal(f.elements.get('wizardNext').disabled,false);
-  f.elements.get('wizardCancel').onclick();f.elements.get('newPresetButton').onclick();f.run('setStep(3)');
+  f.elements.get('wizardCancel').onclick();assert.equal(sheetIsOpen(f),false);
+  f.elements.get('settingsButton').onclick();assert.equal(f.run('sheetMode'),'first');f.run(fillFirstUse);toStep(f,'vault');
   assert.equal(f.elements.get('wizardNext').disabled,true);assert.equal(f.run('store.confirmedVault'),'');
   f.data.chosenDirectory='D:\\Different Library';await f.elements.get('chooseVault').onclick();
   assert.equal(f.run('store.draft.vault'),'D:\\Different Library');assert.equal(f.elements.get('reuseVaultNotice').classList.contains('hidden'),true);
@@ -154,14 +189,16 @@ test('existing sibling database requires explicit reuse, bound to the path and c
 
 test('folder appearing at save returns wizard to explicit reuse without silently retrying',async()=>{
   const f=await fixture(firstUseVault(false));
-  f.run("store.updateDraft('game','New Game');store.updateDraft('window','window-id');store.updateDraft('mic','mic-id');setStep(3)");
+  f.run(fillFirstUse);toStep(f,'vault');
   assert.equal(f.elements.get('wizardNext').disabled,false);f.data.vaultRace=true;await f.run('finishWizard()');
-  assert.equal(f.elements.get('wizard').open,true);assert.equal(f.elements.get('wizardNext').disabled,true);
+  assert.equal(sheetIsOpen(f),true);assert.equal(f.run('currentStepKey()'),'vault');assert.equal(f.elements.get('wizardNext').disabled,true);
+  assert.equal(f.elements.get('reuseVault').classList.contains('hidden'),false);
   assert.equal(f.calls.filter(c=>c.name==='save_preset').length,1);
   f.elements.get('reuseVault').onclick();await f.run('finishWizard()');
   const saves=f.calls.filter(c=>c.name==='save_preset');assert.equal(saves.length,2);
   assert.equal(saves[0].args[0].confirmed_vault,undefined);assert.equal(saves[1].args[0].confirmed_vault,'D:\\Shared\\think-aloud-database');
-  assert.equal(f.elements.get('wizard').open,false);
+  assert.equal(saves[1].args[1],null);
+  assert.equal(sheetIsOpen(f),false);
 });
 
 function fakeDOM() {
@@ -184,21 +221,69 @@ function fakeDOM() {
   for(const match of html.matchAll(/<([\w-]+)\b([^>]*\bid="([^"]+)"[^>]*)>/g)) {
     const el=new Element(match[3]);el.tagName=match[1].toUpperCase();
     for(const data of match[2].matchAll(/data-([\w-]+)="([^"]*)"/g))el.dataset[data[1]]=data[2];
+    const cls=/\bclass="([^"]*)"/.exec(match[2]);if(cls)cls[1].split(/\s+/).filter(Boolean).forEach(name=>el.classList.add(name));
     elements.set(el.id,el);
   }
-  const steps=[0,1,2,3].map(n=>{const el=new Element();el.dataset.step=String(n);return el;});
   document={activeElement:null,documentElement:{dataset:{}},getElementById:id=>elements.get(id),
     querySelector:selector=>selector.startsWith('#')?elements.get(selector.slice(1)):null,
-    querySelectorAll:selector=>selector==='[data-draft]'?[...elements.values()].filter(el=>el.dataset.draft):selector==='[data-provider]'?[...elements.values()].filter(el=>el.dataset.provider):selector==='[data-step]'?steps:[],
+    querySelectorAll:selector=>selector==='[data-draft]'?[...elements.values()].filter(el=>el.dataset.draft):selector==='[data-provider]'?[...elements.values()].filter(el=>el.dataset.provider):[],
     createElement:()=>new Element(),addEventListener(){}};
-  elements.get('filter').value='all';
   return {document,elements};
 }
+// Delegated clicks: find the first rendered tag carrying `attr` (optionally with `value`) inside an element's
+// innerHTML and hand its data-* attributes to the handler registered on `target` (default: the same element).
+const decode=text=>String(text).replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&');
+function findTag(el,attr,value){
+  for(const match of el.innerHTML.matchAll(/<(\w+)\b([^>]*)>/g)){
+    const attrs=match[2],hit=new RegExp(`(?:^|\\s)${attr}(?:="([^"]*)")?(?=[\\s>/]|$)`).exec(attrs);
+    if(!hit||value!==undefined&&decode(hit[1]??'')!==value)continue;
+    const dataset={};for(const data of attrs.matchAll(/(?:^|\s)data-([\w-]+)(?:="([^"]*)")?/g))dataset[data[1].replace(/-(\w)/g,(_,c)=>c.toUpperCase())]=decode(data[2]??'');
+    return {dataset,attrs,disabled:/(?:^|\s)disabled(?=[\s>/]|$)/.test(attrs),hasAttribute:name=>new RegExp(`(?:^|\\s)${name}(?=[\\s=>/]|$)`).test(attrs)};
+  }
+  return null;
+}
+function click(el,attr,value,target=el){
+  const node=findTag(el,attr,value);assert.ok(node,`${attr} ${value??''} is rendered`);
+  return target.listeners.click({target:{closest:selector=>selector.split(',').some(part=>part.trim()===`[${attr}]`)?node:null},preventDefault(){}});
+}
+const plain=value=>JSON.parse(JSON.stringify(value));
+const sheetIsOpen=f=>!f.elements.get('sheet').classList.contains('hidden');
+const openGeneral=f=>f.elements.get('tabGeneral').onclick({preventDefault(){}});
+function toStep(f,key){
+  for(let i=0;i<4&&f.run('currentStepKey()')!==key;i++){f.elements.get('wizardNext').onclick();assert.equal(f.elements.get('wizardError').textContent,'');}
+  assert.equal(f.run('currentStepKey()'),key);
+}
+const GENERAL_KEYS=['source','monitor','mic','preset','language','transcription_provider','record_inputs'];
+const GAME_PAYLOAD_KEYS=['name','game','window','vault','hotword_manual','game_hotword_files','expected_vocabulary_revision','confirmed_vault'];
+const mergeFiles=(general,game)=>{const seen=new Set();return [...general,...game].filter(file=>file&&!seen.has(file.id)&&seen.add(file.id));};
 async function settle(){for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}
 async function fixture(initial=snapshot()) {
   const {document,elements}=fakeDOM();const calls=[];const data={snapshot:initial,inventorySequence:0,holdInventory:initial.device_inventory?.state==='idle'};
-  const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='refresh_device_inventory'){if(data.inventoryHandler)return data.inventoryHandler();const id='inventory-'+(++data.inventorySequence);data.snapshot.device_inventory={id,state:data.holdInventory?'running':'succeeded',window_selection:data.snapshot.device_inventory?.window_selection||data.snapshot.readiness?.window_selection};return data.inventoryResult||{ok:true,data:{inventory_id:id}};}if(name==='refresh_devices')return data.refreshResult||{ok:true,data:{started:true,refresh_id:'refresh-1'}};if(name==='choose_directory')return {ok:true,data:{path:data.chosenDirectory||null}};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_preset'){if(data.vaultRace){data.vaultRace=false;data.snapshot.default_vault={...data.snapshot.default_vault,exists:true,is_directory:true,requires_confirmation:true};return {ok:false,code:'VAULT_REUSE_REQUIRED',error:'请确认使用已有资料库。'};}data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
-  const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(){return 1;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},performance,console});
+  // Plausible bridge: save_general merges shared keys into every game's config; save_preset stores one game.
+  function saveGeneral(payload){
+    const allowed=new Set([...GENERAL_KEYS,'general_hotword_files','expected_vocabulary_revision','library_root']);
+    const extra=Object.keys(payload).filter(key=>!allowed.has(key));if(extra.length)return {ok:false,error:'通用设置包含不支持的字段：'+extra.join('、')};
+    const config={...data.snapshot.config},oldGeneral=new Set((config.general_hotword_files||[]).map(file=>file.id));
+    if(!Array.isArray(config.hotword_files)&&config.hotword_manual===undefined)config.hotword_manual=config.hotwords||'';
+    const game=(config.hotword_files||[]).filter(file=>!oldGeneral.has(file.id));
+    for(const key of GENERAL_KEYS)if(key in payload)config[key]=payload[key];
+    if(Array.isArray(payload.general_hotword_files)){config.general_hotword_files=payload.general_hotword_files;config.hotword_files=mergeFiles(payload.general_hotword_files,game);}
+    if('library_root' in payload)config.library_root=payload.library_root;
+    data.snapshot={...data.snapshot,config,readiness:{ready:false,checking:true,errors:[]}};
+    return {ok:true,data:config};
+  }
+  function savePreset(payload,presetId){
+    if(data.vaultRace){data.vaultRace=false;data.snapshot.default_vault={...data.snapshot.default_vault,exists:true,is_directory:true,requires_confirmation:true};return {ok:false,code:'VAULT_REUSE_REQUIRED',error:'请确认使用已有资料库。'};}
+    const presets=data.snapshot.presets||[],id=presetId||(presets.some(p=>p.id==='created')?'created-'+(presets.length+1):'created');
+    const {name,game_hotword_files,expected_vocabulary_revision,confirmed_vault,...fields}=payload;
+    const config={...data.snapshot.config,...fields,game:name,configured:true};
+    if(Array.isArray(game_hotword_files))config.hotword_files=mergeFiles(config.general_hotword_files||[],game_hotword_files);
+    const row={id,name,vault:config.vault};
+    data.snapshot={...data.snapshot,config,active_preset_id:id,presets:presetId?presets.map(p=>p.id===presetId?row:p):[...presets,row],readiness:{ready:false,checking:true,errors:[]}};
+    return {ok:true,data:{id}};
+  }
+  const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='refresh_device_inventory'){if(data.inventoryHandler)return data.inventoryHandler();const id='inventory-'+(++data.inventorySequence);data.snapshot.device_inventory={id,state:data.holdInventory?'running':'succeeded',window_selection:data.snapshot.device_inventory?.window_selection||data.snapshot.readiness?.window_selection};return data.inventoryResult||{ok:true,data:{inventory_id:id}};}if(name==='refresh_devices')return data.refreshResult||{ok:true,data:{started:true,refresh_id:'refresh-1'}};if(name==='choose_directory')return {ok:true,data:{path:data.chosenDirectory||null}};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_general')return saveGeneral(plain(args[0]));if(name==='save_preset')return savePreset(plain(args[0]),args[1]);return {ok:true,data:{}};};}});
+  const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(){return 1;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},performance,console,matchMedia:()=>({matches:false,addEventListener(){}}),getComputedStyle:()=>({getPropertyValue:()=>''}),navigator:{clipboard:{writeText:async text=>{data.clipboard=text;}}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/state.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/app.js'),'utf8'),context);
   await settle();return {context,elements,calls,data,run:source=>vm.runInContext(source,context)};
@@ -206,11 +291,22 @@ async function fixture(initial=snapshot()) {
 
 test('actual UI opens first-use wizard; cancel does not persist or enable recording',async()=>{
   const f=await fixture(snapshot({presets:[],active_preset_id:null,config:{...snapshot().config,configured:false},readiness:{ready:false,checking:false,errors:[{step:1,message:'Create preset'}]}}));
-  assert.equal(f.elements.get('wizard').open,true);
+  assert.equal(sheetIsOpen(f),true);assert.equal(f.run('sheetMode'),'first');assert.equal(f.run('currentStepKey()'),'method');
   f.elements.get('wizardCancel').onclick();
-  assert.equal(f.elements.get('wizard').open,false);
+  assert.equal(sheetIsOpen(f),false);assert.equal(f.run('store.draft'),null);
   assert.equal(f.elements.get('recordButton').disabled,true);
-  assert.equal(f.calls.some(call=>call.name==='save_preset'),false);
+  assert.equal(f.calls.some(call=>['save_preset','save_general'].includes(call.name)),false);
+});
+
+test('with no game yet, the ＋ tab runs the full first-use setup and cannot save without a microphone',async()=>{
+  const f=await fixture(snapshot({presets:[],active_preset_id:null,config:{...snapshot().config,configured:false},readiness:{ready:false,checking:false,errors:[{step:1,message:'Create preset'}]}}));
+  f.elements.get('wizardCancel').onclick();
+  await click(f.elements.get('gameTabs'),'data-game-add');
+  assert.equal(f.run('sheetMode'),'first','a first game also needs the shared microphone and transcription settings');
+  f.run("store.updateDraft('game','New Game');store.updateDraft('window','window-id');store.updateDraft('mic','');store.updateDraft('vault','D:\\\\Library\\\\New Game')");
+  await f.run('finishWizard()');
+  assert.equal(f.calls.some(call=>call.name==='save_preset'),false,'no save while the microphone is empty');
+  assert.match(f.elements.get('wizardError').textContent,/麦克风/);
 });
 
 test('actual UI retains focused draft on polling and starts with persisted settings only',async()=>{
@@ -223,14 +319,27 @@ test('actual UI retains focused draft on polling and starts with persisted setti
   assert.equal(f.calls.some(call=>call.name==='save_preset'),false);
 });
 
-test('actual wizard saves named preset then polls fresh state before closing; never starts capture',async()=>{
-  const f=await fixture();f.elements.get('settingsButton').onclick();
+test('actual settings save stores only the edited tab, then polls fresh state before reporting; never starts capture',async()=>{
+  const f=await fixture();f.elements.get('settingsButton').onclick();await settle();
+  assert.equal(f.elements.get('wizardNext').classList.contains('hidden'),true);assert.equal(f.elements.get('wizardCancel').textContent,'关闭');
   const input=f.elements.get('game');input.value='Edited preset';input.listeners.input();
-  const before=f.calls.length;await f.run('finishWizard()');
-  const calls=f.calls.slice(before);assert.equal(calls[0].name,'save_preset');assert.equal(calls[0].args[1],'one');
-  assert.equal(calls[0].args[0].name,'Edited preset');assert.equal(calls.at(-1).name,'get_state');
-  assert.equal(f.elements.get('wizard').open,false);assert.equal(f.elements.get('recordButton').disabled,true);
-  assert.equal(calls.some(call=>call.name==='start_recording'),false);
+  assert.equal(f.elements.get('sheetMessage').textContent,'有未保存的修改');
+  assert.equal(f.elements.get('wizardNext').classList.contains('hidden'),false);assert.equal(f.elements.get('wizardNext').textContent,'保存');
+  let before=f.calls.length;f.elements.get('wizardNext').onclick();await settle();
+  let calls=f.calls.slice(before);assert.equal(calls[0].name,'save_preset');assert.equal(calls[0].args[1],'one');
+  assert.equal(calls[0].args[0].name,'Edited preset');
+  assert.deepEqual(Object.keys(calls[0].args[0]).filter(key=>!GAME_PAYLOAD_KEYS.includes(key)),[],'a game save carries no shared settings');
+  assert.equal(calls.at(-1).name,'get_state');assert.equal(f.elements.get('toast').textContent,'游戏设置已保存。');
+  assert.equal(f.run('store.dirty'),false);assert.equal(f.run('store.draft.game'),'Edited preset');
+  assert.equal(f.elements.get('sheetMessage').textContent,'');assert.equal(f.elements.get('wizardNext').classList.contains('hidden'),true);
+  assert.equal(f.elements.get('recordButton').disabled,true);
+  openGeneral(f);const language=f.elements.get('language');language.value='en';language.listeners.change();
+  before=f.calls.length;f.elements.get('wizardNext').onclick();await settle();
+  calls=f.calls.slice(before);assert.equal(calls[0].name,'save_general');assert.equal(calls[0].args.length,1);
+  assert.deepEqual(Object.keys(calls[0].args[0]).filter(key=>![...GENERAL_KEYS,'general_hotword_files','expected_vocabulary_revision','library_root'].includes(key)),[],'a shared save carries no game fields');
+  assert.equal(calls[0].args[0].language,'en');assert.equal(calls.at(-1).name,'get_state');
+  assert.equal(f.run('store.saved.language'),'en');assert.equal(f.run('store.saved.game'),'Edited preset');
+  assert.equal(f.calls.some(call=>call.name==='start_recording'),false);
 });
 
 test('session dates use local minute precision and preserve readable invalid values',async()=>{
@@ -238,27 +347,34 @@ test('session dates use local minute precision and preserve readable invalid val
   const expected=new Intl.DateTimeFormat('sv-SE',{year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(timestamp));
   const f=await fixture(snapshot({sessions:[{id:'dated',game:'Dated session',created:timestamp,duration:10,state:'待整理'}]}));
   assert.equal(f.run(`formatDate(${JSON.stringify(timestamp)})`),expected);
-  const rendered=f.elements.get('sessionList').innerHTML;
-  assert.ok(rendered.includes(expected));assert.ok(!rendered.includes(timestamp));
+  const local=new Date(timestamp),pad=n=>String(n).padStart(2,'0'),rendered=f.elements.get('lastSession').innerHTML;
+  assert.ok(rendered.includes(`<span class="day">${local.getDate()}</span>`));
+  assert.ok(rendered.includes(`${local.getMonth()+1} 月 · 周${'日一二三四五六'[local.getDay()]}`));
+  assert.ok(rendered.includes(`${pad(local.getHours())}:${pad(local.getMinutes())} 开始`));
+  assert.ok(!rendered.includes(timestamp));assert.ok(!rendered.includes(`${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}`));
   assert.equal(f.run("formatDate('2026-01-02T03:04:59')"),'2026-01-02 03:04');
   assert.equal(f.run("formatDate('未记录时间')"),'未记录时间');
   assert.equal(f.run("formatDate('not-a-date')"),'not-a-date');
   assert.equal(f.run('formatDate(null)'),'—');
+  f.data.snapshot.sessions=[{id:'undated',game:'Undated',created:'未记录时间',duration:10,state:'待整理'}];await f.run('poll()');
+  assert.doesNotMatch(f.elements.get('lastSession').innerHTML,/NaN|Invalid Date|undefined/);
 });
 
-test('background transcription leaves Start and presets available; capture save and readiness still block',async()=>{
+test('background transcription leaves Start and game switching available; capture save and readiness still block',async()=>{
   const jobs=[{id:'job-a',session_id:'a',game:'Game A',state:'running',detail:'Uploading microphone'},
     {id:'job-b',session_id:'b',game:'Game B',state:'queued',detail:''}];
   const sessions=[{id:'a',game:'Game A',state:'转写中',duration:60},{id:'b',game:'Game B',state:'待整理',duration:30}];
-  const f=await fixture(snapshot({background_jobs:jobs,sessions}));
+  const f=await fixture(snapshot({background_jobs:jobs,sessions,presets:[{id:'one',name:'Saved game',vault:'D:\\Saved'},{id:'two',name:'Other game',vault:'D:\\Other'}]}));
   assert.equal(f.elements.get('recordButton').disabled,false);assert.equal(f.elements.get('recordButtonText').textContent,'开始录制');
-  assert.equal(f.elements.get('presetSelect').disabled,false);assert.equal(f.elements.get('settingsButton').disabled,false);
+  const tabs=f.elements.get('gameTabs');assert.ok(findTag(tabs,'data-game','two'));assert.doesNotMatch(tabs.innerHTML,/lock/);
+  assert.equal(f.elements.get('settingsButton').disabled,false);
   assert.equal(f.elements.get('jobDetail').textContent,'');
-  assert.equal(f.elements.get('backgroundSummary').textContent,'1 段整理中 · 1 段排队');
-  assert.ok(f.elements.get('sessionList').innerHTML.includes('Uploading microphone'));
-  assert.ok(f.elements.get('sessionList').innerHTML.includes('等待整理'));
-  assert.equal(f.run("sessionActionBlocked('a','process')"),true);assert.equal(f.run("sessionActionBlocked('a','export')"),true);
-  assert.equal(f.run("sessionActionBlocked('a','folder')"),false);assert.equal(f.run("sessionActionBlocked('other','process')"),false);
+  const last=f.elements.get('lastSession');
+  assert.match(last.innerHTML,/<li class="now">转写中<\/li>/);assert.equal(findTag(last,'data-last-process'),null);
+  f.data.snapshot.sessions=[sessions[1],sessions[0]];await f.run('poll()');
+  assert.match(last.innerHTML,/<li class="now">等待转写<\/li>/);assert.equal(findTag(last,'data-last-process'),null);
+  await click(tabs,'data-game','two');
+  assert.deepEqual(plain(f.calls.filter(call=>call.name==='select_preset').map(call=>call.args)),[['two']]);
   f.elements.get('recordButton').onclick();await settle();assert.ok(f.calls.some(call=>call.name==='start_recording'));
   f.data.snapshot.activity={busy:true,kind:'saving',status:'正在保存录像',detail:''};await f.run('poll()');
   assert.equal(f.elements.get('recordButton').disabled,true);assert.equal(f.elements.get('recordButtonText').textContent,'正在保存…');
@@ -271,14 +387,15 @@ test('background progress and failures stay on their session without replacing c
     background_jobs:[{id:'job-a',session_id:'a',state:'running',detail:'Uploading A'}],
     sessions:[{id:'a',game:'A',state:'转写中'},{id:'b',game:'B',state:'录制中'}]});
   const f=await fixture(initial);
-  assert.equal(f.elements.get('recordButton').disabled,false);assert.equal(f.elements.get('recordButtonText').textContent,'结束并整理');
+  assert.equal(f.elements.get('recordButton').disabled,false);assert.equal(f.elements.get('recordButtonText').textContent,'结束录制');
   assert.equal(f.elements.get('recordingTime').textContent,'00:00:18');assert.equal(f.elements.get('jobDetail').textContent,'');
+  assert.equal(f.elements.get('lastSession').classList.contains('hidden'),true);assert.equal(f.elements.get('liveGauges').classList.contains('hidden'),false);
   f.data.snapshot.background_jobs[0].detail='<Waiting for cloud>';await f.run('poll()');
-  assert.ok(f.elements.get('sessionList').innerHTML.includes('&lt;Waiting for cloud&gt;'));
+  assert.equal(f.elements.get('jobDetail').textContent,'');assert.doesNotMatch(f.elements.get('homeStatus').textContent+f.elements.get('blockers').textContent,/Waiting/);
   f.data.snapshot.background_jobs=[];f.data.snapshot.sessions[0]={id:'a',game:'A',state:'失败',error:'Cloud failure'};await f.run('poll()');
-  assert.equal(f.elements.get('blockers').textContent,'');assert.equal(f.elements.get('recordButton').disabled,false);
-  assert.equal(f.elements.get('recordingTime').textContent,'00:00:18');assert.equal(f.elements.get('backgroundSummary').textContent,'');
-  assert.ok(f.elements.get('sessionList').innerHTML.includes('重试'));
+  assert.equal(f.elements.get('blockers').textContent,'');assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
+  assert.equal(f.elements.get('recordButton').disabled,false);
+  assert.equal(f.elements.get('recordingTime').textContent,'00:00:18');assert.equal(f.elements.get('jobDetail').textContent,'');
   f.elements.get('recordButton').onclick();await settle();assert.ok(f.calls.some(call=>call.name==='stop_recording'));
 });
 
@@ -295,20 +412,27 @@ test('vocabulary files stay independent and removal preserves overlapping and ma
 });
 
 test('actual file-first UI supports multi-select, cancel, failure, removal and saved re-entry',async()=>{
-  const f=await fixture();f.elements.get('settingsButton').onclick();
-  assert.equal(f.elements.get('manualWords').open,false);
+  const f=await fixture();f.elements.get('settingsButton').onclick();await settle();openGeneral(f);
+  assert.equal(f.run('currentStepKey()'),'general');
   f.data.chosenFiles=[{id:'a',name:'角色.txt',words:['同词','角色']},{id:'b',name:'<道具>.txt',words:['同词','道具']}];
   await f.elements.get('chooseHotwordFiles').onclick();
   assert.equal(f.run('store.draft.hotword_files.length'),2);assert.equal(f.run('store.draft.hotwords'),'同词\n角色\n道具\nSaved vocabulary');
-  assert.ok(f.elements.get('hotwordFiles').innerHTML.includes('&lt;道具&gt;.txt'));
+  assert.ok(f.elements.get('hotwordFiles').innerHTML.includes('&lt;道具&gt;.txt'));assert.ok(!f.elements.get('gameHotwordFiles').innerHTML.includes('道具'));
   assert.ok(f.elements.get('vocabularyCount').textContent.includes('4 个词'));
-  assert.equal(f.calls.some(call=>call.name==='save_preset'),false);
+  assert.equal(f.calls.some(call=>['save_preset','save_general'].includes(call.name)),false);
   f.data.chosenFiles=[];await f.elements.get('chooseHotwordFiles').onclick();assert.equal(f.run('store.draft.hotword_files.length'),2);
   f.data.dictionaryError='无法读取词库';await f.elements.get('chooseHotwordFiles').onclick();assert.equal(f.run('store.draft.hotword_files.length'),2);
   assert.equal(f.elements.get('wizardError').textContent,'无法读取词库');
-  f.elements.get('hotwordFiles').onclick({target:{closest:()=>({dataset:{removeVocabulary:'a'}})}});
+  click(f.elements.get('hotwordFiles'),'data-remove-vocabulary','a',f.elements.get('wizardBody'));
   assert.equal(f.run('store.draft.hotwords'),'同词\n道具\nSaved vocabulary');
-  await f.run('finishWizard()');f.elements.get('settingsButton').onclick();assert.equal(f.run('store.draft.hotword_files.length'),1);assert.equal(f.run('store.draft.hotword_files[0].id'),'b');
+  assert.equal(f.calls.some(call=>['save_preset','save_general'].includes(call.name)),false);
+  f.elements.get('wizardNext').onclick();await settle();
+  const save=f.calls.find(call=>call.name==='save_general');assert.ok(save);assert.deepEqual(plain(save.args[0].general_hotword_files.map(file=>file.id)),['b']);
+  assert.equal(f.calls.some(call=>call.name==='save_preset'),false);
+  assert.equal(f.run('store.draft.hotword_files.length'),1);assert.equal(f.run('store.draft.hotword_files[0].id'),'b');
+  f.elements.get('wizardCancel').onclick();assert.equal(sheetIsOpen(f),false);
+  f.elements.get('settingsButton').onclick();openGeneral(f);assert.equal(f.run('store.draft.hotword_files.length'),1);assert.equal(f.run('store.draft.hotword_files[0].id'),'b');
+  assert.ok(f.elements.get('hotwordFiles').innerHTML.includes('&lt;道具&gt;.txt'));
   await f.elements.get('dictionaryDownload').onclick({preventDefault(){}});await settle();
   const link=f.calls.find(call=>call.name==='open_dictionary_site');assert.ok(link);assert.equal(link.args.length,0);
 });
@@ -316,39 +440,53 @@ test('actual file-first UI supports multi-select, cancel, failure, removal and s
 
 test('first-use method introduction advances without saving; device validation still gates later steps',async()=>{
   const f=await fixture(firstUseVault(false));
-  assert.equal(f.run('step'),0);
-  assert.equal(f.elements.get('step0').classList.contains('hidden'),false);
+  assert.equal(f.run('step'),0);assert.equal(f.run('currentStepKey()'),'method');
+  assert.equal(f.elements.get('panelMethod').classList.contains('hidden'),false);
   assert.equal(f.elements.get('wizardNext').textContent,'开始设置');
   f.elements.get('wizardNext').onclick();
-  assert.equal(f.run('step'),1);
-  f.elements.get('game').value='合成体验';f.elements.get('game').listeners.input();
+  assert.equal(f.run('step'),1);assert.equal(f.run('currentStepKey()'),'general');
+  const language=f.elements.get('language');language.value='en';language.listeners.change();
   f.elements.get('wizardBack').onclick();assert.equal(f.run('step'),0);
-  f.elements.get('wizardNext').onclick();assert.equal(f.run('store.draft.game'),'合成体验');
+  f.elements.get('wizardNext').onclick();assert.equal(f.run('store.draft.language'),'en');
   f.elements.get('wizardNext').onclick();assert.equal(f.run('step'),1);
+  assert.ok(f.elements.get('wizardError').textContent.includes('麦克风'));
+  const mic=f.elements.get('mic');mic.value='microphone';mic.listeners.change();
+  f.elements.get('wizardNext').onclick();assert.equal(f.run('currentStepKey()'),'game');
+  f.elements.get('game').value='合成体验';f.elements.get('game').listeners.input();
+  f.elements.get('wizardBack').onclick();assert.equal(f.run('currentStepKey()'),'general');
+  f.elements.get('wizardNext').onclick();assert.equal(f.run('currentStepKey()'),'game');assert.equal(f.run('store.draft.game'),'合成体验');
+  f.elements.get('wizardNext').onclick();assert.equal(f.run('currentStepKey()'),'game');
   assert.ok(f.elements.get('wizardError').textContent.includes('窗口'));
-  assert.equal(f.calls.some(call=>['save_preset','start_recording'].includes(call.name)),false);
+  assert.equal(f.calls.some(call=>['save_preset','save_general','start_recording'].includes(call.name)),false);
   f.elements.get('wizardCancel').onclick();assert.equal(f.run('store.draft'),null);
   f.elements.get('methodButton').onclick();assert.equal(f.elements.get('actionDialog').open,true);
   assert.equal(f.run('store.draft'),null);
 });
 
-test('editing a preset excludes the guide and Back cannot enter it; new presets retain the guide',async()=>{
+// Per the redesign the method guide belongs to the first launch only; a new game is two steps (game, folder).
+test('editing a preset excludes the guide and Back cannot enter it; only first use shows the guide',async()=>{
   const f=await fixture();f.elements.get('settingsButton').onclick();
-  assert.equal(f.run('step'),1);
-  assert.equal(f.run("document.querySelectorAll('[data-step]')[0].classList.contains('hidden')"),true);
+  assert.equal(f.run('sheetMode'),'settings');assert.equal(f.run('currentStepKey()'),'game');
+  assert.equal(f.elements.get('panelMethod').classList.contains('hidden'),true);
   assert.equal(f.elements.get('wizardBack').classList.contains('hidden'),true);
-  f.elements.get('wizardBack').onclick();assert.equal(f.run('step'),1);
-  f.elements.get('wizardNext').onclick();assert.equal(f.run('step'),2);
-  f.elements.get('wizardBack').onclick();assert.equal(f.run('step'),1);
+  f.elements.get('wizardBack').onclick();assert.equal(f.run('currentStepKey()'),'game');
+  openGeneral(f);assert.equal(f.run('currentStepKey()'),'general');assert.equal(f.elements.get('panelMethod').classList.contains('hidden'),true);
   f.elements.get('wizardCancel').onclick();
-  f.elements.get('newPresetButton').onclick();assert.equal(f.run('step'),0);
-  assert.equal(f.run("document.querySelectorAll('[data-step]')[0].classList.contains('hidden')"),false);
-  assert.equal(f.calls.some(call=>['save_preset','start_recording'].includes(call.name)),false);
+  await click(f.elements.get('gameTabs'),'data-game-add');
+  assert.equal(f.run('sheetMode'),'new');assert.equal(f.run('step'),0);assert.equal(f.run('currentStepKey()'),'game');
+  assert.equal(f.elements.get('panelMethod').classList.contains('hidden'),true);assert.doesNotMatch(f.elements.get('wizardSteps').innerHTML,/记录方法/);
+  f.elements.get('wizardBack').onclick();assert.equal(f.run('currentStepKey()'),'game');
+  f.run("store.updateDraft('game','Second game');store.updateDraft('window','game-window')");
+  f.elements.get('wizardNext').onclick();assert.equal(f.run('currentStepKey()'),'vault');
+  f.elements.get('wizardBack').onclick();assert.equal(f.run('currentStepKey()'),'game');
+  f.elements.get('wizardBack').onclick();assert.equal(f.run('currentStepKey()'),'game');
+  assert.equal(f.elements.get('panelMethod').classList.contains('hidden'),true);
+  assert.equal(f.calls.some(call=>['save_preset','save_general','start_recording'].includes(call.name)),false);
 });
 
 test('readiness and specific blockers replace each other in the same live status slot',async()=>{
   const f=await fixture();
-  assert.equal(f.elements.get('homeStatus').textContent,'准备就绪');
+  assert.equal(f.elements.get('homeStatus').textContent,'已就绪');
   assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
   f.data.snapshot.readiness={ready:false,checking:false,errors:[
     {message:'未找到游戏窗口，请先打开游戏。',step:1},
@@ -360,12 +498,14 @@ test('readiness and specific blockers replace each other in the same live status
   assert.equal(f.elements.get('homeStatus').textContent,'');
   assert.equal(f.elements.get('blockers').classList.contains('hidden'),false);
   assert.equal(f.elements.get('blockers').textContent,'未找到游戏窗口，请先打开游戏。\n云端密钥缺失，请重新配置。');
+  assert.equal(f.elements.get('capturePanel').classList.contains('alerting'),true);
   f.data.snapshot.readiness={ready:true,checking:false,errors:[]};await f.run('poll()');
   assert.equal(f.elements.get('recordButton').disabled,false);
-  assert.equal(f.elements.get('homeStatus').textContent,'准备就绪');
+  assert.equal(f.elements.get('homeStatus').textContent,'已就绪');
   assert.equal(f.elements.get('homeStatus').classList.contains('hidden'),false);
   assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
   assert.equal(f.elements.get('blockers').textContent,'');
+  assert.equal(f.elements.get('capturePanel').classList.contains('alerting'),false);
 });
 
 test('pending requests and device refresh never advertise ready above a disabled Start',async()=>{
@@ -386,7 +526,7 @@ test('pending requests and device refresh never advertise ready above a disabled
 test('a historical operation error cannot replace fresh ready status after recovery',async()=>{
   const f=await fixture(snapshot({activity:{busy:false,kind:'idle',status:'操作未完成',detail:'旧的密钥验证失败'}}));
   assert.equal(f.elements.get('recordButton').disabled,false);
-  assert.equal(f.elements.get('homeStatus').textContent,'准备就绪');
+  assert.equal(f.elements.get('homeStatus').textContent,'已就绪');
   assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
   assert.equal(f.elements.get('blockers').textContent,'');
   assert.ok(f.elements.get('toast').textContent.includes('旧的密钥验证失败'));
@@ -418,27 +558,30 @@ test('bundled UIUX defaults seed only new drafts and explicit removal survives e
 
 test('vocabulary preview shows selected snapshot safely without saving or external actions',async()=>{
   const bundled={id:'uiux-default',name:'uiux-terms.txt',words:['心智模型','<script>unsafe</script>']};
-  const f=await fixture(snapshot({default_hotword_files:[bundled]}));
-  f.elements.get('newPresetButton').onclick();
-  assert.equal(f.elements.get('vocabularySummary').textContent,'UI/UX 已选');
-  f.elements.get('hotwordFiles').onclick({target:{closest:selector=>selector==='[data-view-vocabulary]'?{dataset:{viewVocabulary:bundled.id}}:null}});
+  const f=await fixture(snapshot({default_hotword_files:[bundled],config:{...snapshot().config,general_hotword_files:[bundled],hotword_files:[bundled]}}));
+  await click(f.elements.get('gameTabs'),'data-game-add');assert.equal(f.run('sheetMode'),'new');
+  assert.deepEqual(plain(f.run('store.draft.hotword_files.map(file=>file.id)')),['uiux-default']);
+  assert.ok(f.elements.get('hotwordFiles').innerHTML.includes('uiux-terms.txt'));assert.ok(!f.elements.get('gameHotwordFiles').innerHTML.includes('uiux-terms.txt'));
+  click(f.elements.get('hotwordFiles'),'data-view-vocabulary',bundled.id,f.elements.get('wizardBody'));
   assert.equal(f.elements.get('actionDialog').open,true);
   assert.match(f.elements.get('actionBody').innerHTML,/心智模型/);
   assert.match(f.elements.get('actionBody').innerHTML,/&lt;script&gt;unsafe&lt;\/script&gt;/);
-  assert.ok(!f.calls.some(call=>['save_preset','open_folder','start_recording'].includes(call.name)));
+  assert.doesNotMatch(f.elements.get('actionBody').innerHTML,/<script>/);
+  assert.ok(!f.calls.some(call=>['save_preset','save_general','open_folder','start_recording'].includes(call.name)));
 });
 
 test('entering device setup focuses the name input, but polling never steals user focus',async()=>{
   const f=await fixture();f.elements.get('settingsButton').onclick();
-  assert.equal(f.run('document.activeElement.id'),'game');
   f.elements.get('mic').focus();await f.run('poll()');
   assert.equal(f.run('document.activeElement.id'),'mic');
-  f.elements.get('wizardCancel').onclick();f.elements.get('newPresetButton').onclick();
-  f.elements.get('wizardNext').onclick();assert.equal(f.run('document.activeElement.id'),'game');
+  f.elements.get('wizardCancel').onclick();f.elements.get('settingsButton').onclick();
+  assert.equal(f.run('document.activeElement.id'),'game','opening game settings focuses the game name');
+  f.elements.get('wizardCancel').onclick();await click(f.elements.get('gameTabs'),'data-game-add');
+  assert.equal(f.run('document.activeElement.id'),'game','a new game opens on its name');
 });
 
 test('two transcription tabs change only the draft and support keyboard selection',async()=>{
-  const f=await fixture();f.elements.get('settingsButton').onclick();f.run('setStep(2)');
+  const f=await fixture();f.elements.get('settingsButton').onclick();openGeneral(f);
   assert.equal(f.elements.has('transcription_provider'),false);
   assert.equal(f.elements.get('providerQwen').getAttribute('aria-selected'),'true');
   f.elements.get('providerLocal').onclick();
@@ -450,20 +593,27 @@ test('two transcription tabs change only the draft and support keyboard selectio
   assert.equal(f.run('document.activeElement.id'),'providerQwen');
   f.elements.get('wizardCancel').onclick();
   assert.equal(f.run('store.saved.transcription_provider'),'qwen');
-  assert.equal(f.calls.some(c=>['save_preset','save_cloud_key','model_action'].includes(c.name)),false);
+  assert.equal(f.calls.some(c=>['save_preset','save_general','save_cloud_key','model_action'].includes(c.name)),false);
 });
 
 test('editing a legacy record-only preset requires an explicit choice before saving',async()=>{
   const f=await fixture(snapshot({config:{...snapshot().config,transcription_provider:'later'}}));
-  f.elements.get('settingsButton').onclick();await f.run('finishWizard()');
-  assert.equal(f.run('step'),2);
+  f.elements.get('settingsButton').onclick();assert.equal(f.run('store.draft.transcription_provider'),'');
+  assert.equal(f.run("'transcription_provider' in store.gamePayload()"),false,'saving a game cannot convert the shared choice');
+  openGeneral(f);assert.equal(f.elements.get('providerChoiceHint').classList.contains('hidden'),false);
+  const language=f.elements.get('language');language.value='en';language.listeners.change();
+  assert.equal(f.elements.get('wizardNext').classList.contains('hidden'),false);
+  f.elements.get('wizardNext').onclick();await settle();
+  assert.equal(f.run('currentStepKey()'),'general');
   assert.match(f.elements.get('wizardError').textContent,/本地转写.*Qwen/);
-  assert.equal(f.calls.some(c=>c.name==='save_preset'),false);
+  assert.equal(f.calls.some(c=>['save_preset','save_general'].includes(c.name)),false);
   assert.equal(f.elements.get('providerChoiceHint').classList.contains('hidden'),false);
   f.elements.get('wizardCancel').onclick();assert.equal(f.run('store.saved.transcription_provider'),'later');
 });
 
 const setupSnapshot=()=>snapshot({devices:{monitor:[],mic:[],window:[]},device_inventory:{id:'',state:'idle'},device_defaults:{monitor:'',mic:''}});
+// Device defaults only initialize the first-use draft: a new game with existing games copies the shared devices.
+const firstSetupSnapshot=()=>({...setupSnapshot(),presets:[],active_preset_id:null,config:{...snapshot().config,configured:false}});
 const detectedDefaults=(id='inventory-1')=>({
   devices:{window:[],monitor:[{itemName:'Secondary',itemValue:'secondary',itemEnabled:true},{itemName:'Primary',itemValue:'primary',itemEnabled:true}],mic:[{itemName:'Default',itemValue:'default',itemEnabled:true}]},
   device_defaults:{monitor:'primary',mic:'default'},device_inventory:{id,state:'succeeded',error:''}
@@ -500,28 +650,28 @@ test('opening an existing preset automatically reads inventory without changing 
 });
 
 test('automatic new-draft read never applies defaults; explicit first refresh applies only verified defaults',async()=>{
-  const f=await fixture(setupSnapshot());f.elements.get('newPresetButton').onclick();await settle();
+  const f=await fixture(firstSetupSnapshot());await settle();assert.equal(f.run('sheetMode'),'first');
   Object.assign(f.data.snapshot,detectedDefaults());await f.run('poll()');
   assert.equal(f.run('store.draft.source'),'游戏窗口');assert.equal(f.run('store.draft.mic'),'');
-  f.elements.get('wizardCancel').onclick();Object.assign(f.data.snapshot,setupSnapshot());await f.run('poll()');
-  f.elements.get('newPresetButton').onclick();await settle();f.data.snapshot.device_inventory.state='succeeded';await f.run('poll()');await f.elements.get('refreshDevices').onclick();
+  f.elements.get('wizardCancel').onclick();Object.assign(f.data.snapshot,firstSetupSnapshot());await f.run('poll()');
+  f.elements.get('settingsButton').onclick();assert.equal(f.run('sheetMode'),'first');await settle();f.data.snapshot.device_inventory.state='succeeded';await f.run('poll()');await f.elements.get('refreshDevices').onclick();
   Object.assign(f.data.snapshot,detectedDefaults('inventory-3'));await f.run('poll()');
   assert.equal(f.run('store.draft.source'),'整个显示器');assert.equal(f.run('store.draft.monitor'),'primary');assert.equal(f.run('store.draft.mic'),'default');
   assert.equal(f.run('store.saved.source'),'游戏窗口');
-  f.elements.get('target').value='secondary';f.elements.get('target').onchange();
+  const monitor=f.elements.get('monitor');monitor.value='secondary';monitor.listeners.change();
   await f.elements.get('refreshDevices').onclick();Object.assign(f.data.snapshot,detectedDefaults('inventory-4'));await f.run('poll()');
   assert.equal(f.run('store.draft.monitor'),'secondary');
 });
 
 test('unverified defaults, superseded results and changed-back device choices never initialize the draft',async()=>{
-  const f=await fixture(setupSnapshot());f.elements.get('newPresetButton').onclick();await settle();
+  const f=await fixture(firstSetupSnapshot());await settle();assert.equal(f.run('sheetMode'),'first');
   f.data.snapshot.device_inventory.state='succeeded';await f.run('poll()');
   await f.elements.get('refreshDevices').onclick();
   Object.assign(f.data.snapshot,detectedDefaults('inventory-2'));f.data.snapshot.device_defaults={monitor:'missing',mic:'disabled'};
   f.data.snapshot.devices.mic.push({itemValue:'disabled',itemName:'Disabled',itemEnabled:false});await f.run('poll()');
   assert.equal(f.run('store.draft.monitor'),'');assert.equal(f.run('store.draft.mic'),'');assert.match(f.elements.get('wizardError').textContent,/手动选择/);
-  f.elements.get('wizardCancel').onclick();Object.assign(f.data.snapshot,setupSnapshot());await f.run('poll()');
-  f.elements.get('newPresetButton').onclick();await settle();f.data.snapshot.device_inventory.state='succeeded';await f.run('poll()');await f.elements.get('refreshDevices').onclick();
+  f.elements.get('wizardCancel').onclick();Object.assign(f.data.snapshot,firstSetupSnapshot());await f.run('poll()');
+  f.elements.get('settingsButton').onclick();assert.equal(f.run('sheetMode'),'first');await settle();f.data.snapshot.device_inventory.state='succeeded';await f.run('poll()');await f.elements.get('refreshDevices').onclick();
   const source=f.elements.get('source');source.value='整个显示器';source.listeners.change();source.value='游戏窗口';source.listeners.change();
   Object.assign(f.data.snapshot,detectedDefaults('inventory-4'));await f.run('poll()');
   assert.equal(f.run('store.draft.source'),'游戏窗口');assert.equal(f.run('store.draft.mic'),'');
@@ -545,9 +695,9 @@ test('read failure preserves choices, has concrete retry feedback, and consumes 
 test('cancelled inventory RPC cannot affect a reopened draft or leave its read state locked',async()=>{
   const f=await fixture(setupSnapshot());let resolveOld;
   f.data.inventoryHandler=()=>new Promise(resolve=>resolveOld=resolve);
-  f.elements.get('newPresetButton').onclick();await settle();assert.equal(f.elements.get('wizardCancel').disabled,false);
+  await click(f.elements.get('gameTabs'),'data-game-add');await settle();assert.equal(f.run('sheetMode'),'new');assert.equal(f.elements.get('wizardCancel').disabled,false);
   f.elements.get('wizardCancel').onclick();f.data.inventoryHandler=null;
-  f.elements.get('settingsButton').onclick();await settle();
+  f.elements.get('settingsButton').onclick();await settle();assert.equal(f.run('sheetMode'),'settings');
   resolveOld({ok:true,data:{inventory_id:'late'}});await settle();
   Object.assign(f.data.snapshot,detectedDefaults('newer'));await f.run('poll()');
   assert.equal(f.run('store.draft.window'),'game-window');assert.equal(f.run('store.draft.source'),'游戏窗口');
@@ -582,7 +732,7 @@ test('uncertain recording and failed or stale readiness retain guarded full-chec
       f.data.snapshot.activity=activity;await f.run('poll()');
       assert.equal(f.elements.get('reconnectEngine').disabled,true);assert.equal(f.elements.get('reconnectEngine').classList.contains('hidden'),true);
       await f.elements.get('reconnectEngine').onclick();assert.equal(f.calls.filter(c=>c.name==='refresh_devices').length,1);
-      assert.equal(f.elements.get('deviceFields').disabled,activity.kind==='recording');
+      for(const id of ['source','target','mic'])assert.equal(f.elements.get(id).disabled,activity.kind==='recording',`${id} locked only while recording`);
     }
     f.data.snapshot.activity={kind:'idle',busy:false};f.data.snapshot.readiness.checking=true;await f.run('poll()');
     assert.equal(f.elements.get('reconnectEngine').classList.contains('hidden'),true);assert.equal(f.elements.get('recordButton').disabled,true);
@@ -601,41 +751,50 @@ test('update eligibility fails closed and does not use recording readiness',()=>
   assert.equal(updateView({...ready,downloaded_bytes:Infinity}).downloaded_bytes,0);
 });
 
-test('version dialog is safe on older snapshots and never checks on opening',async()=>{
-  const f=await fixture();const before=f.calls.length;
-  f.elements.get('versionButton').onclick();
-  assert.equal(f.elements.get('updateDialog').open,true);
+// The update panel lives in 设置 → 通用; a badge on the gear and the 通用 tab replaces the old version button.
+test('update panel is safe on older snapshots and never checks on opening',async()=>{
+  const f=await fixture();f.elements.get('settingsButton').onclick();await settle();
+  const before=f.calls.length;openGeneral(f);await settle();
+  assert.equal(f.calls.length,before,'opening the update panel makes no bridge call');
+  assert.equal(f.elements.get('panelGeneral').classList.contains('hidden'),false);
   assert.equal(f.elements.get('updateCheck').disabled,true);
   assert.equal(f.elements.get('updateCurrent').textContent,'尚未获取');
   assert.equal(f.elements.get('recordButton').disabled,false);
-  assert.equal(f.calls.length,before);
+  assert.equal(f.elements.get('settingsButton').classList.contains('badge'),false);
   f.data.snapshot.updates={current_version:'unknown',state:'idle'};await f.run('poll()');
-  assert.equal(f.elements.get('versionButton').textContent,'版本与更新');assert.equal(f.elements.get('updateCurrent').textContent,'版本未知');
+  assert.equal(f.elements.get('updateCurrent').textContent,'版本未知');
+  assert.equal(f.elements.get('settingsButton').title,'设置');assert.equal(f.elements.get('settingsButton').classList.contains('badge'),false);
+  assert.equal(f.calls.some(c=>c.name==='update_action'),false);
 });
 
 test('update channel is local until explicit check and never enters a preset',async()=>{
   const f=await fixture(snapshot({updates:{current_version:'0.6.0-preview.3',state:'idle'}}));
-  f.elements.get('versionButton').onclick();assert.equal(f.elements.get('updateChannel').value,'stable');
+  f.elements.get('settingsButton').onclick();openGeneral(f);assert.equal(f.elements.get('updateChannel').value,'stable');
   f.elements.get('updateChannel').value='preview';f.elements.get('updateChannel').onchange();
   await f.run('poll()');assert.equal(f.elements.get('updateChannel').value,'preview');
+  assert.equal(f.elements.get('sheetMessage').textContent,'');assert.equal(f.run('store.dirty'),false);
   assert.equal(f.calls.some(c=>c.name==='update_action'),false);
   await f.elements.get('updateCheck').onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(f.calls.find(c=>c.name==='update_action').args)),[{action:'check',include_prerelease:true}]);
+  assert.equal(f.run('store.generalPayload().include_prerelease'),undefined);assert.equal(f.run('store.gamePayload().include_prerelease'),undefined);
   f.run("store.openDraft('edit')");assert.equal(f.run('store.presetPayload().include_prerelease'),undefined);
 });
 
 test('startup discovery advertises updates without opening a dialog or blocking recording',async()=>{
   const f=await fixture(snapshot({updates:{current_version:'0.7.0',latest_version:'0.7.1',state:'available'}}));
-  assert.equal(f.elements.get('versionButton').textContent,'v0.7.0 · 有更新');
-  assert.equal(f.elements.get('versionButton').classList.contains('has-update'),true);
-  assert.equal(!!f.elements.get('updateDialog').open,false);
+  assert.equal(f.elements.get('settingsButton').classList.contains('badge'),true);
+  assert.equal(f.elements.get('tabGeneral').classList.contains('badge'),true);
+  assert.equal(f.elements.get('updateGroup').classList.contains('badge-text'),true);
+  assert.match(f.elements.get('settingsButton').title,/v0\.7\.1/);
+  assert.equal(sheetIsOpen(f),false);
   assert.equal(f.elements.get('recordButton').disabled,false);
   assert.equal(f.calls.some(c=>c.name==='update_action'),false);
   f.data.snapshot.updates={current_version:'0.7.0',state:'error',error:'网络不可用'};await f.run('poll()');
-  assert.equal(f.elements.get('versionButton').textContent,'v0.7.0');
+  assert.equal(f.elements.get('settingsButton').classList.contains('badge'),false);assert.equal(f.elements.get('settingsButton').title,'设置');
+  assert.equal(f.elements.get('tabGeneral').classList.contains('badge'),false);
   assert.equal(f.elements.get('recordButton').disabled,false);
-  assert.equal(!!f.elements.get('updateDialog').open,false);
-  f.elements.get('versionButton').onclick();
+  assert.equal(sheetIsOpen(f),false);
+  f.elements.get('settingsButton').onclick();openGeneral(f);
   assert.equal(f.elements.get('updateCheck').disabled,false);
   await f.elements.get('updateCheck').onclick();
   assert.deepEqual(JSON.parse(JSON.stringify(f.calls.find(c=>c.name==='update_action').args)),[{action:'check',include_prerelease:false}]);

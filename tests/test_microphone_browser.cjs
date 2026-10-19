@@ -1,4 +1,7 @@
-/* Actual recording UI with an explicitly synthetic bridge; no device access. */
+/* Actual recording UI with an explicitly synthetic bridge; no device access.
+   Redesign (docs/plans/2026-10-19-redesign.md): while recording, section 1 holds the clock (#liveClock) and
+   the stop button side by side, section 2 (收音与操作) holds the microphone gauge (#liveGauges) in place of
+   the last session. The window is 720×600 at minimum; the theme is set in 设置 → 通用 (setTheme). */
 const assert=require('node:assert/strict'),fs=require('node:fs'),http=require('node:http'),path=require('node:path');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(__dirname,'..'),out=path.join(root,'work/microphone-acceptance');
@@ -33,6 +36,9 @@ const server=http.createServer((req,res)=>{
   };
   await page.waitForFunction(()=>document.querySelector('#microphoneMonitor').dataset.state==='signal');
   assert.equal(await page.locator('#microphoneLevel').getAttribute('aria-valuenow'),'72');
+  assert.equal(await page.locator('#liveClock').isVisible(),true);assert.equal(await page.locator('#recordingTime').textContent(),'00:01:24');
+  assert.equal(await page.locator('#liveGauges').isVisible(),true);assert.equal(await page.locator('#lastSession').isVisible(),false);
+  assert.equal(await page.locator('#lastHeading').textContent(),'收音与操作');
   assert.equal(await page.locator('#recordButton').isEnabled(),true);
   await page.screenshot({path:path.join(out,'recording-signal.png')});
   const height=await page.locator('#capturePanel').evaluate(el=>el.offsetHeight);
@@ -45,15 +51,20 @@ const server=http.createServer((req,res)=>{
   await state('silent',{quiet_seconds:121});await page.waitForFunction(()=>document.querySelector('#homeStatus').classList.contains('microphone-warning'));
   assert.match(await page.locator('#homeStatus').textContent(),/2 分钟/);
   const timer=await page.locator('#recordingTime').boundingBox(),button=await page.locator('#recordButton').boundingBox(),meter=await page.locator('#microphoneMonitor').boundingBox();
-  assert.ok(timer.y+timer.height<=button.y && button.y+button.height<=meter.y);
-  assert.equal(meter.x,button.x);assert.equal(meter.width,button.width);
+  const first=await page.locator('#capturePanel').boundingBox(),second=await page.locator('#lastSection').boundingBox();
+  // Clock and stop button share section 1 without overlapping; the meter sits below them in section 2.
+  for(const rect of [timer,button])assert.ok(rect.y>=first.y-1&&rect.y+rect.height<=first.y+first.height+1,'clock and stop button stay in the first section');
+  assert.ok(timer.x+timer.width<=button.x||button.x+button.width<=timer.x,'clock and stop button do not overlap');
+  assert.ok(button.y+button.height<=meter.y&&meter.y>=second.y&&meter.y+meter.height<=second.y+second.height+1,'meter sits in the second section below the controls');
+  assert.ok(meter.x>=second.x-1&&meter.x+meter.width<=second.x+second.width+1,'meter stays within the content column');
   await page.screenshot({path:path.join(out,'recording-silent.png')});
-  for(const [width,height] of [[820,620],[3440,1440],[390,640]]){
+  // 720×600 is the main window's minimum size (app.py); narrower windows are not offered.
+  for(const [width,height] of [[720,600],[820,620],[3440,1440]]){
    await page.setViewportSize({width,height});
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
-   const rect=await page.locator('#microphoneMonitor').boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width+1);
+   const rect=await page.locator('#microphoneMonitor').boundingBox();assert.ok(rect.x>=0&&rect.x+rect.width<=width+1&&rect.y>=0&&rect.y+rect.height<=height+1);
   }
-  await page.setViewportSize({width:820,height:620});await page.locator('#themeButton').click();
+  await page.setViewportSize({width:720,height:600});await page.evaluate(()=>setTheme('dark'));assert.equal(await page.locator('html').getAttribute('data-theme'),'dark');
   await page.screenshot({path:path.join(out,'recording-silent-compact-dark.png')});
   await state('signal',{level:.4,quiet_seconds:0});
   await page.waitForFunction(()=>!document.querySelector('#homeStatus').classList.contains('microphone-warning'));
@@ -67,6 +78,7 @@ const server=http.createServer((req,res)=>{
   await page.waitForFunction(()=>document.querySelector('#microphoneMonitor').dataset.state==='signal');
   await page.evaluate(()=>{fixture.state.activity={kind:'idle',busy:false,status:'待开始'};});
   await page.waitForFunction(()=>document.querySelector('#microphoneMonitor').classList.contains('hidden'));
+  assert.equal(await page.locator('#liveGauges').isVisible(),false);assert.equal(await page.locator('#liveClock').isVisible(),false);
   const stoppedCalls=await page.evaluate(()=>fixture.calls);await page.waitForTimeout(600);
   assert.equal(await page.evaluate(()=>fixture.calls),stoppedCalls,'no microphone polling outside recording');
   await page.evaluate(()=>{fixture.state.activity={kind:'recording',busy:false,active_id:'next-synthetic',status:'录制中'};});
@@ -74,7 +86,7 @@ const server=http.createServer((req,res)=>{
   await page.waitForTimeout(500);
   assert.notEqual(await page.locator('#microphoneMonitor').getAttribute('data-state'),'signal','old session response cannot light new meter');
   assert.deepEqual(errors,[]);
-  fs.writeFileSync(path.join(out,'browser-result.json'),JSON.stringify({ok:true,states:8,sizes:4,stale_bridge:true,session_isolation:true,page_errors:errors},null,2));
+  fs.writeFileSync(path.join(out,'browser-result.json'),JSON.stringify({ok:true,states:8,sizes:3,stale_bridge:true,session_isolation:true,page_errors:errors},null,2));
   console.log('Microphone UI passed: states, resize, dark theme, stale bridge, stop and next-session isolation.');
  }finally{await browser.close();await new Promise(resolve=>server.close(resolve));}
 })().catch(error=>{console.error(error);process.exitCode=1;server.close();});
