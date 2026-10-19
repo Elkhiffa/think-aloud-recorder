@@ -654,11 +654,18 @@ def configure_scene(r,c,test_file=None,mark=None):
         raise RuntimeError('游戏画面未能加入录制场景，已取消开始。')
     r.set_current_program_scene('Experience')
     _mark(mark,'scene_layout')
-    time.sleep(0.5)
-    _mark(mark,'scene_fixed_wait')
     expected={'测试素材'} if test_file else {'游戏画面','游戏声音','口述'}
     actual={i['inputName'] for i in r.get_input_list().inputs}
     if not expected.issubset(actual):raise RuntimeError('OBS 录制源未能就绪，已取消开始。')
+    # OBS's own acknowledgement that the picture and both audio sources are live in the
+    # program output replaces a fixed wait; the picture's real size is checked below.
+    pending=set(expected)
+    for _ in range(60):
+        pending={name for name in pending if r.get_source_active(name).video_active is not True}
+        if not pending:break
+        time.sleep(.05)
+    else:raise RuntimeError('OBS 录制源未能就绪，已取消开始。')
+    _mark(mark,'scene_sources_active')
     picture='测试素材' if test_file else '游戏画面'
     item=next((i for i in r.get_scene_item_list('Experience').scene_items if i.get('sourceName')==picture),None)
     if item is None:raise RuntimeError('未能取得录制画面，已取消开始。')
@@ -936,7 +943,7 @@ class Session:
             # precision. Review retains explicit manual per-session alignment.
             return
     @classmethod
-    def start(cls,c,test_file=None,*,progress=None,mark=None):
+    def start(cls,c,test_file=None,*,progress=None,mark=None,confirmed=None):
         def report(stage):
             # Presentation must not change recording ownership or its clocks.
             if progress is not None:
@@ -976,6 +983,7 @@ class Session:
                     time.sleep(0.1)
                 else:raise RuntimeError('OBS 尚未确认录制状态，请在场次列表恢复后检查。')
                 _mark(mark,'output_active')
+                _mark(confirmed,'recording')
                 if s._input_capture is not None:
                     report('正在准备操作记录')
                     try:
@@ -1023,9 +1031,9 @@ class Session:
                     output=Path(r.stop_record().output_path)
                     _mark(mark,'stop_request')
                     self.update(recording_file=output.name)
-                    for _ in range(120):
+                    for _ in range(600):
                         if not r.get_record_status().output_active:break
-                        time.sleep(0.5)
+                        time.sleep(0.1)
                     else:raise RuntimeError('OBS 尚未完成停止，请稍后重试。')
                     _mark(mark,'output_stopped')
                     if self._input_clock_events is not None:

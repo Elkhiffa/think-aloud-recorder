@@ -143,6 +143,8 @@ class WindowSceneTests(unittest.TestCase):
         client.get_record_status.return_value = SimpleNamespace(output_active=True, output_duration=100)
         client.get_scene_item_transform.return_value = SimpleNamespace(
             scene_item_transform=dict(sourceWidth=1920, sourceHeight=1080))
+        client.get_source_active.side_effect = lambda name: SimpleNamespace(
+            video_active=name in sources, video_showing=name in sources)
         return client, sources
 
     def test_scene_rebinds_disabled_source_before_enabling_and_updates_local_config(self):
@@ -158,6 +160,27 @@ class WindowSceneTests(unittest.TestCase):
         self.assertEqual(cfg['window'], self.current)
         methods = [call[0] for call in client.mock_calls]
         self.assertLess(methods.index('set_input_settings'), methods.index('set_scene_item_enabled'))
+        client.start_record.assert_not_called()
+
+    def test_scene_waits_for_obs_to_activate_every_recorded_source_instead_of_a_fixed_delay(self):
+        """触发路径：用户 → 点开始录制 → OBS 切换场景后麦克风源迟迟未激活 → 取消开始并说明源未就绪，不靠固定等待碰运气 → 不修可能录出开头没有口述的录像而无任何报错。"""
+        client, sources = self.client([[window(self.current)]])
+        activations = {'口述': 3}
+        def active(name):
+            if activations.get(name):
+                activations[name] -= 1
+                return SimpleNamespace(video_active=False)
+            return SimpleNamespace(video_active=name in sources)
+        client.get_source_active.side_effect = active
+        with patch.object(recorder, 'ensure_idle'), patch.object(recorder.time, 'sleep') as sleep:
+            recorder.configure_scene(client, self.config())
+        self.assertNotIn(.5, [call.args[0] for call in sleep.call_args_list])
+        self.assertEqual({call.args[0] for call in client.get_source_active.call_args_list}, {'游戏画面', '游戏声音', '口述'})
+        client, _ = self.client([[window(self.current)]])
+        client.get_source_active.side_effect = lambda name: SimpleNamespace(video_active=name != '口述')
+        with patch.object(recorder, 'ensure_idle'), patch.object(recorder.time, 'sleep'), \
+             self.assertRaisesRegex(RuntimeError, '录制源未能就绪'):
+            recorder.configure_scene(client, self.config())
         client.start_record.assert_not_called()
 
     def test_ultrawide_scene_uses_actual_capture_aspect_with_bounded_encoding_size(self):

@@ -40,6 +40,38 @@ SUSPECT_STATES = {'录制中', '启动中', '保存中'}
 READINESS_MAX_AGE = 15
 
 
+_CHIME = None
+
+
+def _start_chime():
+    """Two soft rising sine notes (about 0.2 s, low level) as an in-memory WAV."""
+    global _CHIME
+    if _CHIME is None:
+        import io
+        import math
+        import struct
+        import wave
+        rate, samples = 44100, []
+        for start, frequency, length in ((0.0, 659.25, .12), (.07, 880.0, .14)):
+            offset = int(start * rate)
+            for index in range(int(length * rate)):
+                t = index / rate
+                envelope = min(1.0, t / .012) * math.exp(-t / (length / 3.2))
+                value = .12 * envelope * math.sin(2 * math.pi * frequency * t)
+                while len(samples) <= offset + index:
+                    samples.append(0.0)
+                samples[offset + index] += value
+        buffer = io.BytesIO()
+        with wave.open(buffer, 'wb') as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(rate)
+            output.writeframes(b''.join(struct.pack('<h', int(max(-1.0, min(1.0, value)) * 32767))
+                                        for value in samples))
+        _CHIME = buffer.getvalue()
+    return _CHIME
+
+
 def ok(data=None):
     return {'ok': True, 'data': data}
 
@@ -1377,7 +1409,8 @@ class DesktopService:
                     raise RuntimeError('录制预设已变化，请重新开始录制。')
                 cfg['window'] = selection['resolved']
             try:
-                session = recorder.Session.start(cfg, progress=progress, mark=timer.mark)
+                session = recorder.Session.start(cfg, progress=progress, mark=timer.mark,
+                                                 confirmed=lambda _: self._play_start_chime())
                 with self._lock:
                     self._active = session
                 self._report_recording_state(session, '录像已开始。')
@@ -1406,6 +1439,17 @@ class DesktopService:
                 return self._launch('starting', work, status='正在检查录制条件')
             except Exception as error:
                 return self._error(error)
+
+    def _play_start_chime(self):
+        """A short, soft cue the moment OBS confirms the video started, so the user can turn back to the game."""
+        def play():
+            try:
+                import winsound
+                winsound.PlaySound(_start_chime(), winsound.SND_MEMORY | winsound.SND_NODEFAULT)
+            except Exception:
+                # Path 5: no audio device or a muted/disabled sound service never affects the recording.
+                pass
+        threading.Thread(target=play, daemon=True, name='start-chime').start()
 
     def _report_recording_state(self, session, detail):
         meta = session.meta
