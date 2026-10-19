@@ -93,6 +93,10 @@ class DesktopServiceTests(unittest.TestCase):
         if background and worker:
             worker.join(5)
             self.assertFalse(worker.is_alive(), 'synthetic background worker did not finish')
+        warmer = self.service._warm_thread
+        if warmer:
+            warmer.join(5)
+            self.assertFalse(warmer.is_alive(), 'synthetic status check did not finish')
 
     def session(self, ident='synthetic-1', **extra):
         path = self.vault / '场次' / (ident + ' fixture')
@@ -103,6 +107,30 @@ class DesktopServiceTests(unittest.TestCase):
         data.update(extra)
         bridge.recorder.write(path / 'session.json', data)
         return bridge.recorder.Session(path)
+
+    def test_session_list_status_does_not_hold_the_service_lock(self):
+        """触发路径：用户 → 主窗口打开时场次列表正在逐场读取整理状态 → 同时查看麦克风音量或点结束录制 → 这些操作不等列表读完 → 不修会被锁挡住直到 45 场读完（实测冷启动约 20 秒）。"""
+        self.session()
+        entered, release = threading.Event(), threading.Event()
+
+        def slow_status(folder, meta, store):
+            entered.set()
+            release.wait(5)
+            return dict(state='none'), False
+
+        with patch('agent_protocol.list_status', side_effect=slow_status):
+            poll = threading.Thread(target=self.service.get_state)
+            poll.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                began = time.monotonic()
+                self.assertTrue(self.service.get_microphone_state()['ok'])
+                with self.service._lock:
+                    pass
+                self.assertLess(time.monotonic() - began, .5)
+            finally:
+                release.set()
+                poll.join(5)
 
     def fresh_shared_vault(self):
         self.service.root = self.root / 'recorder-version'

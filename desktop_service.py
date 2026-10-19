@@ -96,6 +96,10 @@ class DesktopService:
         self._device_inventory = dict(id=None, state='idle', error='', checked_at=None, window_selection=None)
         self._device_labels = {'mic': {}, 'window': {}, 'monitor': {}}
         self._readiness = dict(ready=False, checking=True, errors=[], checked_at=None)
+        self._warm_lock = threading.Lock()
+        self._warm_thread = None
+        self._warm_pending = []
+        self._warm_queued = set()
         self._cfg = load_settings(self.root)
         self._cfg.setdefault('transcription_provider', 'later')
         self._cfg.setdefault('record_inputs', False)
@@ -106,6 +110,11 @@ class DesktopService:
         self._model = ModelManager(self.root)
         from updater import UpdateManager
         self._updates = UpdateManager(self.root)
+        import agent_protocol
+        # Path 4: an upgraded app does not trust statuses checked by older validation rules.
+        self._status_store = agent_protocol.StatusStore(
+            self.root / 'state/preprocessing-status.json',
+            f"{agent_protocol.STATUS_CACHE_VERSION}:{self._updates.snapshot().get('current_version')}")
         self._activity = dict(busy=False, kind='idle', status='待开始', detail='',
                               active_id=None, elapsed_seconds=0)
         self._launch('recovery', self._startup, status='检查上次场次')
@@ -388,19 +397,23 @@ class DesktopService:
                      vault=value.get('vault', '')) for ident, value in self._cfg.get('presets', {}).items()]
 
     def _session_paths(self):
-        vault = Path(self._cfg['vault']).resolve()
-        if self._first_default_vault(vault):
+        return {ident: path for ident, (path, _) in self._session_entries().items()}
+
+    def _session_entries(self, vault=None, first_default=None):
+        """Session folders with the metadata read while scanning them."""
+        vault = Path(self._cfg['vault'] if vault is None else vault).resolve()
+        if self._first_default_vault(vault) if first_default is None else first_default:
             # Merely proposing a shared sibling folder is not permission to
             # enumerate, recover or adopt another installation's sessions.
             return {}
-        base = vault / '场次'
+        base = (vault / '场次').resolve()
         result = {}
-        if base.resolve().parent != vault:
+        if base.parent != vault:
             return result
         for file in base.glob('*/session.json'):
             try:
                 directory = file.parent.resolve()
-                if directory.parent != base.resolve() or file.resolve().parent != directory:
+                if directory.parent != base or file.resolve().parent != directory:
                     continue
                 meta = recorder.read(file)
                 if not isinstance(meta, dict):
@@ -412,10 +425,10 @@ class DesktopService:
                     # Ambiguous IDs must not choose a different session by chance.
                     result[ident] = None
                 else:
-                    result[ident] = directory
+                    result[ident] = (directory, meta)
             except (OSError, ValueError, TypeError):
                 continue
-        return {ident: path for ident, path in result.items() if path is not None}
+        return {ident: entry for ident, entry in result.items() if entry is not None}
 
     def _session(self, ident):
         if not isinstance(ident, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', ident):
@@ -425,11 +438,12 @@ class DesktopService:
             raise ValueError('场次不存在、编号重复或不属于当前资料库。')
         return recorder.Session(path)
 
-    def _visible_session_paths(self):
+    def _visible_session_paths(self, paths=None, jobs=None):
         """Current vault plus trusted paths already admitted to this app's queue."""
-        paths = self._session_paths()
+        paths = self._session_paths() if paths is None else dict(paths)
+        jobs = [*self._background_jobs.values(), *self._background_history.values()] if jobs is None else jobs
         ambiguous = set()
-        for job in [*self._background_jobs.values(), *self._background_history.values()]:
+        for job in jobs:
             ident, path = job['session_id'], job['path']
             if ident in paths and paths[ident] != path:
                 ambiguous.add(ident)
@@ -453,35 +467,16 @@ class DesktopService:
 
     def get_state(self):
         try:
+            # Path 1: only in-memory state is read under the lock, so a slow
+            # library scan never delays stop, the microphone meter or health checks.
             with self._lock:
-                sessions = []
-                for ident, path in self._visible_session_paths().items():
-                    try:
-                        meta = recorder.read(path / 'session.json')
-                        media = meta.get('media', {})
-                        if not isinstance(media, dict):
-                            media = {}
-                        background = self._background_for(path)
-                        result = self._background_history.get(str(path))
-                        from agent_protocol import preprocessing_status
-                        from session_metadata import session_presentation
-                        sessions.append(dict(id=ident, game=meta.get('game', ''),
-                                             **session_presentation(meta),
-                                             preprocessing=preprocessing_status(path, meta),
-                                             can_review=(path / '录像.mp4').is_file() and (path / '录像.mp4').resolve().parent == path.resolve()
-                                                 and not bool(self._active and self._active.path.resolve() == path.resolve()),
-                                             created=meta.get('created', ''), state=meta.get('state', ''),
-                                             duration=media.get('duration', 0),
-                                             segments=meta.get('segments', 0),
-                                             warning=self._safe_text(meta.get('warning')),
-                                             error=self._safe_text(meta.get('error')),
-                                             path=str(path), test=bool(meta.get('test')),
-                                             in_current_vault=path.parent.parent == Path(self._cfg['vault']).resolve(),
-                                             background_job=self._job_summary(background) if background else None,
-                                             background_result=self._job_summary(result) if result else None))
-                    except (OSError, ValueError, TypeError):
-                        continue
-                sessions.sort(key=lambda item: item['created'], reverse=True)
+                vault = self._cfg['vault']
+                first_default = self._first_default_vault(vault)
+                jobs = {str(job['path']): self._job_summary(job) for job in self._background_jobs.values()}
+                job_paths = [dict(session_id=job['session_id'], path=job['path'])
+                             for job in [*self._background_jobs.values(), *self._background_history.values()]]
+                history = {key: self._job_summary(job) for key, job in self._background_history.items()}
+                active_path = self._active.path.resolve() if self._active else None
                 activity = dict(self._activity)
                 if self._active:
                     activity['active_id'] = self._active.meta['id']
@@ -492,22 +487,114 @@ class DesktopService:
                 model = {key: model.get(key) for key in ('state', 'model', 'path', 'downloaded_bytes',
                          'total_bytes', 'error', 'source', 'revision')}
                 model['error'] = self._safe_text(model.get('error'))
-                return ok(dict(config=self._public_config(), sessions=sessions, closing=self._exit_pending,
-                               updates=self._update_snapshot(model),
-                               default_vault=self._default_vault(),
-                               default_hotword_files=deepcopy(self._default_hotword_files),
-                               readiness=self._visible_readiness(),
-                               presets=self._preset_list(), active_preset_id=self._cfg.get('active_preset_id'),
-                               background_jobs=[self._job_summary(job) for job in self._background_jobs.values()],
-                               activity=activity, devices=deepcopy(self._devices), model=model,
-                               device_defaults=deepcopy(self._device_defaults),
-                               device_refresh=deepcopy(self._device_refresh),
-                               device_inventory=deepcopy(self._device_inventory),
-                               capabilities=dict(cloud_key=self._has_key(),
-                                   obs=(self.root / 'tools/obs/bin/64bit/obs64.exe').is_file(),
-                                   local_model=model['state'] == 'ready')))
+                state = dict(config=self._public_config(), closing=self._exit_pending,
+                             updates=self._update_snapshot(model),
+                             default_vault=self._default_vault(),
+                             default_hotword_files=deepcopy(self._default_hotword_files),
+                             readiness=self._visible_readiness(),
+                             presets=self._preset_list(), active_preset_id=self._cfg.get('active_preset_id'),
+                             background_jobs=list(jobs.values()),
+                             activity=activity, devices=deepcopy(self._devices), model=model,
+                             device_defaults=deepcopy(self._device_defaults),
+                             device_refresh=deepcopy(self._device_refresh),
+                             device_inventory=deepcopy(self._device_inventory))
+            from agent_protocol import list_status
+            from session_metadata import session_presentation
+            entries = self._session_entries(vault, first_default)
+            visible = self._visible_session_paths({ident: path for ident, (path, _) in entries.items()}, job_paths)
+            current_vault = Path(vault).resolve()
+            sessions, unchecked = [], set()
+            for ident, path in visible.items():
+                try:
+                    entry = entries.get(ident)
+                    meta = entry[1] if entry and entry[0] == path else recorder.read(path / 'session.json')
+                    media = meta.get('media', {})
+                    if not isinstance(media, dict):
+                        media = {}
+                    preprocessing, needs_check = list_status(path, meta, self._status_store)
+                    if needs_check:
+                        unchecked.add(str(path))
+                    video = path / '录像.mp4'
+                    sessions.append(dict(id=ident, game=meta.get('game', ''),
+                                         **session_presentation(meta),
+                                         preprocessing=preprocessing,
+                                         can_review=video.is_file() and video.resolve().parent == path
+                                             and active_path != path,
+                                         created=meta.get('created', ''), state=meta.get('state', ''),
+                                         duration=media.get('duration', 0),
+                                         segments=meta.get('segments', 0),
+                                         warning=self._safe_text(meta.get('warning')),
+                                         error=self._safe_text(meta.get('error')),
+                                         path=str(path), test=bool(meta.get('test')),
+                                         in_current_vault=path.parent.parent == current_vault,
+                                         background_job=jobs.get(str(path)),
+                                         background_result=history.get(str(path))))
+                except (OSError, ValueError, TypeError):
+                    continue
+            sessions.sort(key=lambda item: item['created'], reverse=True)
+            if unchecked:
+                self._warm_statuses([Path(item['path']) for item in sessions if item['path'] in unchecked])
+            state.update(sessions=sessions,
+                         capabilities=dict(cloud_key=self._has_key(),
+                             obs=(self.root / 'tools/obs/bin/64bit/obs64.exe').is_file(),
+                             local_model=model['state'] == 'ready'))
+            return ok(state)
         except Exception as error:
             return self._error(error)
+
+    def _warm_statuses(self, paths):
+        """Validate listed results on one background thread, newest first."""
+        with self._warm_lock:
+            for path in paths:
+                if path not in self._warm_queued:
+                    self._warm_queued.add(path)
+                    self._warm_pending.append(path)
+            if self._warm_thread is None and self._warm_pending and not self._closed.is_set():
+                self._warm_thread = threading.Thread(target=self._warm_loop, daemon=True, name='status-warmer')
+                self._warm_thread.start()
+
+    def _warm_paused(self):
+        # Path 1: startup recovery, readiness, recording start and saving keep
+        # the interpreter for OBS and input listeners; checking resumes after them.
+        with self._lock:
+            return self._active is not None or bool(self._activity.get('busy'))
+
+    def _warm_loop(self):
+        from agent_protocol import warm_status
+        checked = 0
+        try:
+            while not self._closed.is_set():
+                if self._warm_paused():
+                    self._closed.wait(.5)
+                    continue
+                with self._warm_lock:
+                    if not self._warm_pending:
+                        break
+                    path = self._warm_pending.pop(0)
+                try:
+                    warm_status(path, self._status_store)
+                except (OSError, ValueError, TypeError):
+                    # Path 5: a session moved or locked mid-check stays "checking"; the next poll queues it again.
+                    pass
+                finally:
+                    with self._warm_lock:
+                        self._warm_queued.discard(path)
+                checked += 1
+                if checked % 10 == 0:
+                    self._save_status_store()
+        finally:
+            with self._warm_lock:
+                self._warm_thread = None
+                self._warm_queued.difference_update(self._warm_pending)
+                self._warm_pending.clear()
+            self._save_status_store()
+
+    def _save_status_store(self):
+        try:
+            self._status_store.save()
+        except OSError:
+            # Path 5: an unwritable state folder only means the next launch checks again.
+            pass
 
     def _has_key(self):
         return secret_store.has_key(directory=self.root / 'state/secrets')
