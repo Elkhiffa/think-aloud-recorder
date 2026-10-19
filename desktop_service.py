@@ -1162,6 +1162,14 @@ class DesktopService:
                     # vocabulary (bundled UI/UX before any general choice was saved).
                     base['hotword_files'] = self._general_files() or deepcopy(self._default_hotword_files)
                     base['hotword_manual'] = ''
+                if 'general_hotword_files' in payload:
+                    # Only the first-use setup saves the shared list together with its first game.
+                    general_files = payload.pop('general_hotword_files')
+                    if self._cfg.get('presets'):
+                        raise ValueError('通用词库请在设置 → 通用里保存。')
+                    if not isinstance(general_files, list) or not all(isinstance(item, dict) for item in general_files):
+                        raise ValueError('通用词库格式不正确。')
+                    base['general_hotword_files'] = deepcopy(general_files)
                 if 'game_hotword_files' in payload:
                     game_files = payload.pop('game_hotword_files')
                     if not isinstance(game_files, list):

@@ -173,7 +173,9 @@ function fold(nav,more,menu){
 }
 function toggleGamesMenu(open){const menu=$('#gamesMoreMenu'),button=$('#gamesMoreButton');if(!menu||!button)return;open=open??menu.classList.contains('hidden');if(open){const r=button.getBoundingClientRect();menu.style.left=Math.round(r.left)+'px';menu.style.top=Math.round(r.bottom+4)+'px';}menu.classList.toggle('hidden',!open);button.setAttribute('aria-expanded',String(open));}
 document.addEventListener('click',event=>{if(!event.target?.closest?.('#gamesMore'))toggleGamesMenu(false);});
-window.addEventListener?.('resize',()=>{gamesSignature='';renderGames();});
+// On resize the same nodes are put back and folded again, so focus and the current tab survive.
+function unfoldGames(){const more=$('#gamesMore'),menu=$('#gamesMoreMenu');if(!more||!menu)return;toggleGamesMenu(false);for(const item of [...menu.children]){const add=item.hasAttribute('data-game-add');item.className=add?'g add':'g';item.removeAttribute('role');if(add){item.textContent='＋';more.after(item);}else{const at=id=>store.presets.findIndex(p=>p.id===id),next=[...$('#gameTabs').querySelectorAll(':scope > [data-game]')].find(tab=>at(tab.dataset.game)>at(item.dataset.game));(next||more).before(item);}}more.classList.add('hidden');}
+let gamesFrame=0;window.addEventListener?.('resize',()=>{cancelAnimationFrame(gamesFrame);gamesFrame=requestAnimationFrame(()=>{unfoldGames();fitGames();});});
 $('#gameTabs').addEventListener('click',async event=>{if(event.target.closest('#gamesMoreButton')){toggleGamesMenu();return;}const target=event.target.closest('[data-game],[data-game-add]');if(!target)return;event.preventDefault();toggleGamesMenu(false);if(target.hasAttribute('data-game-add')){openSheet('new');return;}const id=target.dataset.game;if(id===store.activeId)return;const result=await action('select_preset',[id]);if(!result.ok){gamesSignature='';renderGames();}else{lastSignature='';renderLast();}});
 const KIND_NAMES={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面'};
 const WEEKDAYS='日一二三四五六';

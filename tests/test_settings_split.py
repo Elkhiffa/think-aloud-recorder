@@ -67,6 +67,22 @@ class SettingsSplitTests(unittest.TestCase):
         self.assertTrue(result['ok'], result)
         self.assertEqual(ids(self.service._cfg['presets'][first]['hotword_files']), ['uiux'])
 
+    def test_first_setup_keeps_a_vocabulary_added_under_general_as_general(self):
+        # First-use wizard: 通用词库 sits on 设备与转写, the whole setup is saved with the first game.
+        self.service._cfg.update(presets={}, active_preset_id=None)
+        shared = [vocabulary('uiux', '弹窗'), vocabulary('team', '页签')]
+        result = self.service.save_preset({'name': '燕云十六声', 'vault': str(self.root / 'first-library'), 'hotword_files': [*shared, vocabulary('yanyun', '奇术')],
+                                           'general_hotword_files': shared})
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(ids(self.service._general_files()), ['uiux', 'team'])
+        self.assertEqual(ids(self.service._game_files(self.service._cfg)), ['yanyun'])
+
+    def test_a_game_save_cannot_replace_the_general_vocabulary_once_games_exist(self):
+        first, _ = self.make_games()
+        result = self.service.save_preset({'name': '燕云十六声', 'general_hotword_files': [vocabulary('uiux', '弹窗')]}, first)
+        self.assertFalse(result['ok'])
+        self.assertIn('通用', result['error'])
+
     def test_general_save_refuses_game_fields(self):
         self.make_games()
         result = self.service.save_general({'window': 'other-window'})

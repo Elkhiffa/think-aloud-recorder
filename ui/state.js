@@ -83,7 +83,8 @@
     syncVocabulary() { if(this.draft)this.draft.hotwords=vocabularyWords(this.draft).join('\n'); }
     addVocabularyFiles(files) { if(!this.draft)return 0;const ids=new Set(this.draft.hotword_files.map(file=>file.id));let count=0;for(const file of files||[]){if(!ids.has(file.id)){this.draft.hotword_files.push(clone(file));ids.add(file.id);count++;}}this.syncVocabulary();return count; }
     removeVocabularyFile(id) { if(this.draft){this.draft.hotword_files=this.draft.hotword_files.filter(file=>file.id!==id);this.syncVocabulary();} }
-    presetPayload() { if(!this.draft)throw new Error('没有正在编辑的预设。');return {...clone(this.draft),name:this.draft.game.trim(),game:this.draft.game.trim(),...(this.draftVocabularyRevision?{expected_vocabulary_revision:this.draftVocabularyRevision}:{}),...(this.sameVault(this.confirmedVault,this.draft.vault)?{confirmed_vault:this.confirmedVault}:{})}; }
+    // The full payload is only saved by the first-use setup, so it also carries the shared vocabulary.
+    presetPayload() { if(!this.draft)throw new Error('没有正在编辑的预设。');return {...clone(this.draft),name:this.draft.game.trim(),game:this.draft.game.trim(),general_hotword_files:clone(this.generalFiles()),...(this.draftVocabularyRevision?{expected_vocabulary_revision:this.draftVocabularyRevision}:{}),...(this.sameVault(this.confirmedVault,this.draft.vault)?{confirmed_vault:this.confirmedVault}:{})}; }
     // Settings are split: general keys are shared by every game, a game keeps its name, window, folder and vocabulary.
     get generalIds() { return new Set((this.saved.general_hotword_files||[]).map(file=>file.id).concat(this.addedGeneralIds||[])); }
     markGeneral(files) { this.addedGeneralIds=[...(this.addedGeneralIds||[]),...(files||[]).map(file=>file.id)]; }

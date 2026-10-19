@@ -52,15 +52,17 @@ button:disabled{cursor:default;opacity:.5}
 .win .close:hover{background:#c42b1c;color:#fff}
 
 /* 游戏页签：当前游戏就是页面标题 */
-.games{display:flex;align-items:baseline;gap:var(--s5);padding-top:var(--s3);min-width:0;overflow:hidden;white-space:nowrap}
+.games{display:flex;align-items:baseline;gap:var(--s5);height:60px;padding-top:var(--s3);min-width:0;overflow:hidden;white-space:nowrap}
 .g{font:var(--t4)/1 var(--serif);color:var(--faint)}
 .g:hover{color:var(--muted)}
 .g.on{font:700 var(--t6)/1 var(--serif);color:var(--ink);letter-spacing:.02em}
 .g.add{font:var(--t4)/1 var(--sans)}
 .g.lock{font:var(--t1)/1 var(--sans);color:var(--faint)}
-.games .g{flex:none}
-.games .g.on{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.games.fitting .g.on{flex:none}
+/* 折叠前的瞬间（窗口刚变窄）其他页签先让位，标题最后才缩；测量时一律按完整宽度。 */
+.games .g{flex:0 1000 auto;min-width:0;overflow:hidden}
+.games .more-toggle,.games .g.add{flex:none}
+.games .g.on{flex:0 1 auto;text-overflow:ellipsis}
+.games.fitting .g{flex:none}
 .more{display:contents}
 .more-menu{position:fixed;z-index:20;display:grid;min-width:160px;padding:var(--s1);background:var(--sheet);border:1px solid var(--rule);border-radius:var(--r);box-shadow:0 8px 24px rgb(0 0 0 / .12);app-region:no-drag}
 .more-menu .item{font:var(--t2)/32px var(--sans);padding:0 var(--s3);border-radius:var(--r);color:var(--ink);white-space:nowrap}

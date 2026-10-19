@@ -377,6 +377,15 @@ async function homeChecks(context, origin) {
       assert.deepEqual([...visible, ...folded.filter(text => !text.startsWith('＋'))], names, 'with the first game current, the tabs and then 更多 keep the game order');
       assert.ok((await p.locator('#gameTabs [data-game-add]').count()) === 1, '＋ stays reachable, as a tab or in the menu');
       await screen(p, 'home-games-more-light-720x600');
+      // Resizing unfolds and refolds the same nodes: the order holds and the title is never re-created.
+      await p.evaluate(() => { window.__title = document.querySelector('#gameTabs .g.on'); });
+      await p.setViewportSize({ width: 1900, height: 600 });
+      await p.waitForFunction(() => document.querySelector('#gamesMore').classList.contains('hidden'));
+      assert.deepEqual(await p.locator('#gameTabs > a[data-game]').allInnerTexts(), names, 'wide enough: every game is a tab again, in order');
+      await p.setViewportSize(MAIN);
+      await p.waitForFunction(() => !document.querySelector('#gamesMore').classList.contains('hidden'));
+      assert.equal(await p.evaluate(() => window.__title === document.querySelector('#gameTabs .g.on') && window.__title.isConnected), true);
+      await p.locator('#gamesMoreButton').click();
       await p.locator('#gamesMoreMenu [data-game="long-3"]').click();
       assert.deepEqual((await calls(p, 'select_preset')).at(-1).args, ['long-3']);
       assert.equal(await p.locator('#gamesMoreMenu').isVisible(), false, 'choosing a game closes the menu');
@@ -946,6 +955,7 @@ async function firstUseChecks(context, origin) {
     assert.equal(saved.args[0].game, '首次合成游戏'); assert.equal(saved.args[0].mic, 'synthetic-mic'); assert.equal(saved.args[0].transcription_provider, 'qwen');
     assert.equal(saved.args[0].confirmed_vault, 'D:\\synthetic-only\\think-aloud-database');
     assert.deepEqual(saved.args[0].hotword_files.map(file => file.id), ['bundled-uiux-browser-fixture']);
+    assert.deepEqual(saved.args[0].general_hotword_files.map(file => file.id), ['bundled-uiux-browser-fixture'], 'the first setup saves its shared vocabulary as general');
     const order = await page.evaluate(() => window.__syntheticFixture.calls.map(call => call.method).filter(name => ['save_preset', 'save_cloud_key'].includes(name)));
     assert.deepEqual(order, ['save_preset', 'save_preset', 'save_cloud_key']);
     assert.deepEqual((await calls(page, 'save_cloud_key')).at(-1).args, ['synthetic-first-key']);
