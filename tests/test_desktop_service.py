@@ -132,6 +132,20 @@ class DesktopServiceTests(unittest.TestCase):
                 release.set()
                 poll.join(5)
 
+    def test_readiness_records_stage_durations_without_settings(self):
+        """触发路径：用户 → 切回主窗口触发就绪检查 → 等待“开始录制”可点 → 本机 state/timings.jsonl 记下各阶段耗时供定位 → 不修就无法确认等待花在哪一步。"""
+        self.assertTrue(self.service._request_readiness(invalidate=True))
+        self.wait()
+        lines = (self.root / 'state/timings.jsonl').read_text(encoding='utf-8').splitlines()
+        record = json.loads(lines[-1])
+        self.assertEqual(record['kind'], 'readiness')
+        stages = [name for name, _ in record['stages']]
+        self.assertEqual(stages[0], 'queued')
+        self.assertIn('location', stages)
+        self.assertTrue(all(type(ms) is int and ms >= 0 for _, ms in record['stages']))
+        for private in (str(self.vault), 'window-id', 'mic-id', 'private-obs-password', 'Synthetic'):
+            self.assertNotIn(private, lines[-1])
+
     def fresh_shared_vault(self):
         self.service.root = self.root / 'recorder-version'
         self.service.root.mkdir()
@@ -282,7 +296,7 @@ class DesktopServiceTests(unittest.TestCase):
             stages.append(self.service.get_state()['data']['activity']['status'])
             return {'ready': True}
 
-        def start(cfg, *, progress):
+        def start(cfg, *, progress, mark=None):
             for stage in ('正在启动录像', '正在准备操作记录'):
                 progress(stage)
                 stages.append(self.service.get_state()['data']['activity']['status'])
@@ -406,7 +420,7 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertFalse(self.service.close_allowed())
 
     def test_start_lost_acknowledgement_preserves_uncertain_ownership(self):
-        def failed_start(cfg, *, progress=None):
+        def failed_start(cfg, *, progress=None, mark=None):
             self.session('new-start', state='失败', test=False, error='acknowledgement lost')
             raise ConnectionError('lost start acknowledgement')
         with patch.object(bridge.recorder.Session, 'start', side_effect=failed_start):

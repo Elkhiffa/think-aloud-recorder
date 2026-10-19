@@ -4,7 +4,7 @@ const escapeHTML=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<
 const icon=name=>`<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const store=new RecorderState.State();
 const providerNames={later:'仅保存录制',local:'在本机转成文字',qwen:'Qwen 云端转写'};
-let pollTask=null,booted=false,firstSetupHandled=false,toastTimer=null,step=1,saving=false,wizardMode='edit';
+let pollTask=null,readinessPoll=null,readinessPolls=0,booted=false,firstSetupHandled=false,toastTimer=null,step=1,saving=false,wizardMode='edit';
 let downloadDirectory=null,presetSignature='',deviceSignature='',sessionSignature='',expandedSession=null,vocabularySignature='';
 let dialogGeneration=0,connectionMessage='',lastActivitySignature='',actionContext=null;
 let deviceInventoryRequest=null;
@@ -20,7 +20,7 @@ function theme(value){document.documentElement.dataset.theme=value;$('#themeButt
 try{theme(localStorage.getItem('recorder-theme')==='dark'?'dark':'light');}catch(_){theme('light');}
 $('#themeButton').onclick=()=>theme(document.documentElement.dataset.theme==='dark'?'light':'dark');
 async function api(method,...args){if(!window.pywebview?.api?.[method])throw new Error('尚未连接记录器，请稍后重试。');const response=await window.pywebview.api[method](...args);if(!response||response.ok!==true){const error=new Error(response?.error||'操作未完成，请检查后重试。');error.code=response?.code;throw error;}return response.data;}
-function poll(){if(pollTask)return pollTask;pollTask=(async()=>{try{const snapshot=await api('get_state');store.accept(snapshot);connectionMessage='';render();return true;}catch(error){store.disconnect();connectionMessage=error.message||'连接中断，请稍后重试。';renderHome();renderControls();return false;}finally{pollTask=null;}})();return pollTask;}
+function poll(){if(pollTask)return pollTask;pollTask=(async()=>{try{const snapshot=await api('get_state');store.accept(snapshot);connectionMessage='';render();if(store.readiness.checking!==true)readinessPolls=0;else if(!readinessPoll&&readinessPolls<12){readinessPolls++;readinessPoll=setTimeout(()=>{readinessPoll=null;poll();},250);}return true;}catch(error){store.disconnect();connectionMessage=error.message||'连接中断，请稍后重试。';renderHome();renderControls();return false;}finally{pollTask=null;}})();return pollTask;}
 async function freshPoll(){if(pollTask)await pollTask;return poll();}
 async function action(method,args=[],success='',context=null){if(store.requestPending){notify('请等待当前请求完成。');return {ok:false};}store.requestPending=true;actionContext=context;renderControls();try{const data=await api(method,...args);const fresh=await freshPoll();if(success)notify(success);return {ok:true,data,fresh};}catch(error){reportError(error.message||'操作未完成。');return {ok:false};}finally{store.requestPending=false;renderControls();}}
 function reportError(message){if($('#wizard').open){wizardError(message);$('#wizardBody').scrollTop=0;}else showDialog('操作未完成','<p>'+escapeHTML(message)+'</p>');}

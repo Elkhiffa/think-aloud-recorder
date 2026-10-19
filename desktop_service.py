@@ -71,6 +71,7 @@ class DesktopService:
         self._main_foreground_probe = lambda: False
         self._main_activation_generation = 0
         self._automatic_readiness = threading.local()
+        self._timing = threading.local()
         self._job = None
         self._background_jobs = {}
         self._background_history = {}
@@ -178,13 +179,39 @@ class DesktopService:
                     inventory_id = self._begin_device_inventory(automatic=True)
             if inventory_id:
                 self._read_device_inventory(inventory_id, automatic=True)
+                self._mark('inventory')
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
             self._initialize_obs_once()
+            self._mark('obs_initialize')
             return self._update_readiness(invalidate=invalidate)
         finally:
             self._automatic_readiness.foreground_only = False
             self._automatic_readiness.generation = None
+
+    def _mark(self, name):
+        timer = getattr(self._timing, 'timer', None)
+        if timer is not None:
+            timer.mark(name)
+
+    def _record_timing(self, kind, timer, **extra):
+        """Append one line of stage durations to state/timings.jsonl for latency diagnosis."""
+        import json
+        from datetime import datetime
+        line = json.dumps(dict(at=datetime.now().astimezone().isoformat(timespec='seconds'), kind=kind, **extra, **timer.summary()),
+                          ensure_ascii=False)
+        path = self.root / 'state/timings.jsonl'
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Path 5: a long-running install keeps a bounded diagnostic file.
+            if path.is_file() and path.stat().st_size > 512 * 1024:
+                path.write_text(line + '\n', encoding='utf-8')
+            else:
+                with path.open('a', encoding='utf-8') as handle:
+                    handle.write(line + '\n')
+        except OSError:
+            # Path 5: an unwritable state folder never affects readiness or recording.
+            pass
 
     def _safe_text(self, value):
         text = str(value or '')
@@ -808,18 +835,22 @@ class DesktopService:
         client = None
         try:
             client = request(recorder.client, False, continue_if=self._automatic_probe_allowed)
+            self._mark('obs_connect')
             if request(client.get_record_status).output_active or request(client.get_stream_status).output_active:
                 return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
             if (request(client.get_profile_list).current_profile_name != 'Experience'
                     or request(client.get_scene_collection_list).current_scene_collection_name != 'Experience'):
                 return None, ('OBS_CONFIGURATION', 'OBS 当前不是记录器专用配置，请打开录制预设并重新连接录制引擎。')
+            self._mark('obs_status')
             import device_inventory
             with self._inventory_lock:
                 check()
                 result = device_inventory.devices(check=check)
+            self._mark('devices')
             if request(client.get_record_status).output_active or request(client.get_stream_status).output_active:
                 return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
             check()
+            self._mark('obs_status_again')
             return result, None
         except _ReadinessPaused as paused:
             return None, paused.args
@@ -829,6 +860,7 @@ class DesktopService:
             try:
                 if client is not None:
                     client.disconnect()
+                    self._mark('obs_disconnect')
             except Exception:
                 pass
 
@@ -878,6 +910,7 @@ class DesktopService:
                     if devices is not None:
                         if self._cache_devices(devices, expected_inventory=inventory_before_probe) is False:
                             return self._defer_readiness()
+                        self._mark('cache_devices')
                         source = 'window' if cfg.get('source') == '游戏窗口' else 'monitor'
                         for key in (source, 'mic'):
                             value = cfg.get(key)
@@ -909,6 +942,7 @@ class DesktopService:
                 capture = capture_readiness(cfg, self.root)
                 if not capture['ready']:
                     error('INPUT_CAPTURE_UNAVAILABLE', capture['error'], 1)
+                self._mark('input_capture')
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
             if provider == 'local' and not self._model.resolve_model():
@@ -919,11 +953,13 @@ class DesktopService:
                       '本机保存的云端密钥无法读取或解密，请重新填写密钥。' if exists else '已选云端转写，但尚未保存本机 API Key。', 2)
             elif provider not in ('later', 'local', 'qwen'):
                 error('TRANSCRIPTION_INVALID', '请选择有效转写方式并保存设置。', 2)
+            self._mark('transcription')
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
             if has_setup:
                 try:
                     free = self._probe_location(cfg.get('vault', ''))
+                    self._mark('location')
                     if free < 5 * 1024 ** 3:
                         error('OUTPUT_SPACE_LOW', f'保存位置剩余 {free / 1024 ** 3:.1f} GB，不足录制所需的 5 GB。', 3)
                 except Exception:
@@ -954,17 +990,23 @@ class DesktopService:
                 return False
             self._mark_readiness_checking(invalidate)
             generation = self._main_activation_generation
+            timer = recorder.StageTimer()
             def work():
+                self._timing.timer = timer
                 try:
                     with self._operation_lock:
+                        timer.mark('queued')
                         with self._lock:
                             if (self._closed.is_set() or self._exit_pending or self._active is not None
                                     or self._activity['busy'] or not self._main_is_foreground()
                                     or generation != self._main_activation_generation):
                                 self._readiness.update(ready=False, checking=False)
                                 return
-                        self._run_automatic_readiness(invalidate=invalidate, generation=generation)
+                        result = self._run_automatic_readiness(invalidate=invalidate, generation=generation)
+                        self._record_timing('readiness', timer, invalidate=invalidate, ready=bool(result and result.get('ready')),
+                                            errors=[item['code'] for item in (result or {}).get('errors', [])])
                 finally:
+                    self._timing.timer = None
                     with self._lock:
                         pending = self._readiness_pending
                         self._readiness_pending = False
@@ -1308,9 +1350,25 @@ class DesktopService:
             }
             self._progress(details.get(stage, stage), status=stage)
 
+        timer = recorder.StageTimer()
+
         def work():
+            self._timing.timer = timer
+            timer.mark('queued')
+            try:
+                started = start()
+            except Exception:
+                self._record_timing('start', timer, ok=False)
+                raise
+            finally:
+                self._timing.timer = None
+            self._record_timing('start', timer, ok=True)
+            return started
+
+        def start():
             self._progress('正在确认保存的预设、设备和保存位置。', status='正在检查录制条件')
             readiness = self._update_readiness()
+            timer.mark('readiness')
             if not readiness['ready']:
                 raise RuntimeError('\n'.join(item['message'] for item in readiness['errors']))
             selection = readiness.get('window_selection')
@@ -1319,7 +1377,7 @@ class DesktopService:
                     raise RuntimeError('录制预设已变化，请重新开始录制。')
                 cfg['window'] = selection['resolved']
             try:
-                session = recorder.Session.start(cfg, progress=progress)
+                session = recorder.Session.start(cfg, progress=progress, mark=timer.mark)
                 with self._lock:
                     self._active = session
                 self._report_recording_state(session, '录像已开始。')

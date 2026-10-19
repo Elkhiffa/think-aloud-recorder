@@ -33,6 +33,20 @@ def _check_obs_continuation(continue_if):
         if not allowed:raise ObsOperationCancelled('回到记录器窗口后自动检查录制条件。')
 
 
+class StageTimer:
+    """Per-stage monotonic durations of one operation; never settings, paths or names."""
+    def __init__(self):
+        self.started=self._last=time.perf_counter();self.stages=[]
+    def mark(self,name):
+        now=time.perf_counter();self.stages.append([name,round((now-self._last)*1000)]);self._last=now
+    def summary(self):
+        return dict(total_ms=round((time.perf_counter()-self.started)*1000),stages=list(self.stages))
+
+def _mark(mark,name):
+    if mark is not None:
+        try:mark(name)
+        except Exception:pass
+
 class _RecoveredObsProcess:
     """The exact child from a previous app run, identified by its birth time."""
     def __init__(self, process):
@@ -582,7 +596,7 @@ def fit_recording_source(r,item,preset):
     return dict(source_width=sw,source_height=sh,width=w,height=h)
 
 
-def configure_scene(r,c,test_file=None):
+def configure_scene(r,c,test_file=None,mark=None):
     ensure_idle(r)
     if r.get_profile_parameter('Output','Mode').parameter_value!='Advanced' or r.get_profile_parameter('AdvOut','RecTracks').parameter_value!='3':
         raise RuntimeError('OBS 专用配置必须录制第 1、2 两条音轨，当前配置已改变。请恢复 Experience 配置后重试。')
@@ -591,6 +605,7 @@ def configure_scene(r,c,test_file=None):
         if not r.get_input_list().inputs:break
         time.sleep(0.1)
     else:raise RuntimeError('OBS 旧录制源尚未释放，稍后重试。')
+    _mark(mark,'scene_inputs_removed')
     w,h,fps=PRESETS[c['preset']]
     r.send('SetVideoSettings',{'baseWidth':w,'baseHeight':h,'outputWidth':w,'outputHeight':h,'fpsNumerator':fps,'fpsDenominator':1})
     if test_file:
@@ -628,6 +643,7 @@ def configure_scene(r,c,test_file=None):
                 # input binding must consume exactly the value sent to OBS.
                 c['window']=resolved
             elif not any(item.get('itemEnabled') and item['itemValue']==value for item in options):raise RuntimeError(f'{name} 已不可用，请打开游戏或重新连接设备，然后在首次设置中重新选择。')
+    _mark(mark,'scene_inputs_added_and_verified')
     window_enabled=False
     for item in r.get_scene_item_list('Experience').scene_items:
         r.set_scene_item_transform('Experience',item['sceneItemId'],{'boundsType':'OBS_BOUNDS_SCALE_INNER','boundsWidth':w,'boundsHeight':h,'positionX':0,'positionY':0})
@@ -637,7 +653,9 @@ def configure_scene(r,c,test_file=None):
     if not test_file and c['source']=='游戏窗口' and not window_enabled:
         raise RuntimeError('游戏画面未能加入录制场景，已取消开始。')
     r.set_current_program_scene('Experience')
+    _mark(mark,'scene_layout')
     time.sleep(0.5)
+    _mark(mark,'scene_fixed_wait')
     expected={'测试素材'} if test_file else {'游戏画面','游戏声音','口述'}
     actual={i['inputName'] for i in r.get_input_list().inputs}
     if not expected.issubset(actual):raise RuntimeError('OBS 录制源未能就绪，已取消开始。')
@@ -645,12 +663,14 @@ def configure_scene(r,c,test_file=None):
     item=next((i for i in r.get_scene_item_list('Experience').scene_items if i.get('sourceName')==picture),None)
     if item is None:raise RuntimeError('未能取得录制画面，已取消开始。')
     geometry=fit_recording_source(r,item,c['preset'])
+    _mark(mark,'scene_source_size')
     microphone='测试素材' if test_file else '口述'
     for item in r.get_input_list().inputs:
         name=item['inputName']
         if name=='游戏画面':continue
         track_state=r.get_input_audio_tracks(name).input_audio_tracks
         if bool(track_state.get('2'))!=(name==microphone):raise RuntimeError('音轨隔离检查失败：第 2 轨只能包含选定麦克风。')
+    _mark(mark,'scene_track_check')
     return geometry
 
 def session_lock(fn):
@@ -916,7 +936,7 @@ class Session:
             # precision. Review retains explicit manual per-session alignment.
             return
     @classmethod
-    def start(cls,c,test_file=None,*,progress=None):
+    def start(cls,c,test_file=None,*,progress=None,mark=None):
         def report(stage):
             # Presentation must not change recording ownership or its clocks.
             if progress is not None:
@@ -925,10 +945,12 @@ class Session:
         c=dict(c)
         report('正在启动录像')
         with obs_connection() as r:
+            _mark(mark,'obs_connect')
             ensure_idle(r)
             vault=Path(c['vault']);vault.mkdir(parents=True,exist_ok=True)
             if shutil.disk_usage(vault).free<5*1024**3:raise RuntimeError('保存盘可用空间不足 5 GB。请清理或更换保存位置。')
-            video_geometry=configure_scene(r,c,test_file)
+            _mark(mark,'idle_and_space')
+            video_geometry=configure_scene(r,c,test_file,mark)
             ident=datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:6]
             game=re.sub(r'[<>:"/\\|?*\x00-\x1f]','_',c['game']).strip(' .')[:60] or '自由探索'
             folder=vault/'场次'/f'{ident} {game}';folder.mkdir(parents=True)
@@ -937,10 +959,12 @@ class Session:
             if isinstance(video_geometry,dict):s.update(video_geometry=video_geometry)
             try:
                 from input_capture import prepare_capture
+                _mark(mark,'session_folder')
                 s._input_capture=prepare_capture(c,folder,root=ROOT)
                 if s._input_capture is not None:
                     try:s._input_clock_events=_InputClockEvents(r)
                     except Exception:pass
+                _mark(mark,'input_prepare')
                 r.send('SetRecordDirectory',{'recordDirectory':str(folder)})
                 s.update(state='录制中',started=time.time())
                 r.start_record()
@@ -951,20 +975,24 @@ class Session:
                     if state.output_active:break
                     time.sleep(0.1)
                 else:raise RuntimeError('OBS 尚未确认录制状态，请在场次列表恢复后检查。')
+                _mark(mark,'output_active')
                 if s._input_capture is not None:
                     report('正在准备操作记录')
                     try:
                         state,before,after=s.await_input_clock(r,state,before,after)
+                        _mark(mark,'input_clock')
                         s._video_seconds=s.output_seconds(state)
                         if not s.observe_input_clock(state,before,after):
                             s.ensure_microphone_monitor(r)
                             return s
                         s._input_capture.start(origin=(before+after)/2,video_offset=s._video_seconds)
+                        _mark(mark,'input_listeners')
                         s.update(input_state='recording',input_clock={'basis':'OBS output_duration','initial_seconds':s._video_seconds,'last_verified_seconds':s._video_seconds,'uncertainty_seconds':(after-before)/2})
                     except Exception:
                         s.finish_inputs(s._video_seconds,error='操作采集启动失败或无法取得录像时钟；录像仍在继续。')
                         s.update(warning='操作采集未能启动，录像仍在继续。')
                 s.ensure_microphone_monitor(r)
+                _mark(mark,'microphone_monitor')
             except Exception as e:
                 s.close_microphone_monitor()
                 s.finish_inputs(s._video_seconds,interrupted=True,error='录制启动未确认，操作采集已停止。')

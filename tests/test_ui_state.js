@@ -196,12 +196,12 @@ function fakeDOM() {
 }
 async function settle(){for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}
 async function fixture(initial=snapshot()) {
-  const {document,elements}=fakeDOM();const calls=[];const data={snapshot:initial,inventorySequence:0,holdInventory:initial.device_inventory?.state==='idle'};
+  const {document,elements}=fakeDOM();const calls=[],timers=[];const data={snapshot:initial,inventorySequence:0,holdInventory:initial.device_inventory?.state==='idle'};
   const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='refresh_device_inventory'){if(data.inventoryHandler)return data.inventoryHandler();const id='inventory-'+(++data.inventorySequence);data.snapshot.device_inventory={id,state:data.holdInventory?'running':'succeeded',window_selection:data.snapshot.device_inventory?.window_selection||data.snapshot.readiness?.window_selection};return data.inventoryResult||{ok:true,data:{inventory_id:id}};}if(name==='refresh_devices')return data.refreshResult||{ok:true,data:{started:true,refresh_id:'refresh-1'}};if(name==='choose_directory')return {ok:true,data:{path:data.chosenDirectory||null}};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_preset'){if(data.vaultRace){data.vaultRace=false;data.snapshot.default_vault={...data.snapshot.default_vault,exists:true,is_directory:true,requires_confirmation:true};return {ok:false,code:'VAULT_REUSE_REQUIRED',error:'请确认使用已有资料库。'};}data.snapshot={...data.snapshot,config:{...args[0],configured:true},active_preset_id:args[1]||'created',presets:[{id:args[1]||'created',name:args[0].name,vault:args[0].vault}],readiness:{ready:false,checking:true,errors:[]}};return {ok:true,data:{id:args[1]||'created'}};}return {ok:true,data:{}};};}});
-  const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(){return 1;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},performance,console});
+  const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},performance,console});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/state.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/app.js'),'utf8'),context);
-  await settle();return {context,elements,calls,data,run:source=>vm.runInContext(source,context)};
+  await settle();return {context,elements,calls,timers,data,run:source=>vm.runInContext(source,context)};
 }
 
 test('actual UI opens first-use wizard; cancel does not persist or enable recording',async()=>{
@@ -687,4 +687,20 @@ test('last update failure and recovery details remain separate from idle discove
   assert.equal(f.elements.get('updateRecoveryValue').value,'synthetic recovery file');
   await f.run('poll()');assert.equal(f.elements.get('updateLastTitle').textContent,'上次更新需要恢复');
   assert.equal(f.calls.some(c=>c.name==='update_action'),false);
+});
+
+test('a running readiness check is followed closely for a bounded time, then the 1 s rhythm resumes',async()=>{
+  // 触发路径：用户 → 切回主窗口 → 后台就绪检查约 0.1 s 完成 → 界面 250 ms 后再取一次状态并启用“开始录制”，最多补 12 次 → 不修要等下一次 1 s 轮询才能开始。
+  const f=await fixture(snapshot({readiness:{ready:false,checking:true,errors:[]}}));
+  const followUps=()=>f.timers.filter(timer=>timer.ms===250);
+  assert.equal(followUps().length,1);
+  await f.run('poll()');await f.run('poll()');
+  assert.equal(followUps().length,1);
+  const before=f.calls.filter(call=>call.name==='get_state').length;
+  for(let ran=0;ran<followUps().length;ran++){followUps()[ran].fn();await settle();}
+  assert.equal(followUps().length,12);
+  assert.equal(f.calls.filter(call=>call.name==='get_state').length,before+12);
+  f.data.snapshot.readiness={ready:true,checking:false,errors:[]};await f.run('poll()');
+  f.data.snapshot.readiness={ready:false,checking:true,errors:[]};await f.run('poll()');
+  assert.equal(followUps().length,13);
 });
