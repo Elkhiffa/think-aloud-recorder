@@ -424,7 +424,7 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 :root[data-theme=dark]{--b-paper:#1b1814;--b-sheet:#221e19;--b-ink:#efe5d3;--b-muted:#ab9d87;--b-faint:#776b5b;--b-rule:#3a3229;--b-hair:#2c2620;--b-margin:#a8432f;
   --bg:var(--b-hair);--surface:var(--b-paper);--soft:var(--b-sheet);--tint:#2f2821;--ink:var(--b-ink);--heading:var(--b-ink);--muted:var(--b-muted);
   --line:var(--b-rule);--strong-line:#5a4f41;--accent:#e2593f;--inverse:#1b1814;--error:#ef7a5f;--plyr-color-main:#e2593f}
-body{font-family:"DengXian","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
+body{font-family:"Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
 h1,h2{font-family:"Noto Serif SC","Source Han Serif SC","DengXian","Microsoft YaHei UI",serif}
 
 /* 自绘标题栏：整条标题区可拖动窗口，按钮和输入框退出拖动。 */

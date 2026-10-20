@@ -14,7 +14,7 @@ const density=Array.from({length:50000},(_,i)=>point(i/1000));
 for(const scale of [12,64,240]){const bands=gapVisualBands(density,0,50,scale);assert.equal(bands.length,1);assert.ok(bands[0].end<=50);}
 const data={title:'合成缺口压力测试',game:'合成测试',test:true,desktop:false,created:'2026-09-26T12:00:00',video:'/demo.mp4',segments:[],
   inputs:{version:1,state:'complete',duration:3775,timebase:'video_seconds',intervals:[],gaps:legacy}};
-const values={TITLE:data.title,DATA:JSON.stringify(data),CSS:read('ui/review.css'),JS:read('ui/review.js'),PLYR_CSS:read('ui/vendor/plyr/plyr.css'),PLYR_JS:read('ui/vendor/plyr/plyr.min.js'),PLYR_SVG:read('ui/vendor/plyr/plyr.svg'),LICENSE:'Synthetic performance fixture'};
+const values={TITLE:data.title,DATA:JSON.stringify(data),CSS:read('ui/review.css'),JS:read('ui/review.js'),FONTS: '', PLYR_CSS:read('ui/vendor/plyr/plyr.css'),PLYR_JS:read('ui/vendor/plyr/plyr.min.js'),PLYR_SVG:read('ui/vendor/plyr/plyr.svg'),LICENSE:'Synthetic performance fixture'};
 const html=read('player.html').replace(/%%([A-Z_]+)%%/g,(_,key)=>values[key]),media=fs.readFileSync(path.join(root,'docs/prototypes/input-review/demo.mp4'));
 const server=http.createServer((req,res)=>{if(req.url==='/demo.mp4'){res.setHeader('Content-Type','video/mp4');res.end(media);}else{res.setHeader('Content-Type','text/html;charset=utf-8');res.end(html);}});
 let browser;

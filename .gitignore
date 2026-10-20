@@ -24,3 +24,4 @@ __pycache__/
 启动错误.txt
 
 *.exe
+/ui/fonts/*.ttf

@@ -34,7 +34,7 @@ const fixture = {
 };
 const values = {
   TITLE: fixture.title, DATA: JSON.stringify(fixture), CSS: read('ui/review.css'), JS: read('ui/review.js'),
-  PLYR_CSS: read('ui/vendor/plyr/plyr.css'), PLYR_JS: read('ui/vendor/plyr/plyr.min.js'),
+  FONTS: '', PLYR_CSS: read('ui/vendor/plyr/plyr.css'), PLYR_JS: read('ui/vendor/plyr/plyr.min.js'),
   PLYR_SVG: read('ui/vendor/plyr/plyr.svg'), LICENSE: 'Synthetic quote popover acceptance',
 };
 const html = read('player.html').replace(/%%([A-Z_]+)%%/g, (_, name) => values[name]);

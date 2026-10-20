@@ -42,7 +42,12 @@ class PackagingTests(unittest.TestCase):
         self.write('tools/input/provenance.json', json.dumps({'version': 'synthetic',
             'dll_sha256': sha256(self.root / 'tools/input/SDL2.dll'),
             'assets': [{'name': source.name, 'sha256': sha256(source)}]}).encode())
-        binary = self.write('runtime/Lib/think_aloud_media/ffmpeg.exe', b'MZ synthetic CLI')
+        for name in ('ui/fonts.css', 'licenses/Sarasa-Gothic-OFL.txt'):
+            self.write(name, b'fixture font support\n')
+        fonts = [self.write('ui/fonts/' + name, b'synthetic font ' + name.encode()) for name in ('SarasaUiSC-Regular.ttf', 'SarasaUiSC-Bold.ttf')]
+        self.write('tools/fonts/provenance.json', json.dumps({'version': 'synthetic', 'fonts': [
+            {'filename': font.name, 'sha256': sha256(font)} for font in fonts]}).encode())
+        binary =self.write('runtime/Lib/think_aloud_media/ffmpeg.exe', b'MZ synthetic CLI')
         media = self.write('runtime/Lib/think_aloud_media/provenance.json', json.dumps({
             'schema': 1, 'version': 'synthetic', 'executable': 'ffmpeg.exe', 'files': [
                 {'filename': 'ffmpeg.exe', 'bytes': binary.stat().st_size, 'sha256': sha256(binary)}]}).encode())
@@ -288,6 +293,15 @@ class PackagingTests(unittest.TestCase):
         self.source_manifest['files'][0]['component'] = 'unrelated'
         self.save_manifest()
         with self.assertRaisesRegex(ValueError, 'Matching SDL2 source'):
+            self.make()
+
+    def test_bundled_ui_font_must_match_its_provenance(self):
+        # Path: build after scripts/fetch_fonts.py; a replaced or missing font never ships silently.
+        self.write('ui/fonts/SarasaUiSC-Bold.ttf', b'changed font')
+        with self.assertRaisesRegex(ValueError, 'UI font differs'):
+            self.make()
+        (self.root / 'ui/fonts/SarasaUiSC-Bold.ttf').unlink()
+        with self.assertRaisesRegex(ValueError, 'SarasaUiSC-Bold.ttf'):
             self.make()
 
     def test_source_path_traversal_rejected(self):
