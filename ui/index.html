@@ -59,6 +59,7 @@
       <div class="field" data-in="game-vocab"><label>游戏词库</label><div><div class="chips" id="gameHotwordFiles"></div><button class="chip add" id="chooseGameHotwordFiles" type="button">＋ 添加</button></div><p class="hint">只用于这款游戏的转写，和通用词库合并使用。</p></div>
       <div class="field" data-in="game-manual"><label for="hotwords">补充词条</label><textarea id="hotwords" data-draft="hotword_manual" rows="2" placeholder="词库中没有的游戏专有词，每行一个"></textarea><p class="hint" id="manualWordCount"></p></div>
       <div class="field" data-in="game-vault"><label for="vault">保存位置</label><div class="input-row"><input id="vault" data-draft="vault" readonly placeholder="选择保存位置"><button class="btn" id="chooseVault" type="button">选择</button></div><div class="hint inline-between"><span id="vaultHint">每场体验分别保存，不覆盖已有录像或笔记。</span><button class="link" id="openVault" type="button" disabled title="打开当前资料库"><span id="savedLocation">打开文件夹</span></button></div><div class="vault-reuse hidden" id="reuseVaultNotice"><p id="reuseVaultMessage" role="status"></p><button class="btn" id="reuseVault" type="button">使用已有资料库</button></div></div>
+      <div class="field danger-zone" data-in="game-delete"><span class="label">删除游戏</span><div><button class="link danger" id="deleteGame" type="button">删除这个游戏</button><p class="hint">只移除软件里的设置和入口；资料文件夹默认保留。</p></div></div>
     </div>
     <div class="panel hidden" id="panelGeneral">
       <h3 class="group">录制</h3>

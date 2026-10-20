@@ -237,3 +237,9 @@ progress{width:100%;height:6px;accent-color:var(--ink)}
 *{scrollbar-width:thin;scrollbar-color:var(--rule) transparent}
 /* 设备读取：游戏页和通用页（向导的“设备与转写”）共用一行 */
 .device-bar{display:grid;gap:var(--s1);margin-bottom:var(--s4);padding:var(--s2) var(--s3);background:var(--hair);border-radius:var(--r);font-size:var(--t1);color:var(--muted)}
+/* 删除游戏：危险操作单独放在游戏页最下方，确认框里默认只删设置。 */
+.danger-zone{margin-top:var(--s5);padding-top:var(--s4);border-top:1px dashed var(--rule)}
+.link.danger{color:var(--alert)}
+.action-footer button.danger{background:var(--alert);border-color:var(--alert);color:var(--rec-ink)}
+.delete-data{display:grid;gap:var(--s2);margin-top:var(--s3)}
+.delete-data input{width:100%;height:32px;padding:0 var(--s3);border:1px solid var(--rule);border-radius:var(--r);background:var(--sheet)}

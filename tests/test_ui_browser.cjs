@@ -237,6 +237,17 @@ async function bridge(page, state = snapshot(), requestedTheme = 'light') {
         fixture.snapshot.device_inventory={id,state:fixture.holdInventory?'running':'succeeded',window_selection:fixture.snapshot.device_inventory?.window_selection||fixture.snapshot.readiness?.window_selection};
         return {ok:true,data:{inventory_id:id}};
       }
+      if (method === 'delete_preset') {
+        const preset = fixture.snapshot.presets.find(item => item.id === args[0]);
+        if (!preset) return { ok: false, error: '合成测试：这个游戏已不在设置中。' };
+        const options = args[1] || {};
+        // Slow on purpose: a second click lands while the first request is still running.
+        return new Promise(resolve => setTimeout(() => {
+          fixture.snapshot.presets = fixture.snapshot.presets.filter(item => item !== preset);
+          if (fixture.snapshot.active_preset_id === preset.id) { const next = fixture.snapshot.presets[0]; fixture.snapshot.active_preset_id = next?.id || null; if (next) fixture.snapshot.config = { ...fixture.snapshot.config, game: next.name, vault: next.vault }; }
+          resolve({ ok: true, data: { name: preset.name, vault: preset.vault, recycled: options.delete_data === true, data_error: '', active_preset_id: fixture.snapshot.active_preset_id } });
+        }, 300));
+      }
       if (method === 'select_preset') {
         const preset = fixture.snapshot.presets.find(item => item.id === args[0]);
         if (!preset) return { ok: false, error: '合成测试：预设不存在。' };
@@ -795,6 +806,35 @@ async function settingsChecks(context, origin) {
     await closeSheet(page);
   });
   await page.close();
+  await check('deleting a game: confirmation, data folder kept by default, name repeated for data, one request per double click', async () => {
+    const p = await mainPage(context, origin);
+    try {
+      await clickGame(p, '[data-game-add]'); await sheet(p).waitFor({ state: 'visible' });
+      assert.equal(await p.locator('#deleteGame').isVisible(), false, 'the setup wizards never offer deleting'); await closeSheet(p);
+      await openSettings(p, 'game');
+      assert.equal(await p.locator('#deleteGame').isVisible(), true);
+      await p.locator('#deleteGame').click(); await p.locator('#actionDialog[open]').waitFor();
+      assert.match(await p.locator('#actionTitle').innerText(), /删除游戏“示例游戏 · 合成测试”/);
+      assert.match(await p.locator('#actionBody').innerText(), /资料文件夹默认保留/);
+      assert.equal(await p.locator('#deleteData').isChecked(), false, 'deleting the data folder is off by default');
+      const button = p.locator('#actionFooter button.danger');
+      assert.equal(await button.innerText(), '删除游戏'); assert.equal(await button.isEnabled(), true);
+      await p.locator('#deleteData').check();
+      assert.equal(await button.innerText(), '删除游戏和资料'); assert.equal(await button.isDisabled(), true, 'the name must be repeated first');
+      await p.locator('#deleteConfirmName').fill('示例游戏'); assert.equal(await button.isDisabled(), true);
+      await p.locator('#deleteConfirmName').fill('示例游戏 · 合成测试'); assert.equal(await button.isEnabled(), true);
+      await screen(p, 'settings-delete-game-light-720x600');
+      await p.locator('#deleteData').uncheck(); assert.equal(await button.innerText(), '删除游戏');
+      await button.dblclick();
+      await p.waitForFunction(() => !document.querySelector('#actionDialog').open);
+      const deleted = await calls(p, 'delete_preset');
+      assert.equal(deleted.length, 1, 'a double click sends one request');
+      assert.deepEqual(deleted[0].args, ['synthetic-one', { delete_data: false, confirm_name: '' }]);
+      assert.equal(await sheet(p).isVisible(), false);
+      await p.waitForFunction(() => !document.querySelector('#gameTabs [data-game="synthetic-one"]'));
+      assert.match(await p.locator('#toast').innerText(), /资料文件夹保留在原处/);
+    } finally { await p.close(); }
+  });
   // The 录制范围 / display choice: whole-display recording keeps its display with the shared settings.
   await check('whole-display recording: the display is a shared choice in 通用 and a changed display is saved', async () => {
     const state = snapshot({ device_inventory: { id: 'synthetic-displays', state: 'succeeded' } });

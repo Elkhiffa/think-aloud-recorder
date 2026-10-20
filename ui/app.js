@@ -271,7 +271,7 @@ function renderControls(){renderHome();renderUpdates();renderUpdateBadge();const
  const requestLocked=!store.connected||store.requestPending||saving;const conflict=store.recording||!!store.activity.busy&&store.activity.kind!=='devices';const fieldsLocked=requestLocked||conflict;
  ['game','source','target','monitor','mic','preset','language','hotwords','cloudKey'].forEach(id=>$('#'+id).disabled=fieldsLocked);
  $$('[data-provider]').forEach(button=>button.disabled=fieldsLocked);renderInputRecording(fieldsLocked);
- ['chooseVault','chooseHotwordFiles','chooseGameHotwordFiles','chooseLibrary','existingModel','modelLocation','verifyCloud','reconnectEngine'].forEach(id=>$('#'+id).disabled=locked||saving);
+ ['chooseVault','chooseHotwordFiles','chooseGameHotwordFiles','chooseLibrary','deleteGame','existingModel','modelLocation','verifyCloud','reconnectEngine'].forEach(id=>$('#'+id).disabled=locked||saving);
  $('#refreshDevices').disabled=locked||saving||deviceInventory().state==='running';
  $$('[data-remove-vocabulary]').forEach(button=>button.disabled=fieldsLocked);$('#dictionaryDownload').setAttribute('aria-disabled',requestLocked?'true':'false');$('#dictionaryDownload').tabIndex=requestLocked?-1:0;$('#bailianConsole').setAttribute('aria-disabled',requestLocked?'true':'false');$('#bailianConsole').tabIndex=requestLocked?-1:0;
  ['wizardCancel','wizardBack'].forEach(id=>$('#'+id).disabled=store.requestPending||saving);$('#reuseVault').disabled=fieldsLocked||store.snapshot?.default_vault?.is_directory===false;$('#wizardNext').disabled=locked&&!sheetOpen()||store.requestPending||saving||conflict||(currentStepKey()==='vault'||sheetMode==='settings'&&sheetTab==='game')&&store.needsVaultConfirmation;
@@ -316,7 +316,7 @@ function layoutSheet(){
  else $('#wizardSteps').innerHTML=steps.map(([,label],i)=>`<span class="${i===step?'on':''}"><b>${i+1}</b>${escapeHTML(label)}</span>`).join('');
  show('deviceBar',current==='game'||current==='general');show('panelMethod',current==='method');show('panelGeneral',current==='general');show('panelGame',current==='game'||current==='vault');
  $('#panelGeneral').classList.toggle('wizard',!settings);
- $$('#panelGame [data-in]').forEach(field=>{const key=field.dataset.in;field.classList.toggle('hidden',current==='vault'?key!=='game-vault':!settings&&key==='game-vault');});
+ $$('#panelGame [data-in]').forEach(field=>{const key=field.dataset.in;field.classList.toggle('hidden',current==='vault'?key!=='game-vault':!settings&&(key==='game-vault'||key==='game-delete'));});
  $('#wizardBody').scrollTop=0;renderSheetFoot();renderUpdateBadge();
  if(current==='game')$('#game').focus({preventScroll:true});
 }
@@ -364,6 +364,36 @@ async function saveSettingsSheet(){
  }catch(error){if(error.code==='VAULT_REUSE_REQUIRED'){store.confirmedVault='';await freshPoll();renderVaultChoice();}wizardError((saved?'设置已保存。':'')+(error.message||'保存未完成，请检查后重试。'));$('#wizardBody').scrollTop=0;}
  finally{saving=false;store.requestPending=false;renderHome();renderControls();}
 }
+// Deleting a game removes its settings and entries; the data folder stays unless ticked and the name is repeated.
+let deletingGame=false,deleteSync=null;
+function confirmDeleteGame(){
+ const preset=store.presets.find(p=>p.id===store.editingId);if(!preset||!store.canConfigure||deletingGame)return;
+ const name=preset.name;
+ showDialog('删除游戏“'+name+'”？',
+  '<p>会从软件里移除这个游戏：游戏窗口、游戏词库和补充词条的设置，以及页签和资料台里的入口。</p>'+
+  '<p>资料文件夹默认保留，里面的录像、逐字稿和整理结果都不动：</p><p class="path-text">'+escapeHTML(preset.vault||'')+'</p>'+
+  '<label class="check"><input type="checkbox" id="deleteData"><span>同时把资料文件夹移到回收站</span></label>'+
+  '<div class="delete-data hidden" id="deleteDataConfirm"><p class="inline-error">文件夹里的全部场次、录像、逐字稿、整理结果和洞察报告会一起移走，可以从回收站还原。</p><label for="deleteConfirmName">输入游戏名称“'+escapeHTML(name)+'”确认</label><input id="deleteConfirmName" autocomplete="off" spellcheck="false"></div>'+
+  '<p class="inline-error hidden" id="deleteError" role="alert"></p>',
+  [{label:'删除游戏',primary:true,run:()=>deleteGame(preset)}]);
+ const button=$('#actionFooter').lastElementChild;button.classList.add('danger');$('#actionFooter').firstElementChild.textContent='取消';
+ deleteSync=()=>{const data=$('#deleteData').checked;show('deleteDataConfirm',data);button.textContent=deletingGame?'正在删除…':data?'删除游戏和资料':'删除游戏';button.disabled=deletingGame||data&&$('#deleteConfirmName').value!==name;};
+ $('#deleteData').onchange=deleteSync;$('#deleteConfirmName').oninput=deleteSync;deleteSync();
+}
+async function deleteGame(preset){
+ if(deletingGame)return false;
+ const data=$('#deleteData').checked,confirmName=data?$('#deleteConfirmName').value:'';
+ deletingGame=true;store.requestPending=true;deleteSync?.();renderControls();
+ try{
+  const result=await api('delete_preset',preset.id,{delete_data:data,confirm_name:confirmName});
+  closeSheet();await freshPoll();
+  if(result.data_error){showDialog('游戏已删除，资料文件夹没有移走','<p>'+escapeHTML(result.data_error)+'</p><p class="path-text">'+escapeHTML(result.vault)+'</p>');return false;}
+  notify(result.recycled?'已删除“'+result.name+'”，资料文件夹已移到回收站。':'已删除“'+result.name+'”，资料文件夹保留在原处。');
+  return {ok:true};
+ }catch(error){setText('deleteError',error.message||'删除未完成，请重试。');show('deleteError',true);return false;}
+ finally{deletingGame=false;store.requestPending=false;renderHome();renderControls();setTimeout(()=>deleteSync?.(),0);}
+}
+$('#deleteGame').onclick=confirmDeleteGame;
 $('#chooseLibrary').onclick=async()=>{const result=await action('choose_directory',['vault']);if(result.ok&&result.data?.path){libraryRootDraft=result.data.path;$('#libraryRoot').value=libraryRootDraft;renderSheetFoot();}};
 function fieldChanged(element){store.updateDraft(element.dataset.draft,element.value);if(element.id==='source'){deviceSignature='';renderDeviceOptions(true);renderInputRecording();}if(element.id==='mic'||element.id==='monitor')renderDeviceOptions();if(element.dataset.draft==='hotword_manual')renderVocabulary();renderSummary();}
 $$('[data-draft]').forEach(el=>el.addEventListener(el.tagName==='SELECT'?'change':'input',()=>fieldChanged(el)));

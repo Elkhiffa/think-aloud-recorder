@@ -1219,6 +1219,108 @@ class DesktopService:
             except Exception as error:
                 return self._error(error)
 
+    def delete_preset(self, id, options=None):
+        """Remove a game from the settings: its preset and its place in the tabs and the desk. Its data folder
+        stays unless options.delete_data is set and options.confirm_name repeats the game's name; the folder then
+        goes to the Recycle Bin, never a permanent delete."""
+        with self._lock:
+            try:
+                self._guard()
+            except Exception as error:
+                return self._error(error)
+        with self._operation_lock:
+            try:
+                with self._lock:
+                    self._guard()
+                    presets = self._cfg.get('presets', {})
+                    if not isinstance(id, str) or id not in presets:
+                        raise ValueError('这个游戏已不在设置中，请刷新后再试。')
+                    options = options if isinstance(options, dict) else {}
+                    delete_data = options.get('delete_data') is True
+                    preset = presets[id]
+                    name = preset.get('name') or preset.get('game') or ''
+                    vault = Path(preset['vault']).resolve() if preset.get('vault') else None
+                    if vault and any(Path(job['path']).resolve().is_relative_to(vault) for job in self._background_jobs.values()):
+                        raise ValueError('这个游戏还有场次在后台转写，完成后再删除。')
+                    if delete_data:
+                        if options.get('confirm_name') != name:
+                            raise ValueError('请输入游戏名称，确认同时删除资料文件夹。')
+                        self._check_recyclable_vault(id, vault)
+                    cfg = deepcopy(self._cfg)
+                    cfg['presets'].pop(id)
+                    if cfg.get('active_preset_id') == id:
+                        cfg['record_inputs'] = False
+                        following = next(iter(cfg['presets']), None)
+                        if following:
+                            selected = cfg['presets'][following]
+                            self._normalize_input_choice(selected)
+                            cfg.update({key: deepcopy(selected[key]) for key in PUBLIC_KEYS if key in selected})
+                            cfg['active_preset_id'] = following
+                        else:
+                            # Back to the not-yet-set-up state: no game, the proposed default folder, no sessions listed.
+                            cfg.update(active_preset_id=None, configured=False, vault=str(default_vault_path(self.root)))
+                    self._persist(cfg)
+                    self._cfg = cfg
+                    self._invalidate_device_inventory()
+                    self._readiness.update(ready=False, checking=True, checked_at=None, errors=[])
+                    self._request_readiness()
+                    self._progress('已删除游戏“' + name + '”。', status='已删除游戏')
+                    active_vault = Path(cfg['vault']).resolve() if cfg.get('active_preset_id') else None
+                follow = getattr(self, '_desk_follow', None)
+                if follow is not None:
+                    try:
+                        follow(active_vault)
+                    except Exception:
+                        pass  # An open desk failing to follow must not undo the deletion.
+                result = dict(name=name, vault=str(vault or ''), recycled=False, data_error='',
+                              active_preset_id=self._cfg.get('active_preset_id'))
+                if delete_data and vault and vault.exists():
+                    # Outside the snapshot lock: a large folder takes a while and polling continues.
+                    try:
+                        self._recycle(vault)
+                        result['recycled'] = True
+                    except Exception as error:
+                        result['data_error'] = self._safe_text(str(error) or '未能移到回收站。')
+                return ok(result)
+            except Exception as error:
+                return self._error(error)
+
+    def _check_recyclable_vault(self, ident, vault):
+        """Only a folder that belongs to this game alone may go to the Recycle Bin."""
+        if vault is None or not vault.is_dir():
+            raise ValueError('资料文件夹不存在，只能删除设置。')
+        if vault == Path(vault.anchor):
+            raise ValueError('资料文件夹是磁盘根目录，不能整体删除，只能删除设置。')
+        protected = [installation_root(self.root).resolve(), self.root.resolve()]
+        if self._cfg.get('library_root'):
+            protected.append(Path(self._cfg['library_root']).resolve())
+        if any(path == vault or path.is_relative_to(vault) for path in protected):
+            raise ValueError('这个文件夹包含软件本身或资料总库，不能整体删除，只能删除设置。')
+        for other, preset in self._cfg.get('presets', {}).items():
+            if other == ident or not preset.get('vault'):
+                continue
+            shared = Path(preset['vault']).resolve()
+            if shared == vault or shared.is_relative_to(vault) or vault.is_relative_to(shared):
+                raise ValueError('另一个游戏“' + (preset.get('name') or '') + '”也在使用这个资料文件夹，只能删除设置。')
+
+    @staticmethod
+    def _recycle(path):
+        """Move a folder to the Recycle Bin. Windows asks first if anything would be deleted permanently."""
+        import ctypes
+        from ctypes import wintypes
+
+        class FileOperation(ctypes.Structure):
+            _fields_ = [('hwnd', wintypes.HWND), ('wFunc', wintypes.UINT), ('pFrom', wintypes.LPCWSTR),
+                        ('pTo', wintypes.LPCWSTR), ('fFlags', ctypes.c_ushort), ('fAnyOperationsAborted', wintypes.BOOL),
+                        ('hNameMappings', ctypes.c_void_p), ('lpszProgressTitle', wintypes.LPCWSTR)]
+        FO_DELETE, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_WANTNUKEWARNING = 3, 0x10, 0x40, 0x4000
+        # pFrom is a double-null-terminated list; ctypes adds the second terminator.
+        operation = FileOperation(None, FO_DELETE, str(path) + '\0', None,
+                                  FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_WANTNUKEWARNING, False, None, None)
+        code = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(operation))
+        if code or operation.fAnyOperationsAborted or Path(path).exists():
+            raise OSError('资料文件夹没有移到回收站（代码 %s），仍在原处。' % code)
+
     def refresh_devices(self):
         refresh_id = uuid.uuid4().hex
         def work():

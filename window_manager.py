@@ -424,6 +424,9 @@ class WindowManager:
         if desk is None:
             return
         window, api, _ = desk
+        if vault is None:
+            window.destroy()  # the last game was deleted: there is no library to show
+            return
         if api.vault != Path(vault).resolve():
             api.rebind(vault)
             window.evaluate_js('location.reload()')

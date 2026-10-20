@@ -21,6 +21,7 @@ EXPECTED_EXPORTS = {
     'save_preset': ['payload', 'preset_id'],
     'save_general': ['payload'],
     'select_preset': ['id'],
+    'delete_preset': ['id', 'options'],
     'choose_directory': ['kind'],
     'import_hotwords': ['current_text'],
     'choose_hotword_files': [],
