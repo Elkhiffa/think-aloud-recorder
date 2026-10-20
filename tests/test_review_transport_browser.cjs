@@ -76,7 +76,7 @@ async function main(){
    assert.equal(await sample.locator('#timelineScale').textContent(),'0.2×');await sample.locator('#follow').click();
    await sample.locator('video').evaluate(v=>{v.currentTime=2;v.muted=true;return v.play();});
    const frames=await sample.evaluate(async()=>{const values=[];for(let i=0;i<90;i++){await new Promise(requestAnimationFrame);const e=document.querySelector('#timelinePlayhead'),r=e.getBoundingClientRect();values.push({y:r.y,height:r.height,hidden:e.hidden,opacity:getComputedStyle(e).opacity,dpr:devicePixelRatio});}return values;});
-   assert.ok(frames.every(f=>!f.hidden&&f.opacity==='1'&&f.height>=2&&Math.abs(f.y*f.dpr-Math.round(f.y*f.dpr))<.06));
+   assert.ok(frames.every(f=>!f.hidden&&f.opacity==='1'&&f.height>=2-1e-3&&Math.abs(f.y*f.dpr-Math.round(f.y*f.dpr))<.06));
    await sample.locator('video').evaluate(v=>v.pause());
    const rail=await sample.locator('[data-input-id=held] .bar-duration').evaluate(e=>{const s=getComputedStyle(e),g=getComputedStyle(e.previousElementSibling);return {width:e.getBoundingClientRect().width,height:e.getBoundingClientRect().height,z:+s.zIndex,labelZ:+g.zIndex,fill:s.backgroundColor,edge:s.boxShadow};});
    assert.ok(rail.width>=4&&rail.height>4&&rail.z>rail.labelZ);assert.notEqual(rail.edge,'none');

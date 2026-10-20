@@ -300,7 +300,7 @@ function openSheet(mode='settings',tab='game'){
  if(mode==='new'&&store.presets.length){for(const key of RecorderState.GENERAL_KEYS)if(store.saved[key]!==undefined)store.draft[key]=JSON.parse(JSON.stringify(store.saved[key]));store.draft.hotword_files=JSON.parse(JSON.stringify(store.saved.general_hotword_files||[]));store.draft.hotword_manual='';store.draft.vault='';store.syncVocabulary();}
  step=0;deviceSignature='';vocabularySignature='';downloadDirectory=null;wizardError();$('#cloudKey').value='';
  setText('cloudFeedback','新密钥在保存设置时保存，取消时清空。');setText('downloadDestination','下载到软件所在文件夹。下载可暂停，关闭设置后会继续。');
- fillFields();$('#games').innerHTML=store.presets.map(p=>`<option value="${escapeHTML(p.name)}"></option>`).join('');
+ fillFields();
  store.snapshotBaseline();
  $('#sheet').classList.remove('hidden');$('#settingsButton').classList.add('on');
  layoutSheet();renderDeviceOptions(true);renderResources();renderVocabulary();renderVaultChoice();renderControls();

@@ -439,3 +439,29 @@ h1,h2{font-family:"Noto Serif SC","Source Han Serif SC","DengXian","Microsoft Ya
 .timeline-gap.preparation span{font-size:10px}
 
 *{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+/* ---- 线规则 B（2026-10-20）：大段落分界只留一条淡发丝线；逐行的线去掉；可交互的面板和卡片只留底色。 ---- */
+.experience-event,.event-related{border-top:0}
+.line{border-bottom:0}
+.speaker-choice{border-top:0}
+.event-dialog header{border-bottom:0}.event-dialog footer{border-top:0}
+.current-quote-panel,.review-companion .input-panel,.input-panel{border-color:transparent;background:var(--soft)}
+/* ---- 字体角色（2026-10-20）：回看的界面文字只用 标题 宋20粗 · 阅读 黑16 · 正文 黑14 · 强调 黑14粗 · 注释 黑12；
+   键帽、手柄图示、时间轴刻度这些图示里的字按格子定字号，只统一字体。 ---- */
+body,#search,#empty,.session-info,.review-session .session-content,.file-toolbar button,.rename-form button,.event-context,.event-footnote,.event-evidence,
+.speaker-reason,.speaker-choice small,.quote-popover p,.playback-popup button,.speaker-current,.video-slot .plyr__controls,.event-dialog #eventEditError,
+.alignment-heading{font-size:14px}
+h1,.review-header h1,.event-dialog h2{font:700 20px/1.4 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif}
+h2,.input-heading h2,.current-quote-heading h2,.review-companion .input-heading h2{font:700 14px/1.5 "Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
+.experience-events h3,.speaker-choice strong,.event-issue strong,.event-edit-body label{font-size:14px;font-weight:700}
+.review-tabs button,.review-companion .review-tabs button{font-size:14px;font-weight:400}
+.review-tabs button[aria-selected=true]{font-weight:700}
+.line,.event-evidence-row .event-quote,#currentQuoteText{font-size:16px}
+.line time,#lineCount,#follow,.review-companion #follow,#status,#testLabel,.event-coverage,.event-meta,.experience-events .event-basis,.experience-events .event-notes,
+.event-question small,.event-reference,.speaker-summary,.speaker-tag,.input-modes button,.review-companion .input-modes button,.input-meta,.review-companion .input-meta,
+.current-item,.review-companion .current-item,.input-state,.review-companion .input-state,.timeline-column-headings,
+.timeline-footer,.quote-popover-heading,.input-heading::after,.input-detail,.input-detail time,.input-detail>span,.session-meta-row .copy-split>button,.alignment-panel,
+.alignment-actions button,.timeline-return,.event-edit-hint,.video-slot .playback-speed,.speaker-chip,#currentQuoteTime,.current-quote-body .speaker-tag,
+.video-slot .plyr__controls>.plyr__time--current,.video-slot .plyr__controls>.plyr__time--duration{font-size:12px;font-weight:400}
+.line time,.input-detail time,#currentQuoteTime,.video-slot .plyr__time{font-variant-numeric:tabular-nums}
+#currentQuoteLabel,.current-quote-panel.is-previous #currentQuoteLabel{font:700 14px/1.5 "Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
+.keycap,.controller text,.mouse-motion,.time-tick time,.timeline-playhead time,.quote-bar,.timeline-gap,.bar-glyph,.hold-label,#inputScope,.timeline-window-label>span{font-family:"Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}

@@ -164,3 +164,23 @@ h1,h2{font-family:"Noto Serif SC","Source Han Serif SC","DengXian","Microsoft Ya
 
 /* 深色跟随共用的外观设置（主窗口设置 → 通用 → 外观）。 */
 :root[data-theme=dark]{color-scheme:dark}
+/* ---- 线规则 B（2026-10-20）：大段落分界只留一条淡发丝线；逐行的线去掉；可交互的面板和卡片只留底色。 ---- */
+.topbar{border-bottom-color:var(--rule)}
+.left-col{border-right:0}
+.pane.evidence,.pane.library,.pane.feedback{background:var(--b-sheet)}
+.card,.card.counter{border-color:transparent}
+.evidence-head{border-bottom:0;background:var(--b-sheet)}
+.next-bar{background:var(--b-sheet)}
+.feedback-item{border-top:0}
+/* ---- 字体角色（2026-10-20）：洞察只用 标题 宋20粗 · 阅读 黑16 · 阅读加粗 黑16粗 · 注释 黑12（资料台标题另算大标题）。 ---- */
+body{font-size:16px}
+.topbar h1,.report h1,.report h2{font:700 20px/1.45 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif}
+.report h3,.report h4{font-size:16px;font-weight:700}
+.tabs [aria-selected=true]{font-weight:400}
+.report table,.next.level-2,.group>.row>.toggle,.hits li,.feedback-form textarea,.tag-name,.menu button{font-size:16px}
+.level-2>.row>.toggle,.tag-name,.feedback-target a{font-size:16px;font-weight:400}
+.level-1>.row>.toggle,.next.level-1,.card-title,.lib-toggle{font-size:16px;font-weight:700}
+.status,.kind-bar .kind-chip,.kind-chip,.next .n,.toggle .n,.code,.badge,.kind,.aside,.jump,.reason,.feedback-target,.feedback-resolution,
+.filter-bar,.filter-bar .hint,.filter-chip,.filter-clear,.lib-toggle::before,.lib-toggle .n,.tag-meta .n{font-size:12px;font-weight:400}
+.subhead{font-size:12px;font-weight:400;color:var(--muted)}
+.topbar button,.topbar select,#expandAll,#collapseAll{font-size:16px}
