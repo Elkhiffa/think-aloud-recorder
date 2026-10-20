@@ -5,7 +5,7 @@ const icon=name=>`<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const store=new RecorderState.State();
 const providerNames={later:'仅保存录制',local:'在本机转成文字',qwen:'Qwen 云端转写'};
 let pollTask=null,booted=false,firstSetupHandled=false,toastTimer=null,step=0,saving=false,wizardMode='edit',sheetMode=null,sheetTab='game';
-let libraryRootDraft=null,gamesSignature='',lastSignature='';
+let libraryRootDraft=null,gamesSignature='',lastSignature='',currentBlockers=[];
 let downloadDirectory=null,presetSignature='',deviceSignature='',sessionSignature='',expandedSession=null,vocabularySignature='';
 let dialogGeneration=0,connectionMessage='',lastActivitySignature='',actionContext=null;
 let deviceInventoryRequest=null;
@@ -141,9 +141,12 @@ function renderHome(){
  setText('homeStatus',blockers.length?'':label);
  $('#homeStatus').className='capture-label'+(recording?' recording':!closing&&!checking&&!store.requestPending&&r.ready&&store.connected?' ready':'');
  $('#homeStatus').classList.toggle('microphone-warning',recording&&microphoneWarning);
- setText('blockers',blockers.join('\n'));show('homeStatus',!blockers.length&&!!label);show('blockers',!!blockers.length);
+ // One reason at a time, two lines at most; every reason stays one click away.
+ currentBlockers=blockers;setText('blockers',blockers[0]||'');show('homeStatus',!blockers.length&&!!label);show('blockers',!!blockers.length);
  show('alertActions',alerting&&store.connected);show('alertSettings',alerting&&store.connected);
- show('statusSlot',!!label||!!blockers.length);$('#statusSlot').tabIndex=alerting?0:-1;if(!alerting)$('#statusSlot').scrollTop=0;
+ show('statusSlot',!!label||!!blockers.length);
+ const clipped=$('#blockers').scrollHeight>$('#blockers').clientHeight+1;
+ setText('alertMore',blockers.length>1?`全部 ${blockers.length} 项`:'查看全文');show('alertMore',alerting&&(blockers.length>1||clipped));
  setText('recordButtonText',button);$('#recordButton').classList.toggle('stopping',recording);
  show('jobDetail',cancelPending||closing||foreground&&!!a.detail);
  setText('jobDetail',cancelPending?'更新助手尚未确认取消，请在设置的“版本与更新”里重试取消。':closing?'正在保存并等待现有整理完成，完成后此窗口会自动关闭。':foreground?a.detail:'');
@@ -279,6 +282,7 @@ $('#methodLink').onclick=()=>showDialog('让想法跟上体验',$('#methodConten
 $('#recordButton').onclick=()=>{if(store.recording)action('stop_recording');else if(store.canStart)action('start_recording',[store.startPayload()]);};
 $('#openVault').onclick=()=>action('open_folder');
 $('#settingsButton').onclick=()=>{if(sheetOpen())return;openSheet(store.presets.length?'settings':'first','game');};
+$('#alertMore').onclick=()=>showDialog('录制条件尚未满足','<ol class="alert-list">'+currentBlockers.map(message=>'<li>'+escapeHTML(message)+'</li>').join('')+'</ol>');
 $('#alertRecheck').onclick=()=>{if(store.canConfigure)action('refresh_devices');};
 $('#alertSettings').onclick=()=>{const codes=(store.readiness.errors||[]).map(e=>String(e.code||''));openSheet(store.presets.length?'settings':'first',codes.some(code=>/MIC|MICROPHONE|AUDIO/.test(code))?'general':'game');};
 // ---- Settings page and wizards share one sheet and one set of fields ----

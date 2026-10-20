@@ -439,6 +439,7 @@ async function homeChecks(context, origin) {
           { name: 'one-line', readiness: { ready: false, checking: false, errors: [{ message: '麦克风未连接。' }] } },
           { name: 'two-lines', readiness: { ready: false, checking: false, errors: [{ message: '已选云端转写，但尚未保存本机 API Key。' }, { message: '保存位置当前不可写，请检查目录。' }] } },
           { name: 'many-lines', readiness: { ready: false, checking: false, errors: ['设置的游戏窗口尚未打开。', '所选麦克风未连接，请检查连接。', '尚未保存本机 API Key。', '保存位置当前不可写，请检查目录。', '这些内容全部来自合成测试。'].map(message => ({ message })) } },
+          { name: 'one-long', readiness: { ready: false, checking: false, errors: [{ message: '录制引擎文件缺失，请恢复完整应用文件夹；这一条合成原因故意写得很长，用来确认放不下两行时会收起并提供查看全文，而不是在提示块里滚动或把下面的内容挤下去。' }] } },
           { name: 'checking', readiness: { ready: false, checking: true, errors: [] } },
           { name: 'ready-again', readiness: snapshot().readiness },
         ];
@@ -447,7 +448,7 @@ async function homeChecks(context, origin) {
           for (const state of states) {
             await patchSnapshot(page, { readiness: state.readiness });
             await page.waitForFunction(state => {
-              const expected = state.readiness.errors.map(item => item.message).join('\n');
+              const expected = state.readiness.errors[0]?.message || '';
               return document.querySelector('#blockers').textContent === expected &&
                 document.querySelector('#recordButton').disabled === !state.readiness.ready &&
                 (!state.readiness.checking || document.querySelector('#homeStatus').textContent === '正在检查录制条件');
@@ -457,15 +458,16 @@ async function homeChecks(context, origin) {
             if (state.name === 'many-lines') await screen(page, `home-errors-${requestedTheme}-${viewport.width}x${viewport.height}`);
             // Design (第三轮): the alert sits beside the greyed button and the first section keeps its height.
             for (const selector of selectors) for (const key of ['x', 'y', 'width', 'height']) closeEnough(current[selector][key], baseline[selector][key], `${state.name} ${selector}.${key}`);
-            if (state.name === 'many-lines') {
-              const slot = await page.locator('#statusSlot').evaluate(node => ({ full: node.scrollHeight, visible: node.clientHeight, tabindex: node.getAttribute('tabindex') }));
-              if (slot.full > slot.visible + 1) {
-                assert.equal(slot.tabindex, '0', 'overflowing details are keyboard reachable');
-                await unchangedBounds(page, '#recordButton', async () => { await page.locator('#statusSlot').evaluate(node => { node.scrollTop = node.scrollHeight; }); });
-                assert.ok(await page.locator('#statusSlot').evaluate(node => node.scrollTop > 0), 'all long errors remain available in internal scrolling');
-                await page.locator('#statusSlot').evaluate(node => { node.scrollTop = 0; });
-              }
-            }
+            if (state.readiness.errors.length > 1 || state.name === 'one-long') {
+              // The alert never scrolls: one reason in at most two lines, the rest behind one click.
+              assert.ok(await page.locator('#statusSlot').evaluate(node => node.scrollHeight <= node.clientHeight + 1 && getComputedStyle(node).overflowY !== 'auto'), 'the alert does not scroll');
+              assert.ok(await page.locator('#blockers').evaluate(node => node.getBoundingClientRect().height <= 41), 'one reason in at most two lines');
+              const errors = state.readiness.errors.map(item => item.message);
+              assert.equal(await page.locator('#alertMore').innerText(), errors.length > 1 ? `全部 ${errors.length} 项` : '查看全文');
+              await page.locator('#alertMore').click(); await page.locator('#actionDialog[open]').waitFor();
+              assert.deepEqual(await page.locator('#actionBody .alert-list li').allInnerTexts(), errors, 'every reason is listed in full');
+              await page.locator('#actionFooter button').first().click();
+            } else assert.equal(await page.locator('#alertMore').isVisible(), false, `${state.name}: nothing more to show`);
           }
           return measured;
         } catch (error) { error.message += `\nmeasured: ${JSON.stringify(measured.map(m => ({ state: m.state, capturePanel: m.bounds['#capturePanel'], lastSection: m.bounds['#lastSection'] })))}`; throw error; }

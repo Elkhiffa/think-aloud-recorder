@@ -88,9 +88,11 @@ button:disabled{cursor:default;opacity:.5}
 .microphone-warning{color:var(--warn)}
 /* 异常：醒目，只说一件事，与灰掉的录制键并排 */
 .s1.alerting .capture-main{align-items:stretch}
-.s1.alerting .status-slot{flex:1;display:grid;grid-template-columns:1fr auto;column-gap:var(--s4);align-items:start;height:56px;overflow-y:auto;padding:var(--s2) var(--s3) var(--s2) var(--s4);border-left:4px solid var(--alert);background:var(--alert-bg);border-radius:var(--r);scrollbar-width:thin}
-.blockers{font:700 var(--t2)/20px var(--sans);color:var(--alert);white-space:pre-line;min-width:0}
-.alert-actions{display:flex;gap:var(--s3);align-items:center;position:sticky;top:0}
+/* 只说一件事：首条原因最多两行，同高于录制键、不滚动；其余原因在“全部 N 项”里。 */
+.s1.alerting .status-slot{flex:1;display:grid;grid-template-columns:1fr auto;column-gap:var(--s4);align-items:center;height:56px;overflow:hidden;padding:var(--s2) var(--s3) var(--s2) var(--s4);border-left:4px solid var(--alert);background:var(--alert-bg);border-radius:var(--r)}
+.blockers{font:700 var(--t2)/20px var(--sans);color:var(--alert);min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.alert-actions{display:flex;gap:var(--s3);align-items:center}
+.alert-list{display:grid;gap:var(--s2);padding-left:var(--s5)}
 .job-detail{margin-top:var(--s3);color:var(--muted);font-size:var(--t1)}
 /* 录制中 */
 .live-clock .timer{font:var(--t6)/1 var(--mono)}

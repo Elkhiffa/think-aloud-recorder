@@ -497,7 +497,12 @@ test('readiness and specific blockers replace each other in the same live status
   assert.equal(f.elements.get('homeStatus').classList.contains('hidden'),true);
   assert.equal(f.elements.get('homeStatus').textContent,'');
   assert.equal(f.elements.get('blockers').classList.contains('hidden'),false);
-  assert.equal(f.elements.get('blockers').textContent,'未找到游戏窗口，请先打开游戏。\n云端密钥缺失，请重新配置。');
+  // One reason at a time in the alert; the full list is one click away and never scrolls inside the alert.
+  assert.equal(f.elements.get('blockers').textContent,'未找到游戏窗口，请先打开游戏。');
+  assert.equal(f.elements.get('alertMore').classList.contains('hidden'),false);
+  assert.equal(f.elements.get('alertMore').textContent,'全部 2 项');
+  f.elements.get('alertMore').onclick();
+  assert.match(f.elements.get('actionBody').innerHTML,/未找到游戏窗口，请先打开游戏。<\/li><li>云端密钥缺失，请重新配置。/);
   assert.equal(f.elements.get('capturePanel').classList.contains('alerting'),true);
   f.data.snapshot.readiness={ready:true,checking:false,errors:[]};await f.run('poll()');
   assert.equal(f.elements.get('recordButton').disabled,false);
