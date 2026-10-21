@@ -365,7 +365,7 @@
     }
     $('report').innerHTML=markdown(state.report.text);
     const missing=state.report.citations.filter(row=>!row.resolved).length;
-    if(missing)status(`报告里有 ${missing} 条引用在资料库中找不到，已用虚线标出。`,true);
+    if(missing)status(`报告里有 ${missing} 条引用在资料库中找不到，已标为“找不到”。`,true);
   }
 
   function clearFilters(){state.filters.kinds.clear();state.filters.tags.clear();state.filters.session=null;state.filters.sessionLabel='';applyFilters();}

@@ -148,34 +148,105 @@ select,input{border:1px solid var(--line);border-radius:4px;padding:4px 8px;back
   .card{grid-template-columns:minmax(0,1fr)}
 }
 
-/* ---- 方向 B：与主窗口、资料台共用的配色、字体和圆角（覆盖上面的旧值） ---- */
-:root{--b-paper:#f3ede1;--b-sheet:#f8f4ec;--b-ink:#211b14;--b-muted:#6e6252;--b-faint:#a3967f;--b-rule:#d9cdb8;--b-hair:#e6dccb;--b-margin:#c5402a;
-  --bg:var(--b-hair);--surface:var(--b-paper);--soft:var(--b-sheet);--tint:#efe3d3;--ink:var(--b-ink);--heading:var(--b-ink);--muted:var(--b-muted);
-  --line:var(--b-rule);--strong-line:#b9aa92;--accent:var(--b-margin);--inverse:#fff8f0;--error:#b3301c;--fill1:#ece4d6;--fill2:var(--b-sheet);--fill3:#faf7f1;--desc:var(--b-muted);--counter:#5b7a48;--counter-bg:#e5ebdc;--mark:#f6e2b8}
-body{font-family:"Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
-/* 长段正文（报告、议题说明）：16 号、墨色。 */
-.report{font-size:16px;line-height:1.8}
-.desc{font-size:16px;line-height:1.75;color:var(--ink)}
-h1,h2{font-family:"Noto Serif SC","Source Han Serif SC","DengXian","Microsoft YaHei UI",serif}
-
-/* 深色跟随共用的外观设置（主窗口设置 → 通用 → 外观）。 */
-/* ---- 线规则 B（2026-10-20）：大段落分界只留一条淡发丝线；逐行的线去掉；可交互的面板和卡片只留底色。 ---- */
-.topbar{border-bottom-color:var(--rule)}
-.left-col{border-right:0}
-.pane.evidence,.pane.library,.pane.feedback{background:var(--b-sheet)}
-.card,.card.counter{border-color:transparent}
-.evidence-head{border-bottom:0;background:var(--b-sheet)}
-.next-bar{background:var(--b-sheet)}
-.feedback-item{border-top:0}
-/* ---- 字体角色（2026-10-20）：洞察只用 标题 宋20粗 · 阅读 黑16 · 阅读加粗 黑16粗 · 注释 黑12（资料台标题另算大标题）。 ---- */
-body{font-size:16px}
-.topbar h1,.report h1,.report h2{font:700 20px/1.45 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif}
-.report h3,.report h4{font-size:16px;font-weight:700}
-.tabs [aria-selected=true]{font-weight:400}
-.report table,.next.level-2,.group>.row>.toggle,.hits li,.feedback-form textarea,.tag-name,.menu button{font-size:16px}
-.level-2>.row>.toggle,.tag-name,.feedback-target a{font-size:16px;font-weight:400}
-.level-1>.row>.toggle,.next.level-1,.card-title,.lib-toggle{font-size:16px;font-weight:700}
-.status,.kind-bar .kind-chip,.kind-chip,.next .n,.toggle .n,.code,.badge,.kind,.aside,.jump,.reason,.feedback-target,.feedback-resolution,
-.filter-bar,.filter-bar .hint,.filter-chip,.filter-clear,.lib-toggle::before,.lib-toggle .n,.tag-meta .n{font-size:12px;font-weight:400}
-.subhead{font-size:12px;font-weight:400;color:var(--muted)}
-.topbar button,.topbar select,#expandAll,#collapseAll{font-size:16px}
+/* ---- 第四轮（2026-10-21，见 docs/plans/2026-10-19-redesign.md）：与主窗口、资料台同一套纸色、名字和尺度，覆盖上面的旧值。
+   字体角色：标题 宋体 22 粗（报告大标题）· 小标题 黑体 14 粗 · 正文 黑体 14 · 注释 黑体 12。
+   红色只给录制和回看播放头：这里的强调一律用墨色，出错和找不到的引用用警示色。可交互的东西只用底色，不加描边。 ---- */
+:root{--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--r-sm:6px;--r:8px;--r-md:12px;--r-lg:16px;
+  --paper:#F8F5EF;--sheet:#FFFDF9;--fill:#EEE8DC;--fill2:#E3DACB;--ink:#221E19;--muted:#5F574B;--faint:#978D7E;--rule:#DDD5C6;
+  --warn:#7A4A12;--warn-bg:#F5E3CB;--counter:#4E6B3E;--counter-bg:#E6ECDD;--mark:#F6E2B8;
+  --k-confusion:#3F5D8C;--k-obstacle:#A3532B;--k-cost:#A8861C;--k-negative:#7C4B78;--k-other:#D8CFBF;
+  --bg:var(--fill);--surface:var(--paper);--soft:var(--fill);--tint:var(--fill2);--heading:var(--ink);--desc:var(--muted);
+  --line:var(--rule);--strong-line:var(--fill2);--accent:var(--ink);--error:var(--warn)}
+body{font:400 14px/1.65 "Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
+button,select,input{border:0;border-radius:var(--r);background:var(--fill);color:var(--ink)}
+button{height:32px;padding:0 var(--s4)}
+button:hover{background:var(--fill2);border-color:transparent}
+select{height:32px;padding:0 var(--s2)}
+button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible,.pane:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+/* 顶栏：左栏“报告 | 界面库”、报告选择、刷新、右栏“证据 | 反馈”；两组页签是分段控件 */
+.topbar{border-bottom:0;background:var(--paper);gap:var(--s2) var(--s3);padding:var(--s1) var(--s4) var(--s3)}
+.topbar h1{font:700 22px/1.35 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif}
+.tabs{gap:var(--s1);padding:var(--s1);border-radius:var(--r);background:var(--fill)}
+.tabs button{height:24px;padding:0 var(--s2);border-radius:var(--r-sm);background:none;color:var(--muted)}
+.tabs button:hover{background:none;color:var(--ink)}
+.tabs [aria-selected=true]{background:var(--sheet);color:var(--ink);font-weight:400;box-shadow:0 1px 2px rgb(60 40 20 / .08)}
+.count{color:inherit}
+.status{font-size:12px;color:var(--muted)}
+.status.error{color:var(--warn)}
+/* 左边的报告直接在窗口纸色上读；右边的证据、界面库、反馈放在一块纸面上 */
+.split{gap:var(--s4);padding:0 var(--s4) var(--s4)}
+.left-col{border:0}
+.pane{padding:var(--s4) var(--s5) 40px}
+.pane.evidence,.pane.feedback{border-radius:var(--r-lg);background:var(--sheet)}
+.pane.library{border-radius:var(--r-lg);background:var(--sheet)}
+.report{font-size:14px;line-height:1.85}
+.report p,.report li{max-width:44em}
+.report h1{font:700 22px/1.35 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif;margin:0 0 var(--s3)}
+.report h2,.report h3,.report h4{font:700 14px/1.55 "Sarasa UI SC","Microsoft YaHei UI",sans-serif;margin:var(--s5) 0 var(--s1)}
+.report table{font-size:14px}
+.report th,.report td{border:0;border-bottom:1px solid var(--rule)}
+.report blockquote{border-left:2px solid var(--fill2)}
+.report code{background:var(--fill);border-radius:var(--r-sm)}
+/* 引用：小号、底色标签；找不到的引用用警示色并写明“找不到”，不用删除线 */
+.cite{font-size:12px;line-height:1;padding:2px 6px;border-radius:var(--r-sm);background:var(--fill);color:var(--muted);vertical-align:1px}
+.cite:hover,.cite:focus-visible{background:var(--ink);color:var(--sheet)}
+.cite.unresolved{text-decoration:none;background:var(--warn-bg);color:var(--warn)}
+.cite.unresolved::after{content:" · 找不到"}
+.cite.unresolved:hover{background:var(--warn-bg);color:var(--warn)}
+/* 证据树：议题行是可点的底色块，越深的层级底色越浅；说明和证据卡在纸面上 */
+.evidence-head{top:-16px;margin:-16px -24px var(--s3);background:var(--sheet);border:0}
+.tree-bar{padding:var(--s4) var(--s5) var(--s2);gap:var(--s2)}
+.tree-bar>button{height:28px;padding:0 var(--s3);border-radius:var(--r-sm)}
+.kind-bar{margin-left:var(--s1);gap:var(--s1)}
+.kinds{gap:var(--s1);margin:var(--s1) 0 var(--s2) 18px}
+.kind-chip,.kind-bar .kind-chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 var(--s2);border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--muted);font-size:12px}
+.kind-chip::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--kc,var(--k-other))}
+.kind-chip:hover{background:var(--fill2)}
+.kind-chip.active{background:var(--ink);color:var(--sheet)}
+.kind-confusion{--kc:var(--k-confusion)}.kind-obstacle{--kc:var(--k-obstacle)}.kind-cost{--kc:var(--k-cost)}.kind-negative{--kc:var(--k-negative)}
+.row{border-radius:var(--r);padding:var(--s1) var(--s2) var(--s1) var(--s2);margin:2px 0}
+.level-1>.row{background:var(--fill);border-radius:var(--r-md);padding:var(--s2) var(--s3)}
+.level-2>.row{background:var(--paper)}
+.level-3>.row{background:var(--sheet)}
+.toggle{height:auto;padding:2px 0;border-radius:0}
+.toggle:hover{color:var(--ink)}
+.level-1>.row>.toggle,.next.level-1,.card-title,.lib-toggle{font-size:14px;font-weight:700}
+.level-2>.row>.toggle,.group>.row>.toggle,.next.level-2,.tag-name,.feedback-target a,.hits li,.menu button,.feedback-form textarea{font-size:14px;font-weight:400}
+.toggle .n,.next .n,.code,.badge,.aside,.jump,.reason,.feedback-target,.feedback-resolution,.filter-bar,.filter-bar .hint,.filter-chip,.filter-clear,.lib-toggle .n,.tag-meta .n,.subhead{font-size:12px;font-weight:400}
+.code{opacity:1;color:var(--faint)}
+.flag{height:22px;color:var(--faint)}
+.flag:hover,.flag:focus-visible{color:var(--ink)}
+.desc{font-size:14px;line-height:1.75;color:var(--ink)}
+.subhead{color:var(--muted)}
+.badge{border:0;background:var(--counter-bg);color:var(--counter);border-radius:var(--r-sm)}
+.cards{gap:var(--s2)}
+.card,.card.counter{border:0;border-radius:var(--r-md);background:var(--paper);padding:var(--s3)}
+.card.counter{background:var(--counter-bg)}
+.thumb{height:auto;border-radius:var(--r);background:var(--fill)}
+.kind{background:none;padding:0;color:var(--kc,var(--muted));font-weight:700}
+.kind-positive{color:var(--counter);background:none}
+.kind-observation,.kind-expectation,.kind-suggestion,.kind-self_correction{background:none;color:var(--muted)}
+.jump{height:24px;padding:0 var(--s2);border-radius:var(--r-sm)}
+.filter-chip{height:24px;border-radius:var(--r-sm);background:var(--ink);color:var(--sheet)}
+.filter-clear{height:24px;border-radius:var(--r-sm)}
+.next-bar{border-top:1px solid var(--rule);background:var(--sheet)}
+.next{height:auto;border-radius:0}
+.next:hover{color:var(--ink);text-decoration:underline}
+.next::before{color:var(--faint)}
+/* 界面库 */
+.lib-toggle{top:-16px;height:auto;background:var(--fill);border-radius:var(--r-md);padding:var(--s2) var(--s3)}
+.lib-toggle:hover{background:var(--fill2);color:var(--ink)}
+.lib-toggle::before{font-size:12px}
+.tag-card{height:auto;padding:var(--s1);border:0;border-radius:var(--r);background:none;text-align:left}
+.tag-card:hover{background:var(--paper)}
+.tag-card.active{background:var(--fill2);outline:2px solid var(--ink)}
+.tag-card .cover{border-radius:var(--r-sm);background:var(--fill)}
+/* 反馈 */
+.feedback-item{border:0;padding:var(--s3) 0}
+.feedback-form textarea{border:0;border-radius:var(--r);background:var(--fill)}
+.form-actions button[type=submit]{background:var(--ink);color:var(--sheet)}
+/* 右键菜单 */
+.menu{border:0;border-radius:var(--r);background:var(--sheet);box-shadow:0 8px 24px rgb(60 40 20 / .16)}
+.menu button{height:32px;border-radius:var(--r-sm)}
+.menu button:hover:not([disabled]),.menu button:focus-visible{background:var(--fill)}
+@media (max-width:900px){.left-col{border:0}}

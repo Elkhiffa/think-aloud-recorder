@@ -135,11 +135,10 @@ button:disabled{cursor:default;opacity:.5}
 .toast{position:fixed;left:50%;bottom:var(--s5);transform:translate(-50%,16px);opacity:0;pointer-events:none;background:var(--ink);color:var(--sheet);padding:var(--s2) var(--s4);border-radius:var(--r);transition:opacity .2s,transform .2s;z-index:20}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 
-/* 洞察页签：insight.css 的整页布局放进一个页签里（第三轮的样子，M3 再按第四轮改） */
-#paneInsight .topbar{background:var(--paper);border-bottom-color:var(--rule)}
+/* 洞察页签：insight.css 的整页布局放进一个页签里 */
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
-#paneInsight .topbar{justify-content:flex-start;padding:var(--s2) var(--s6)}
+#paneInsight .topbar{justify-content:flex-start;padding:var(--s1) var(--s4) var(--s3)}
 #paneInsight .topbar .status{flex:1;min-width:0;margin:0;text-align:right}
 
 *{scrollbar-width:thin;scrollbar-color:var(--rule) transparent}
