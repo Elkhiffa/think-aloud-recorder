@@ -48,8 +48,8 @@ OPTIONAL_ROOT_FILES = ('README.md',)
 BLOCKED_PARTS = {'__pycache__', '.git', '.cache', 'cache', 'caches', 'logs', 'log',
                  'crashes', 'crashdumps', 'pip-cache', 'wheelhouse', '.pytest_cache',
                  'gpucache', 'dawncache', 'code cache', 'local storage', 'session storage'}
-UI_EXTENSIONS = {'.html', '.css', '.js', '.svg', '.png', '.ico', '.woff', '.woff2', '.ttf'}
-UI_FONTS = ('ui/fonts/SarasaUiSC-Regular.ttf', 'ui/fonts/SarasaUiSC-Bold.ttf')
+UI_EXTENSIONS = {'.html', '.css', '.js', '.svg', '.png', '.ico', '.woff', '.woff2', '.ttf', '.otf'}
+UI_FONTS = ('ui/fonts/SarasaUiSC-Regular.ttf', 'ui/fonts/SarasaUiSC-Bold.ttf', 'ui/fonts/NotoSerifSC-Bold.otf')
 STAMP = (1980, 1, 1, 0, 0, 0)
 
 
@@ -101,7 +101,7 @@ def collect_files(root):
     for relative in OPTIONAL_ROOT_FILES:
         add(relative, False)
     for relative in ('tools/input/SDL2.dll', 'tools/input/provenance.json', 'licenses/SDL2-zlib.txt',
-                     'tools/fonts/provenance.json', 'licenses/Sarasa-Gothic-OFL.txt'):
+                     'tools/fonts/provenance.json', 'licenses/Sarasa-Gothic-OFL.txt', 'licenses/Noto-Serif-CJK-OFL.txt'):
         add(relative)
     for dirname in ('licenses', 'ui', 'runtime', 'tools/obs'):
         base = root / dirname

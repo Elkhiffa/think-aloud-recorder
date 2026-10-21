@@ -1,9 +1,11 @@
-"""Prepare the pinned UI font (Sarasa UI SC, hinted, Regular and Bold); no global installation.
+"""Prepare the pinned UI fonts (Sarasa UI SC hinted Regular and Bold for text, Noto Serif SC Bold for titles);
+no global installation.
 
 Sarasa Gothic publishes the hinted faces only inside TrueType collections. The script reads the two
 collections it needs from the official zip with HTTP range requests (about 80 MB of the 414 MB archive),
 or from a full local copy given with --archive, checks every input and output against fixed SHA256
 values, and writes ui/fonts/*.ttf, the upstream OFL text and tools/fonts/provenance.json.
+Noto Serif SC Bold (Simplified Chinese subset) is a single file read from the noto-cjk tag, also pinned.
 """
 import argparse
 import hashlib
@@ -11,6 +13,7 @@ import io
 import json
 from pathlib import Path
 import struct
+import time
 from urllib.request import Request, urlopen
 import zipfile
 
@@ -32,7 +35,29 @@ FACES = {
     'SarasaUiSC-Bold.ttf': ('Sarasa-Bold.ttc', 'Sarasa UI SC Bold',
                             '00da18c6059eb349b758be5324ecb0d3c325d5b4f4ad8dda5e6982375b3d3bdb'),
 }
+SERIF_VERSION = 'Serif2.003'
+SERIF_BASE = 'https://raw.githubusercontent.com/notofonts/noto-cjk/' + SERIF_VERSION + '/Serif'
+SERIF = {'NotoSerifSC-Bold.otf': (SERIF_BASE + '/SubsetOTF/SC/NotoSerifSC-Bold.otf',
+                                  '24693d48bdb9152f0a06b02af625638a1097abd6de4010ebba027f6e82710527')}
+SERIF_LICENSE_URL = SERIF_BASE + '/LICENSE'
+SERIF_LICENSE_SHA256 = '6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2'
 HEADERS = {'User-Agent': 'ThinkAloud-build'}
+ATTEMPTS = 4
+
+
+def fetch(request, expect=None):
+    """One HTTP read, retried on transient failures (dropped TLS, resets, short reads); content checks stay with the caller."""
+    for attempt in range(ATTEMPTS):
+        try:
+            with urlopen(request, timeout=300) as response:
+                data = response.read()
+            if expect is not None and len(data) != expect:
+                raise OSError('short read: %d of %d bytes' % (len(data), expect))
+            return data
+        except OSError:
+            if attempt == ATTEMPTS - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
 
 
 class RemoteFile(io.RawIOBase):
@@ -40,11 +65,19 @@ class RemoteFile(io.RawIOBase):
     BLOCK = 4 * 1024 * 1024
 
     def __init__(self, url):
-        with urlopen(Request(url, headers={**HEADERS, 'Range': 'bytes=0-0'}), timeout=90) as response:
-            total = response.headers.get('Content-Range', '').rpartition('/')[2]
-            if response.status != 206 or not total.isdigit():
-                raise ValueError('The font archive host does not support range requests; use --archive.')
-            self.url, self.size = response.geturl(), int(total)
+        for attempt in range(ATTEMPTS):
+            try:
+                with urlopen(Request(url, headers={**HEADERS, 'Range': 'bytes=0-0'}), timeout=90) as response:
+                    total = response.headers.get('Content-Range', '').rpartition('/')[2]
+                    status, final = response.status, response.geturl()
+                break
+            except OSError:
+                if attempt == ATTEMPTS - 1:
+                    raise
+                time.sleep(2 * (attempt + 1))
+        if status != 206 or not total.isdigit():
+            raise ValueError('The font host does not support range requests; use --archive.')
+        self.url, self.size = final, int(total)
         self.position, self.cache = 0, {}
 
     def readable(self):
@@ -64,10 +97,7 @@ class RemoteFile(io.RawIOBase):
         if index not in self.cache:
             start = index * self.BLOCK
             end = min(start + self.BLOCK, self.size) - 1
-            with urlopen(Request(self.url, headers={**HEADERS, 'Range': f'bytes={start}-{end}'}), timeout=90) as response:
-                data = response.read()
-            if len(data) != end - start + 1:
-                raise ValueError('Incomplete range response from the font archive host')
+            data = fetch(Request(self.url, headers={**HEADERS, 'Range': f'bytes={start}-{end}'}), expect=end - start + 1)
             self.cache = {index: data}  # members are read sequentially; keep one block
         return self.cache[index]
 
@@ -177,11 +207,20 @@ def write_once(path, data):
     path.write_bytes(data)
 
 
+def pinned_download(url, digest, what):
+    # Read in retried ranges: on an unstable connection a drop costs one block, not the whole file.
+    with RemoteFile(url) as remote:
+        data = remote.read()
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise ValueError(what + ' differs from the pinned release')
+    return data
+
+
 def prepare(root, archive=None):
     root = Path(root).resolve()
-    license_bytes = urlopen(Request(LICENSE_URL, headers=HEADERS), timeout=90).read()
-    if hashlib.sha256(license_bytes).hexdigest() != LICENSE_SHA256:
-        raise ValueError('Sarasa Gothic license differs from the pinned release')
+    license_bytes = pinned_download(LICENSE_URL, LICENSE_SHA256, 'Sarasa Gothic license')
+    serif_license = pinned_download(SERIF_LICENSE_URL, SERIF_LICENSE_SHA256, 'Noto Serif CJK license')
+    serif = {name: pinned_download(url, digest, name) for name, (url, digest) in SERIF.items()}
     sources = collections(archive)
     fonts = {}
     for filename, (collection, face, digest) in FACES.items():
@@ -189,14 +228,17 @@ def prepare(root, archive=None):
         if hashlib.sha256(font).hexdigest() != digest:
             raise ValueError('Extracted font differs from the pinned result: ' + filename)
         fonts[filename] = font
-    for filename, font in fonts.items():
+    for filename, font in {**fonts, **serif}.items():
         write_once(root / 'ui/fonts' / filename, font)
     write_once(root / 'licenses/Sarasa-Gothic-OFL.txt', license_bytes)
+    write_once(root / 'licenses/Noto-Serif-CJK-OFL.txt', serif_license)
     provenance = {'version': VERSION, 'release': RELEASE,
                   'archive': {'name': ARCHIVE, 'url': ARCHIVE_URL, 'bytes': ARCHIVE_BYTES, 'sha256': ARCHIVE_SHA256},
                   'license': {'url': LICENSE_URL, 'sha256': LICENSE_SHA256},
                   'fonts': [{'filename': filename, 'collection': collection, 'collection_sha256': COLLECTIONS[collection],
-                             'face': face, 'sha256': digest} for filename, (collection, face, digest) in FACES.items()]}
+                             'face': face, 'sha256': digest} for filename, (collection, face, digest) in FACES.items()]
+                  + [{'filename': name, 'url': url, 'sha256': digest} for name, (url, digest) in SERIF.items()],
+                  'serif': {'version': SERIF_VERSION, 'license': {'url': SERIF_LICENSE_URL, 'sha256': SERIF_LICENSE_SHA256}}}
     write_once(root / 'tools/fonts/provenance.json', (json.dumps(provenance, indent=2) + '\n').encode())
     return provenance
 

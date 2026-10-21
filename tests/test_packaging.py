@@ -42,9 +42,9 @@ class PackagingTests(unittest.TestCase):
         self.write('tools/input/provenance.json', json.dumps({'version': 'synthetic',
             'dll_sha256': sha256(self.root / 'tools/input/SDL2.dll'),
             'assets': [{'name': source.name, 'sha256': sha256(source)}]}).encode())
-        for name in ('ui/fonts.css', 'licenses/Sarasa-Gothic-OFL.txt'):
+        for name in ('ui/fonts.css', 'licenses/Sarasa-Gothic-OFL.txt', 'licenses/Noto-Serif-CJK-OFL.txt'):
             self.write(name, b'fixture font support\n')
-        fonts = [self.write('ui/fonts/' + name, b'synthetic font ' + name.encode()) for name in ('SarasaUiSC-Regular.ttf', 'SarasaUiSC-Bold.ttf')]
+        fonts = [self.write('ui/fonts/' + name, b'synthetic font ' + name.encode()) for name in ('SarasaUiSC-Regular.ttf', 'SarasaUiSC-Bold.ttf', 'NotoSerifSC-Bold.otf')]
         self.write('tools/fonts/provenance.json', json.dumps({'version': 'synthetic', 'fonts': [
             {'filename': font.name, 'sha256': sha256(font)} for font in fonts]}).encode())
         binary =self.write('runtime/Lib/think_aloud_media/ffmpeg.exe', b'MZ synthetic CLI')

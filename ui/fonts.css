@@ -1,4 +1,6 @@
-/* 正文字体：更纱黑体 UI SC（SIL OFL 1.1，屏幕优化版），由 scripts/fetch_fonts.py 准备到 ui/fonts/。
+/* 正文字体：更纱黑体 UI SC（SIL OFL 1.1，屏幕优化版）；标题字体：思源宋体 SC 粗体（Noto Serif SC Bold，SIL OFL 1.1）。
+   都由 scripts/fetch_fonts.py 准备到 ui/fonts/。
    文件缺失时（开发环境尚未运行脚本）各窗口回退到系统字体。 */
 @font-face{font-family:"Sarasa UI SC";src:url(fonts/SarasaUiSC-Regular.ttf) format("truetype");font-weight:400;font-style:normal;font-display:swap}
 @font-face{font-family:"Sarasa UI SC";src:url(fonts/SarasaUiSC-Bold.ttf) format("truetype");font-weight:700;font-style:normal;font-display:swap}
+@font-face{font-family:"Noto Serif SC";src:url(fonts/NotoSerifSC-Bold.otf) format("opentype");font-weight:700;font-style:normal;font-display:swap}

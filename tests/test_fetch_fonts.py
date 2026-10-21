@@ -66,6 +66,40 @@ class ExtractFaceTests(unittest.TestCase):
             fetch_fonts.extract_face(collection(['Sarasa Gothic SC']), 'Sarasa UI SC')
 
 
+class RangeHost:
+    """A fake HTTPS host: whole-file reads, and Range requests answered with 206 and Content-Range."""
+    def __init__(self, files):
+        self.files = files
+
+    def __call__(self, request, **kwargs):
+        data = self.files[request.full_url]
+        wanted = request.get_header('Range')
+        if not wanted:
+            return io.BytesIO(data)
+        start, end = (int(x) for x in wanted.split('=')[1].split('-'))
+        response = io.BytesIO(data[start:end + 1])
+        response.status, response.headers = 206, {'Content-Range': f'bytes {start}-{end}/{len(data)}'}
+        response.geturl = lambda: request.full_url
+        return response
+
+
+class FetchTests(unittest.TestCase):
+    def test_transient_network_failures_are_retried_and_then_reported(self):
+        calls = []
+
+        def flaky(request, **kwargs):
+            calls.append(request)
+            if len(calls) < 3:
+                raise OSError('EOF occurred in violation of protocol')
+            return io.BytesIO(b'font bytes')
+        with patch.object(fetch_fonts, 'urlopen', flaky), patch.object(fetch_fonts.time, 'sleep'):
+            self.assertEqual(fetch_fonts.fetch(fetch_fonts.Request('https://synthetic/x')), b'font bytes')
+        self.assertEqual(len(calls), 3)
+        with patch.object(fetch_fonts, 'urlopen', lambda request, **k: io.BytesIO(b'short')), patch.object(fetch_fonts.time, 'sleep'):
+            with self.assertRaisesRegex(OSError, 'short read'):
+                fetch_fonts.fetch(fetch_fonts.Request('https://synthetic/x'), expect=10)
+
+
 class PrepareTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -77,9 +111,11 @@ class PrepareTests(unittest.TestCase):
             bundle.writestr('Sarasa-Bold.ttc', bold)
         digest = lambda data: hashlib.sha256(data).hexdigest()
         self.license = b'SIL Open Font License, synthetic copy\n'
+        self.serif_license, self.serif = b'SIL Open Font License, synthetic Noto copy\n', b'OTTO synthetic serif'
         self.pins = {
             'ARCHIVE_SHA256': digest(self.archive.read_bytes()), 'ARCHIVE_BYTES': self.archive.stat().st_size,
-            'LICENSE_SHA256': digest(self.license),
+            'LICENSE_SHA256': digest(self.license), 'SERIF_LICENSE_SHA256': digest(self.serif_license),
+            'SERIF': {'NotoSerifSC-Bold.otf': ('https://synthetic/NotoSerifSC-Bold.otf', digest(self.serif))},
             'COLLECTIONS': {'Sarasa-Regular.ttc': digest(regular), 'Sarasa-Bold.ttc': digest(bold)},
             'FACES': {'SarasaUiSC-Regular.ttf': ('Sarasa-Regular.ttc', 'Sarasa UI SC', digest(fetch_fonts.extract_face(regular, 'Sarasa UI SC'))),
                       'SarasaUiSC-Bold.ttf': ('Sarasa-Bold.ttc', 'Sarasa UI SC Bold', digest(fetch_fonts.extract_face(bold, 'Sarasa UI SC Bold')))},
@@ -90,15 +126,18 @@ class PrepareTests(unittest.TestCase):
 
     def prepare(self, root, **changes):
         pins = {**self.pins, **changes}
-        with patch.multiple(fetch_fonts, **pins), patch.object(fetch_fonts, 'urlopen', lambda *a, **k: io.BytesIO(self.license)):
+        by_url = {fetch_fonts.LICENSE_URL: self.license, fetch_fonts.SERIF_LICENSE_URL: self.serif_license,
+                  'https://synthetic/NotoSerifSC-Bold.otf': self.serif}
+        with patch.multiple(fetch_fonts, **pins), patch.object(fetch_fonts, 'urlopen', RangeHost(by_url)):
             return fetch_fonts.prepare(root, self.archive)
 
     def test_writes_fonts_license_and_provenance_once(self):
         root = self.base / 'stage'
         provenance = self.prepare(root)
-        self.assertEqual(sorted(p.name for p in (root / 'ui/fonts').iterdir()), ['SarasaUiSC-Bold.ttf', 'SarasaUiSC-Regular.ttf'])
+        self.assertEqual(sorted(p.name for p in (root / 'ui/fonts').iterdir()), ['NotoSerifSC-Bold.otf', 'SarasaUiSC-Bold.ttf', 'SarasaUiSC-Regular.ttf'])
+        self.assertEqual((root / 'licenses/Noto-Serif-CJK-OFL.txt').read_bytes(), self.serif_license)
         self.assertEqual((root / 'licenses/Sarasa-Gothic-OFL.txt').read_bytes(), self.license)
-        self.assertEqual([font['filename'] for font in provenance['fonts']], ['SarasaUiSC-Regular.ttf', 'SarasaUiSC-Bold.ttf'])
+        self.assertEqual([font['filename'] for font in provenance['fonts']], ['SarasaUiSC-Regular.ttf', 'SarasaUiSC-Bold.ttf', 'NotoSerifSC-Bold.otf'])
         self.prepare(root)  # a repeat over identical files is a no-op
         (root / 'ui/fonts/SarasaUiSC-Bold.ttf').write_bytes(b'someone else\'s font')
         with self.assertRaisesRegex(ValueError, 'Existing font file differs'):
@@ -112,6 +151,8 @@ class PrepareTests(unittest.TestCase):
             self.prepare(root, COLLECTIONS={'Sarasa-Regular.ttc': '0' * 64, 'Sarasa-Bold.ttc': self.pins['COLLECTIONS']['Sarasa-Bold.ttc']})
         with self.assertRaisesRegex(ValueError, 'license differs'):
             self.prepare(root, LICENSE_SHA256='0' * 64)
+        with self.assertRaisesRegex(ValueError, 'NotoSerifSC-Bold.otf differs'):
+            self.prepare(root, SERIF={'NotoSerifSC-Bold.otf': ('https://synthetic/NotoSerifSC-Bold.otf', '0' * 64)})
         self.assertFalse(root.exists())
 
 

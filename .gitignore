@@ -25,3 +25,4 @@ __pycache__/
 
 *.exe
 /ui/fonts/*.ttf
+/ui/fonts/*.otf
