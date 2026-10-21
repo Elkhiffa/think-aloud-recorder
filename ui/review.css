@@ -1,5 +1,5 @@
 /* Keep the paper palette local: exported reviews inline this entire stylesheet. */
-/* Review spacing scale: 4, 8, 16, 24, 32, 40 px; zero removes space. */
+/* Spacing scale (shared with the other windows): 4, 8, 12, 16, 24, 32 px, plus 40 for older review insets; zero removes space. */
 :root{color-scheme:light;--bg:#ede7db;--surface:#fcfaf5;--soft:#ede7db;--tint:#f2e8dc;--ink:#292722;--heading:#292722;--muted:#716c63;--line:#dcd5c9;--strong-line:#c7bfb1;--accent:#b64b37;--inverse:#fffcf7;--error:#ab3528;--follow-bg:#e5ede6;--follow-ink:#38715a;--plyr-color-main:#b64b37;--plyr-font-family:inherit;--plyr-control-radius:5px}
 *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--strong-line) transparent}
 html,body{width:100%;height:100%;margin:0;overflow:hidden}
@@ -39,8 +39,6 @@ button:disabled{color:var(--muted);cursor:wait;background:var(--soft)}
 .review-header{flex:none;display:flex;justify-content:space-between;gap:16px;align-items:center;padding:16px 24px;background:var(--surface);border-bottom:1px solid var(--line)}
 .review-brand{display:flex;gap:8px;align-items:center;min-width:0}
 .review-brand>div{min-width:0}
-.review-mark{height:42px;width:42px;display:grid;place-items:center;flex:none;color:var(--accent)}
-.review-mark svg{width:42px;height:42px;fill:currentColor}
 h1{margin:0;font-size:22px;font-weight:600;color:var(--heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.4}
 .review-header-actions{display:flex;align-items:center;gap:16px;flex:none}
 .review-wordmark{font:500 20px/1.2 Georgia,"Times New Roman",serif;color:var(--heading);letter-spacing:-.4px}
@@ -143,13 +141,13 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 .resizing-rows,.resizing-rows *{cursor:row-resize!important;user-select:none!important}
 @media(max-width:960px){.review-wordmark{display:none}.transcript-heading{flex-wrap:wrap;gap:8px}}
 @media(max-width:760px){
- .review-header{padding:8px 16px;gap:8px}.review-mark,.review-mark svg{width:34px;height:34px}
+ .review-header{padding:8px 16px;gap:8px}
  .review-layout{grid-template-columns:minmax(0,1fr);--splitter-size:20px;grid-template-rows:minmax(0,var(--video-share,1fr)) var(--splitter-size) minmax(0,var(--text-share,1fr));padding:16px 16px}
  .review-splitter{cursor:row-resize}.review-splitter::before{width:42px;height:3px}
  .video-column{gap:8px}.transcript-heading{padding-bottom:8px}.search-label{margin-bottom:8px}.line{padding-top:8px;padding-bottom:8px}
 }
 @media(max-width:760px) and (max-height:560px){
- .review-header{padding:8px 16px}.review-mark{display:none}.session-info{display:none}
+ .review-header{padding:8px 16px}.session-info{display:none}
  .review-layout{--splitter-size:18px;padding:8px 16px}.file-toolbar{gap:4px}.file-toolbar button{font-size:13px;min-height:32px;padding:4px 8px}
  #status{margin-top:4px;font-size:13px;min-height:0;line-height:1.5}.transcript-heading{padding-bottom:8px}
  #search{padding-top:4px;padding-bottom:4px}.search-label{margin-bottom:4px}.line{padding:8px 8px;font-size:15px}
@@ -170,7 +168,7 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 .quote-popover{position:fixed;z-index:35;width:300px;max-width:calc(100vw - 24px);max-height:calc(100vh - 24px);overflow:auto;padding:16px 16px;background:var(--surface);border:1px solid var(--speech-line);border-radius:4px;box-shadow:0 8px 30px #29221a25}.quote-popover-heading{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}.quote-popover-heading button{border:0;background:transparent;color:var(--muted);font-size:21px;line-height:1;padding:4px 4px}.quote-popover p{margin:8px 0 0;font-size:14px;line-height:1.85;overflow-wrap:anywhere}
 @media(max-height:720px) and (min-width:761px){.review-header{padding-top:8px;padding-bottom:8px}.review-layout{padding-top:16px;padding-bottom:16px}.input-panel{flex-basis:186px}.input-heading{min-height:38px;padding-top:4px;padding-bottom:4px}.input-body{padding-top:4px;padding-bottom:4px}.current-keys{padding-top:4px;padding-bottom:4px}.keycap{height:36px;min-width:38px}}
 @media(max-width:1050px){.transcript{--time-width:53px;--speech-width:46px;--direction-width:44px;--pointing-width:44px;padding-left:8px}.input-modes button{padding:4px 4px;font-size:10px}.input-heading{padding-left:8px;padding-right:8px}.input-heading h2{font-size:13px}.review-tabs{gap:16px}.review-tabs button{font-size:14px}.time-tick time{font-size:9px}.review-layout{--splitter-size:20px}}
-@media(max-width:760px){.input-panel{flex-basis:43px}.input-body{display:none!important}.input-heading{border:0;min-height:41px}.input-modes{display:none}.input-heading::after{content:"放大窗口可查看最近操作";font-size:10px;color:var(--muted)}.transcript{border-left:0;padding-left:0}.review-header h1{font-size:19px}.review-brand{gap:4px}.review-mark,.review-mark svg{width:30px;height:30px}.review-header-actions{gap:4px}.review-layout{padding:8px}.review-tabs button{font-size:13px}}
+@media(max-width:760px){.input-panel{flex-basis:43px}.input-body{display:none!important}.input-heading{border:0;min-height:41px}.input-modes{display:none}.input-heading::after{content:"放大窗口可查看最近操作";font-size:10px;color:var(--muted)}.transcript{border-left:0;padding-left:0}.review-header h1{font-size:19px}.review-brand{gap:4px}.review-header-actions{gap:4px}.review-layout{padding:8px}.review-tabs button{font-size:13px}}
 
 .device-view{flex:1;min-height:142px;display:flex;align-items:center;justify-content:center;padding:8px 0 4px}.keyboard-mouse{display:flex;gap:16px;align-items:center;width:100%;max-width:610px}.keyboard{border:1px solid var(--line);border-radius:4px;padding:4px;background:var(--soft);flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}.key-row{display:flex;gap:4px}.device-key{min-width:0;flex:1;height:23px;border-radius:4px;font-size:9px;padding:4px 0;background:var(--key);color:var(--key-ink);opacity:.66;box-shadow:inset 0 -2px 0 #0002;text-align:center;line-height:19px}.device-key.wide{flex:1.6}.device-key.wider{flex:2}.device-key.space{flex:6}.device-key.active{background:var(--active-key);color:#fffaf5;opacity:1}.mouse-device{width:62px;height:124px;flex:none}.mouse-device svg{width:100%;height:100%;overflow:visible}.mouse-shell{fill:var(--soft);stroke:var(--strong-line);stroke-width:1.4}.mouse-control{fill:var(--key);stroke:var(--surface);stroke-width:1.2;opacity:.65}.mouse-control.active{fill:var(--active-key);opacity:1}.mouse-wheel{fill:var(--strong-line)}.mouse-motion{fill:var(--muted);font:24px "Segoe UI",sans-serif;text-anchor:middle}.mouse-motion.active{fill:var(--accent)}.controller{width:100%;max-width:420px;max-height:210px;display:block;overflow:visible}.controller-shell{fill:var(--soft);stroke:var(--strong-line);stroke-width:1.4}.controller-detail{fill:none;stroke:var(--strong-line);stroke-width:1.3}.controller .control{fill:var(--key);stroke:var(--surface);stroke-width:1;opacity:.7}.controller .control.active{fill:var(--active-key);opacity:1}.controller text{font:500 12px "Segoe UI",sans-serif;fill:var(--key-ink);text-anchor:middle;dominant-baseline:central;pointer-events:none}.controller .minor-label{fill:var(--muted);font-size:9px}.controller .controller-name{font-size:11px;fill:var(--muted);letter-spacing:1px}.controller .axis-arrow{stroke:var(--accent);stroke-width:3;stroke-linecap:round;fill:none;visibility:hidden;pointer-events:none}.controller .axis-arrow.active{visibility:visible}.controller .stick-nub{fill:var(--key-ink);opacity:.18;pointer-events:none}.controller .control.active+.stick-nub{opacity:.85}.controller .symbol{stroke:var(--key-ink);stroke-width:1.5;fill:none;pointer-events:none}.controller .trigger-meter{fill:var(--active-key);opacity:.9;pointer-events:none}
 
@@ -405,53 +403,136 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
  .review-header{padding:8px 16px;gap:8px}.review-header-actions{gap:8px}.review-brand{gap:8px}
  .review-layout{padding:8px 16px;--splitter-size:16px}
  .review-companion{flex-basis:168px}.review-tabs{gap:16px}
- .review-tabs button{font-size:13px}.review-mark{display:none}
+ .review-tabs button{font-size:13px}
  .review-session .session-content{font-size:12px;max-height:40px;overflow:auto}
  .speaker-summary{font-size:12px}.video-column{gap:8px}
 }
 
-/* ---- 方向 B：与主窗口、资料台共用的配色、字体和圆角（覆盖上面的旧值） ---- */
-:root{--b-paper:#f3ede1;--b-sheet:#f8f4ec;--b-ink:#211b14;--b-muted:#6e6252;--b-faint:#a3967f;--b-rule:#d9cdb8;--b-hair:#e6dccb;--b-margin:#c5402a;
-  --bg:var(--b-hair);--surface:var(--b-paper);--soft:var(--b-sheet);--tint:#efe3d3;--ink:var(--b-ink);--heading:var(--b-ink);--muted:var(--b-muted);
-  --line:var(--b-rule);--strong-line:#b9aa92;--accent:var(--b-margin);--inverse:#fff8f0;--error:#b3301c;--plyr-color-main:var(--b-margin);--plyr-control-radius:4px}
-body{font-family:"Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
-h1,h2{font-family:"Noto Serif SC","Source Han Serif SC","DengXian","Microsoft YaHei UI",serif}
-
-/* 自绘标题栏：整条标题区可拖动窗口，按钮和输入框退出拖动。 */
-.review-header{app-region:drag}
+/* ---- 第四轮（2026-10-21，见 docs/plans/2026-10-19-redesign.md）：与主窗口、资料台同一套纸色、名字和尺度，覆盖上面的旧值。
+   字体角色：标题 宋体 22 粗（片段名）· 小标题 黑体 14 粗 · 正文 黑体 14 · 注释 黑体 12；键帽、手柄图示、时间轴刻度属于图示，字号按格子定。
+   红色只给播放头和当前句；其余强调用墨色。面板只用底色、不加描边。 ---- */
+:root{--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--r-sm:6px;--r:8px;--r-md:12px;--r-lg:16px;
+  --paper:#F8F5EF;--sheet:#FFFDF9;--fill:#EEE8DC;--fill2:#E3DACB;--faint:#978D7E;--rule:#DDD5C6;--rec:#D23A24;--warn:#7A4A12;--warn-bg:#F5E3CB;
+  --bg:var(--fill);--surface:var(--paper);--soft:var(--sheet);--tint:var(--fill2);--ink:#221E19;--heading:#221E19;--muted:#5F574B;
+  --line:var(--rule);--strong-line:var(--fill2);--accent:var(--ink);--inverse:var(--sheet);--error:var(--warn);
+  --follow-bg:var(--fill);--follow-ink:var(--ink);--plyr-color-main:var(--rec);--plyr-control-radius:var(--r-sm)}
+/* 操作时间轴和最近操作的键帽：标记的配色和对比沿用安装版，只在这两处生效 */
+.input-timeline-panel,.review-companion .input-panel,.input-detail,.timeline-return{--surface:#fcfaf5;--soft:#ede7db;--bg:#ede7db;--line:#dcd5c9;--strong-line:#c7bfb1;--accent:#b64b37}
+body{font:400 14px/1.65 "Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif;background:var(--paper);-webkit-font-smoothing:antialiased}
+button{border:0;border-radius:var(--r);background:var(--fill)}
+button:hover{background:var(--fill2)}
+button:focus-visible,input:focus-visible,#lines:focus-visible{outline-color:var(--ink)}
+/* 标题区：小标、片段名（宋体 22）和铅笔，下面一行是元信息和复制路径，再下面是活动摘要 */
+.review-header{app-region:drag;background:var(--paper);border-bottom:0;padding:var(--s3) var(--s5) var(--s2);gap:var(--s5);align-items:flex-start}
 .review-header button,.review-header input,.review-header a,.review-header form,.review-header .copy-split{app-region:no-drag}
-.review-header .win{display:flex;margin-left:8px;align-self:flex-start;margin-top:-8px;margin-right:-16px}
+.review-brand{gap:var(--s3);align-items:baseline}
+.review-brand>.brand{flex:none;width:10px;height:10px;border-radius:2px;background:var(--rec);align-self:flex-start;margin-top:var(--s3)}
+h1,.review-header h1{font:700 22px/1.35 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif;color:var(--ink)}
+.session-title-row{align-items:baseline}
+.rename-session{align-self:center;border-radius:var(--r-sm);background:none;color:var(--faint)}
+.rename-session:hover{background:var(--fill);color:var(--ink)}
+.rename-form input{border:0;border-radius:var(--r);background:var(--fill);outline:2px solid var(--ink)}
+.rename-form button{border-radius:var(--r-sm)}
+.session-meta-row{align-items:baseline;gap:var(--s2) var(--s4)}
+.session-meta-row #copyPath{align-items:baseline}.session-meta-row #copyPath svg{align-self:center}
+.session-meta-row .copy-split>button{border:0;background:var(--fill);color:var(--ink);padding:var(--s1) var(--s2)}
+.session-meta-row .copy-split>button:hover{background:var(--fill2)}
+.session-meta-row #fileActionsToggle{border-left:1px solid var(--paper)}
+#copyPath{border-radius:var(--r-sm) 0 0 var(--r-sm)}#fileActionsToggle{border-radius:0 var(--r-sm) var(--r-sm) 0}
+#copyPath.copied,.session-meta-row #copyPath.copied{background:var(--fill2);color:var(--ink)}
+.review-session .session-content{color:var(--muted);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.review-header-actions{align-self:flex-start}
+.review-header .win{display:flex;margin-left:var(--s2);align-self:flex-start;margin-top:-12px;margin-right:-24px}
 .review-header .win button{width:46px;height:40px;border:0;border-radius:0;background:none;color:var(--ink);font:10px/40px "Segoe Fluent Icons","Segoe MDL2 Assets";padding:0}
 .review-header .win button:hover{background:color-mix(in srgb,var(--ink) 8%,transparent)}
 .review-header .win .close:hover{background:#c42b1c;color:#fff}
-/* 录制准备：不再画成像故障的缺口条，只在操作记录开始处留一条细线和小字。 */
-.timeline-gap.preparation{background:none;border:0;border-bottom:1px dashed var(--strong-line);color:var(--muted);align-items:flex-end;padding:0 8px 2px}
+.file-actions,.playback-popup{border:0;border-radius:var(--r);background:var(--sheet);box-shadow:0 8px 24px rgb(60 40 20 / .16)}
+.file-actions button,.playback-popup button{border-radius:var(--r-sm);background:none}
+.file-actions button:hover,.file-actions button:focus-visible,.playback-popup button[aria-checked=true]{background:var(--fill);color:var(--ink)}
+/* 版面：录像、播放条、当前原话和最近操作在左；右边是一块纸面，放时间轴、原话和体验事件 */
+.review-layout{padding:var(--s1) var(--s4) var(--s4)}
+.video-slot .plyr__video-wrapper{border-radius:var(--r-md) var(--r-md) 0 0;background:#1E1B17}
+.video-slot .plyr__controls{background:var(--sheet);border-radius:0 0 var(--r-md) var(--r-md);align-items:center}
+.video-slot .plyr__controls .plyr__control:hover{background:var(--fill);color:var(--ink)}
+.video-slot .plyr__controls>[data-plyr=play]{background:var(--ink);color:var(--sheet);border-radius:50%}
+.video-slot .plyr__controls>[data-plyr=play]:hover{background:var(--ink);color:var(--sheet)}
+.video-slot .plyr__volume input[type=range]{--plyr-range-fill-background:var(--ink);color:var(--ink)}
+.review-companion{gap:var(--s3)}
+.current-quote-panel,.review-companion .input-panel,.input-panel{border:0;border-radius:var(--r-md);background:var(--sheet)}
+.current-quote-heading,.review-companion .input-heading{align-items:baseline;padding:var(--s2) var(--s3) var(--s1)}
+.current-quote-title{align-items:baseline}
+.current-quote-body,.review-companion .input-body{padding:0 var(--s3) var(--s2)}
+#currentQuoteText{font-size:14px;line-height:1.65}
+#currentQuoteTime{color:var(--ink);background:none}
+.speaker-chip{background:var(--fill);border-radius:var(--r-sm)}
+.review-companion .input-modes,.input-modes{gap:var(--s1);padding:var(--s1);border:0;border-radius:var(--r);background:var(--fill)}
+.review-companion .input-modes button,.input-modes button{border-radius:var(--r-sm);background:none;color:var(--muted)}
+.input-modes button[aria-pressed=true],.review-companion .input-modes button[aria-pressed=true]{background:var(--sheet);color:var(--ink);box-shadow:0 1px 2px rgb(60 40 20 / .08)}
+.review-splitter::before{background:var(--fill2)}
+.review-splitter:hover,.review-splitter:focus-visible{background:none;outline:0}
+.review-splitter:hover::before,.review-splitter:focus-visible::before{background:var(--ink)}
+/* 右栏的纸面向外画 8px（用投影扩展，不加内边距）：时间轴按自身宽度排布，内边距会改变它的几何 */
+.transcript{border-radius:var(--r);background:var(--sheet);box-shadow:0 0 0 8px var(--sheet)}
+.transcript-heading{align-items:baseline;border-bottom:1px solid var(--rule)}
+.review-tabs{align-items:baseline;align-self:baseline}
+.review-tabs button{border-radius:0;background:none;border-bottom:2px solid transparent;color:var(--muted)}
+.review-tabs button:hover{background:none;color:var(--ink)}
+.review-tabs button[aria-selected=true]{border-color:var(--ink);color:var(--ink);font-weight:700}
+#follow,.review-companion #follow{border-radius:var(--r-sm);background:var(--fill);color:var(--ink)}
+#follow[aria-pressed=false]{background:none;color:var(--muted)}
+.timeline-column-headings,.timeline-column-headings span:first-child{background:var(--sheet)}
+.input-timeline::before,.time-tick time,.timeline-window-label>span{background:var(--sheet)}
+/* 播放头：红色，和录像进度条上的播放位置同色 */
+.timeline-playhead{background:var(--rec)}
+.timeline-playhead time{background:var(--rec);color:#fffbf6}
+.timeline-gap.preparation{background:none;border:0;border-bottom:1px dashed #c7bfb1;color:var(--muted);align-items:flex-end;padding:0 8px 2px}
 .timeline-gap.preparation span{font-size:10px}
-
-*{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
-/* ---- 线规则 B（2026-10-20）：大段落分界只留一条淡发丝线；逐行的线去掉；可交互的面板和卡片只留底色。 ---- */
+#inputScope{border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--ink)}
+/* 原话列表：时间和原话按基线对齐；当前句用红色时间戳和竖线标出（它就是逐字稿里的播放头） */
+.search-label{border:0;border-radius:var(--r);background:var(--fill);color:var(--muted)}
+.search-label:focus-within{outline-color:var(--ink)}
+.line{align-items:baseline;border:0;border-radius:var(--r);padding:var(--s2) var(--s2);background:none;line-height:1.75}
+.line:hover{background:var(--paper)}
+.line.active{background:var(--fill);color:var(--ink)}
+.line time{padding-top:0;line-height:1.75}
+.line.active time{color:var(--rec)}
+.line.active .segment-text{border-left-color:var(--rec)}
+/* 体验事件 */
 .experience-event,.event-related{border-top:0}
-.line{border-bottom:0}
-.speaker-choice{border-top:0}
+.event-jump,.event-reference{color:var(--ink);text-decoration:underline;text-decoration-color:var(--fill2);text-underline-offset:3px;background:none}
+.event-jump:hover,.event-reference:hover{text-decoration-color:currentColor}
+.event-title{background:none}
+.event-evidence>summary{background:var(--sheet)}
+.event-evidence[open]>summary{color:var(--ink)}
+.event-evidence-row{border-left:3px solid var(--fill2);background:var(--paper);border-radius:0 var(--r-sm) var(--r-sm) 0}
+.event-issue strong{color:var(--ink)}
+.event-meta{align-items:baseline}
+.event-meta .event-edit{border:0;border-radius:var(--r-sm);background:var(--fill)}
+/* 对话框和浮层 */
+.quote-popover,.speaker-dialog,.event-dialog,.alignment-panel{border:0;border-radius:var(--r-lg);background:var(--sheet);box-shadow:0 12px 40px rgb(60 40 20 / .22)}
 .event-dialog header{border-bottom:0}.event-dialog footer{border-top:0}
-.current-quote-panel,.review-companion .input-panel,.input-panel{border-color:transparent;background:var(--soft)}
-/* ---- 字体角色（2026-10-20）：回看的界面文字只用 标题 宋20粗 · 阅读 黑16 · 正文 黑14 · 强调 黑14粗 · 注释 黑12；
-   键帽、手柄图示、时间轴刻度这些图示里的字按格子定字号，只统一字体。 ---- */
-body,#search,#empty,.session-info,.review-session .session-content,.file-toolbar button,.rename-form button,.event-context,.event-footnote,.event-evidence,
-.speaker-reason,.speaker-choice small,.quote-popover p,.playback-popup button,.speaker-current,.video-slot .plyr__controls,.event-dialog #eventEditError,
-.alignment-heading{font-size:14px}
-h1,.review-header h1,.event-dialog h2{font:700 20px/1.4 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif}
-h2,.input-heading h2,.current-quote-heading h2,.review-companion .input-heading h2{font:700 14px/1.5 "Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
+.event-dialog input,.event-dialog textarea,.alignment-value input{border:0;border-radius:var(--r);background:var(--fill)}
+.event-dialog footer button,.alignment-actions button{border:0;border-radius:var(--r);background:var(--fill)}
+#saveSpeaker,.alignment-actions [type=submit],.event-dialog #saveEventEdit{background:var(--ink);color:var(--sheet);border:0}
+.event-dialog #eventEditError{color:var(--warn)}
+.speaker-choice{border-top:0}
+.speaker-choice input{accent-color:var(--ink)}
+.speaker-tag.is-recorder{color:var(--ink)}
+/* 字号：标题 22、小标题 14 粗、正文 14、注释 12 */
+body,#search,#empty,.review-session .session-content,.file-toolbar button,.rename-form button,.event-context,.event-footnote,.event-evidence,
+.speaker-reason,.speaker-choice small,.quote-popover p,.playback-popup button,.speaker-current,.video-slot .plyr__controls,.alignment-heading,
+.line,.event-evidence-row .event-quote,#currentQuoteText{font-size:14px}
+.event-dialog h2{font:700 22px/1.35 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif}
+h2,.input-heading h2,.current-quote-heading h2,.review-companion .input-heading h2,#currentQuoteLabel,.current-quote-panel.is-previous #currentQuoteLabel{font:700 14px/1.5 "Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
+.current-quote-panel.is-previous #currentQuoteLabel{color:var(--muted)}
 .experience-events h3,.speaker-choice strong,.event-issue strong,.event-edit-body label{font-size:14px;font-weight:700}
-.review-tabs button,.review-companion .review-tabs button{font-size:14px;font-weight:400}
-.review-tabs button[aria-selected=true]{font-weight:700}
-.line,.event-evidence-row .event-quote,#currentQuoteText{font-size:16px}
-.line time,#lineCount,#follow,.review-companion #follow,#status,#testLabel,.event-coverage,.event-meta,.experience-events .event-basis,.experience-events .event-notes,
+.review-tabs button,.review-companion .review-tabs button{font-size:14px}
+.session-info,.line time,#lineCount,#follow,.review-companion #follow,#status,#testLabel,.event-coverage,.event-meta,.experience-events .event-basis,.experience-events .event-notes,
 .event-question small,.event-reference,.speaker-summary,.speaker-tag,.input-modes button,.review-companion .input-modes button,.input-meta,.review-companion .input-meta,
 .current-item,.review-companion .current-item,.input-state,.review-companion .input-state,.timeline-column-headings,
 .timeline-footer,.quote-popover-heading,.input-heading::after,.input-detail,.input-detail time,.input-detail>span,.session-meta-row .copy-split>button,.alignment-panel,
 .alignment-actions button,.timeline-return,.event-edit-hint,.video-slot .playback-speed,.speaker-chip,#currentQuoteTime,.current-quote-body .speaker-tag,
 .video-slot .plyr__controls>.plyr__time--current,.video-slot .plyr__controls>.plyr__time--duration{font-size:12px;font-weight:400}
-.line time,.input-detail time,#currentQuoteTime,.video-slot .plyr__time{font-variant-numeric:tabular-nums}
-#currentQuoteLabel,.current-quote-panel.is-previous #currentQuoteLabel{font:700 14px/1.5 "Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
+.line time,.input-detail time,#currentQuoteTime,.video-slot .plyr__time,.session-info{font-variant-numeric:tabular-nums}
 .keycap,.controller text,.mouse-motion,.time-tick time,.timeline-playhead time,.quote-bar,.timeline-gap,.bar-glyph,.hold-label,#inputScope,.timeline-window-label>span{font-family:"Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
+*{scrollbar-width:thin;scrollbar-color:var(--rule) transparent}

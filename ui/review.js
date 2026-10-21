@@ -251,7 +251,7 @@
   const $=id=>document.getElementById(id),video=$('video'),lines=$('lines');
   let segments=Array.isArray(data.segments)?data.segments:[],nodes=[],inputUI=null;
   let previewInputOffset=null;
-  function frameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--b-paper').trim();try{window.pywebview?.api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
+  function frameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{window.pywebview?.api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
   frameColor();
   window.addEventListener('pywebviewready',frameColor);
   for(const [id,name] of [['winMin','win_minimize'],['winMax','win_toggle_maximize'],['winClose','win_close']])$(id).addEventListener('click',()=>{try{window.pywebview?.api?.[name]?.()?.catch?.(()=>{});}catch(_){}});
