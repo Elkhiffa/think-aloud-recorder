@@ -33,13 +33,13 @@ ROOT_FILES = (
     'transcription_runtime.py', 'speaker_roles.py', 'microphone_monitor.py', 'agent_protocol.py', 'event_edits.py', 'agent_cli.py',
     'visual_nodes.py', 'visual_change.py', 'visual_evidence.py', 'visual_compare.py', 'player.html', 'requirements-lock.txt',
     'issue_registry.py', 'game_catalog.py', 'context_track.py', 'insight_report.py', 'insight_runtime.py',
-    'evidence_tags.py', 'user_feedback.py',
+    'evidence_tags.py', 'user_feedback.py', 'window_chrome.py', 'desk_runtime.py',
     'input_capture.py', 'input_capture_windows.py', 'input_capture_devices.py', 'session_metadata.py',
     'updater.py', 'update_installer.py',
     'vocabulary_agent.py', 'vocabulary_ipc.py', 'docs/vocabulary-agent.md',
     'LICENSE', 'THIRD_PARTY_NOTICES.md', 'docs/build.md', 'docs/updates.md',
     'scripts/build_portable.py', 'scripts/brand_launcher.py', 'scripts/fetch_runtime.py', 'scripts/fetch_input_runtime.py',
-    'scripts/fetch_media_runtime.py',
+    'scripts/fetch_media_runtime.py', 'scripts/fetch_fonts.py',
     'scripts/verify_runtime_seed.py', 'scripts/migrate_layout.py', 'scripts/runtime-seed.json', 'docs/release-readiness.md',
     'vocabularies/uiux-terms.txt', 'docs/uiux-vocabulary.md', 'docs/input-capture-validation.md',
     'docs/agent-integration.md', 'docs/visual-nodes.md',
@@ -48,7 +48,8 @@ OPTIONAL_ROOT_FILES = ('README.md',)
 BLOCKED_PARTS = {'__pycache__', '.git', '.cache', 'cache', 'caches', 'logs', 'log',
                  'crashes', 'crashdumps', 'pip-cache', 'wheelhouse', '.pytest_cache',
                  'gpucache', 'dawncache', 'code cache', 'local storage', 'session storage'}
-UI_EXTENSIONS = {'.html', '.css', '.js', '.svg', '.png', '.ico', '.woff', '.woff2'}
+UI_EXTENSIONS = {'.html', '.css', '.js', '.svg', '.png', '.ico', '.woff', '.woff2', '.ttf', '.otf'}
+UI_FONTS = ('ui/fonts/SarasaUiSC-Regular.ttf', 'ui/fonts/SarasaUiSC-Bold.ttf', 'ui/fonts/NotoSerifSC-Bold.otf')
 STAMP = (1980, 1, 1, 0, 0, 0)
 
 
@@ -99,7 +100,8 @@ def collect_files(root):
         add(relative)
     for relative in OPTIONAL_ROOT_FILES:
         add(relative, False)
-    for relative in ('tools/input/SDL2.dll', 'tools/input/provenance.json', 'licenses/SDL2-zlib.txt'):
+    for relative in ('tools/input/SDL2.dll', 'tools/input/provenance.json', 'licenses/SDL2-zlib.txt',
+                     'tools/fonts/provenance.json', 'licenses/Sarasa-Gothic-OFL.txt', 'licenses/Noto-Serif-CJK-OFL.txt'):
         add(relative)
     for dirname in ('licenses', 'ui', 'runtime', 'tools/obs'):
         base = root / dirname
@@ -130,7 +132,7 @@ def collect_files(root):
                      'ui/vendor/plyr/plyr.min.js', 'ui/vendor/plyr/plyr.css', 'ui/vendor/plyr/plyr.svg',
                      'licenses/Plyr-MIT.txt', 'runtime/python.exe', 'runtime/pythonw.exe',
                      'runtime/python312._pth', 'tools/obs/bin/64bit/obs64.exe',
-                     'tools/obs/portable_mode.txt'):
+                     'tools/obs/portable_mode.txt', 'ui/fonts.css', *UI_FONTS):
         if required not in entries:
             raise ValueError('Required runtime component missing: ' + required)
     return entries
@@ -287,6 +289,10 @@ def build(root, outdir, source_dir=None, *, candidate=False, version=None, launc
     if not any(item.get('component') == 'SDL2' and item.get('sha256') == source_assets.get(item.get('filename'))
                and item.get('filename') in source_assets for item in sources['files']):
         raise ValueError('Matching SDL2 source archive missing from dependency sources')
+    fonts = json.loads(files['tools/fonts/provenance.json'].read_text(encoding='utf-8'))
+    pinned = {'ui/fonts/' + item.get('filename', ''): item.get('sha256') for item in fonts.get('fonts', [])}
+    if sorted(pinned) != sorted(UI_FONTS) or any(sha256(files[name]) != pinned[name] for name in UI_FONTS):
+        raise ValueError('Bundled UI font differs from font provenance')
     verify_runtime_seed(root, files)
     files, compact_notices = compact_dependency_notices(files)
     generated = {

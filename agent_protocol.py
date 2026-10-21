@@ -975,6 +975,36 @@ def _reanalysis_status(job, raw):
     return dict(value, state='failed', failure_reason=str(job.get('reason') or '')[:2000])
 
 
+QUOTE_ORDER = ('obstacle', 'cost', 'confusion', 'negative')
+_FILLER = ('呃', '嗯', '哎', '啊', '哦', '好', '然后', '但是', '那', '对', '就是')
+
+
+def _digest(result):
+    """Small, list-ready summary of a validated result: kind counts, one verbatim quote, event titles.
+
+    The quote is the recorder's own words, never rewritten: the first high-confidence
+    instance in obstacle > cost > confusion > negative order whose first quoted line is
+    8-24 characters and does not open with a filler word.
+    """
+    instances = result.get('instances') or []
+    kinds = {}
+    for item in instances:
+        kinds[item.get('kind')] = kinds.get(item.get('kind'), 0) + 1
+    quote = None
+    for kind in QUOTE_ORDER:
+        for item in instances:
+            said = (item.get('said') or [{}])[0]
+            text = str(said.get('text') or '').strip()
+            if (item.get('kind') == kind and item.get('confidence') == 'high' and 8 <= len(text) <= 24
+                    and not text.startswith(_FILLER)):
+                quote = dict(text=text, at=said.get('start'), kind=kind, instance=item.get('id'))
+                break
+        if quote:
+            break
+    titles = [str(event.get('title') or '') for event in (result.get('events') or [])[:2]]
+    return dict(kinds=kinds, quote=quote, event_titles=titles)
+
+
 def _status(folder, meta):
     meta, material, revision, complete = _identity(folder, meta)
     try:
@@ -1003,7 +1033,8 @@ def _status(folder, meta):
                 editing = dict(error='手动校准记录无法读取，暂时显示原整理结果；校准文件已保留。')
             value = dict(state='complete', label=f'已预处理 · {len(result["events"])} 个事件',
                          events=len(result['events']), questions=len(result['questions']),
-                         ideas=len(result['ideas']), instances=len(result.get('instances', [])), result=result, editing=editing)
+                         ideas=len(result['ideas']), instances=len(result.get('instances', [])), result=result, editing=editing,
+                         **_digest(result))
             if context is not None and context != _current_analysis_context(meta):
                 value['notice'] = '整理后同步偏移／记录者已改动，事件中的操作时间可能有偏差'
             redo = _reanalysis_status(job, raw)

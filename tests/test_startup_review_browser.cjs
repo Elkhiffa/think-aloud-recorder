@@ -12,7 +12,7 @@ const fixture=(variant='normal')=>({title:'启动准备 · 合成验证',game:'�
  alignment:{source:variant==='uncalibrated'?'uncalibrated':variant==='manual'?'manual':'measured',offset_seconds:variant==='manual'?-.2:1.5},
  intervals:[{id:'synthetic-key',device:'keyboard',code:'E',label:'E',kind:'button',start:.6,end:.8}],
  gaps:[{start:0,end:.5,type:'capture',reason:'录像启动确认前尚未采集操作'},{start:.3,end:6,type:'focus',reason:'目标窗口不在前台'},{start:12,end:13,type:'capture',reason:'实际中断'}]}});
-function html(variant){const data=fixture(variant);const values={TITLE:data.title,DATA:JSON.stringify(data),CSS:read('ui/review.css'),JS:read('ui/review.js'),PLYR_CSS:read('ui/vendor/plyr/plyr.css'),PLYR_JS:read('ui/vendor/plyr/plyr.min.js'),PLYR_SVG:read('ui/vendor/plyr/plyr.svg'),LICENSE:'Synthetic acceptance'};return read('player.html').replace(/%%([A-Z_]+)%%/g,(_,key)=>values[key]);}
+function html(variant){const data=fixture(variant);const values={TITLE:data.title,DATA:JSON.stringify(data),CSS:read('ui/review.css'),JS:read('ui/review.js'),FONTS: '', PLYR_CSS:read('ui/vendor/plyr/plyr.css'),PLYR_JS:read('ui/vendor/plyr/plyr.min.js'),PLYR_SVG:read('ui/vendor/plyr/plyr.svg'),LICENSE:'Synthetic acceptance'};return read('player.html').replace(/%%([A-Z_]+)%%/g,(_,key)=>values[key]);}
 const server=http.createServer((request,response)=>{if(request.url==='/demo.mp4'){
  response.setHeader('Content-Type','video/mp4');response.setHeader('Accept-Ranges','bytes');
  const range=/^bytes=(\d+)-(\d*)$/.exec(request.headers.range||'');if(range){const start=+range[1],end=Math.min(range[2]?+range[2]:media.length-1,media.length-1);response.writeHead(206,{'Content-Range':`bytes ${start}-${end}/${media.length}`,'Content-Length':end-start+1});response.end(media.subarray(start,end+1));}else response.end(media);return;}
@@ -54,7 +54,7 @@ const position=page=>page.locator('video').evaluate(v=>({time:v.currentTime,paus
   const time=(await position(page)).time;assert.ok(time>=.74&&time<1.5,`unexpected time ${time}`);await page.close();
  });
  await check('early interaction without a seek preserves zero rather than jumping afterward',async()=>{
-  const {page,release}=await pageFor('normal',true);await page.locator('#themeButton').click();release();await loaded(page);
+  const {page,release}=await pageFor('normal',true);await page.locator('#title').click();release();await loaded(page);
   assert.deepEqual(await position(page),{time:0,paused:true});await page.close();
  });
  await check('no browser errors',()=>assert.deepEqual(errors,[]));

@@ -42,7 +42,7 @@ const data = {
 const sources = Object.fromEntries(['player.html', 'ui/review.js', 'ui/review.css'].map(file => [file, read(file)]));
 const values = {
   TITLE: data.title, DATA: JSON.stringify(data), CSS: sources['ui/review.css'], JS: sources['ui/review.js'],
-  PLYR_CSS: read('ui/vendor/plyr/plyr.css'), PLYR_JS: read('ui/vendor/plyr/plyr.min.js'),
+  FONTS: '', PLYR_CSS: read('ui/vendor/plyr/plyr.css'), PLYR_JS: read('ui/vendor/plyr/plyr.min.js'),
   PLYR_SVG: read('ui/vendor/plyr/plyr.svg'), LICENSE: 'Synthetic hold label browser acceptance',
 };
 const html = sources['player.html'].replace(/%%([A-Z_]+)%%/g, (_, key) => values[key]);

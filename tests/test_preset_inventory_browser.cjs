@@ -3,6 +3,10 @@
 // Production recorder DOM in real headless Edge. All bridge/device states are
 // synthetic; no OBS, native devices, real recording or private installation.
 // PLAYWRIGHT_MODULE may point to an existing bundled runtime. No downloads.
+// Redesign (docs/plans/2026-10-19-redesign.md): settings and wizards share one #sheet overlay. The game
+// window, device feedback, refresh and engine recovery live in 设置 → 游戏 (#panelGame); the microphone
+// and recording range live in 设置 → 通用 (#panelGeneral). A new game ('new') reuses the shared devices;
+// only the first launch ('first') starts from an empty device draft.
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
@@ -26,6 +30,8 @@ function snapshot(){return {
   readiness:{ready:false,checking:false,errors:[{code:'OBS_UNAVAILABLE',step:1,message:'无法连接录制引擎。'}]},
   activity:{kind:'idle',busy:false,status:'待开始',detail:''},sessions:[],background_jobs:[],model:{state:'missing'},capabilities:{cloud_key:false},
 };}
+// First launch: no game yet, so the sheet opens itself in 'first' mode with an empty device draft.
+function firstLaunch(){const value=snapshot();value.active_preset_id=null;value.presets=[];value.config={configured:false,game:'',vault:'',transcription_provider:''};return value;}
 const report={scope:'Real headless Edge with production DOM/CSS/JS and synthetic bridge/device inventory only. Not native WebView2, OBS or live recording acceptance.',started_at:new Date().toISOString(),checks:[],screenshots:[],errors:[],source_sha256:{}};
 for(const file of ['ui/app.js','ui/state.js','ui/index.html','ui/styles.css'])report.source_sha256[file]=crypto.createHash('sha256').update(fs.readFileSync(path.join(root,file))).digest('hex');
 const server=http.createServer((req,res)=>{
@@ -43,6 +49,7 @@ async function makePage(initial=snapshot(),mode='hold'){
     const f=window.syntheticInventory={snapshot:initial,mode,calls:[],sequence:0};
     window.pywebview={api:new Proxy({},{get:(_,method)=>async(...args)=>{
       if(method==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(f.snapshot))};
+      if(method==='win_set_frame_color')return {ok:true};
       f.calls.push({method,args});
       if(method==='refresh_device_inventory'){
         const id='synthetic-inventory-'+(++f.sequence);
@@ -66,13 +73,15 @@ async function complete(page,options={}){
 async function choices(page){return page.evaluate(()=>JSON.stringify([store.draft.source,store.draft.window,store.draft.monitor,store.draft.mic,store.draft.record_inputs]));}
 async function calls(page,name){return page.evaluate(name=>window.syntheticInventory.calls.filter(c=>c.method===name),name);}
 async function screenshot(page,name){await page.screenshot({path:path.join(output,name+'.png')});report.screenshots.push(name+'.png');}
+const sheetOpen=page=>page.locator('#sheet').isVisible();
+async function toGeneralStep(page){await page.locator('#sheet').waitFor({state:'visible'});assert.equal(await page.locator('#sheetTitle').innerText(),'开始使用');await page.locator('#wizardNext').click();assert.equal(await page.locator('#panelGeneral').isVisible(),true);}
 async function check(name,fn){try{await fn();report.checks.push({name,pass:true});}catch(error){report.checks.push({name,pass:false,error:error.stack});console.error(name+'\n'+error.stack);}}
 
 async function main(){
   fs.mkdirSync(output,{recursive:true});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin='http://127.0.0.1:'+server.address().port;
   const browser=await chromium.launch({headless:true,channel:'msedge'});
   try{
-    context=await browser.newContext({viewport:{width:1060,height:780}});context.setDefaultTimeout(5000);
+    context=await browser.newContext({viewport:{width:720,height:520}});context.setDefaultTimeout(5000);
     await context.route('**/*',route=>{if(route.request().url().startsWith(origin+'/'))return route.continue();report.errors.push('Blocked external request: '+route.request().url());return route.abort();});
     context.on('page',page=>page.on('pageerror',error=>report.errors.push(error.message)));
     const page=await makePage();await page.locator('#settingsButton').click();
@@ -126,49 +135,61 @@ async function main(){
       assert.equal(await choices(page),original);await screenshot(page,'edit-ambiguous');
     });
     await check('manual window and mic choices survive in-flight read and later matching results',async()=>{
-      await page.locator('#target').selectOption(other);await page.locator('#mic').selectOption('another-mic');
+      await page.locator('#target').selectOption(other);
       await page.locator('#refreshDevices').click();await complete(page);
-      assert.equal(await page.locator('#target').inputValue(),other);assert.equal(await page.locator('#mic').inputValue(),'another-mic');
+      assert.equal(await page.locator('#target').inputValue(),other);
       await page.locator('#wizardCancel').click();assert.equal(await page.evaluate(()=>window.syntheticInventory.snapshot.config.window),saved);
-      assert.equal((await calls(page,'save_preset')).length,0);
+      // The microphone is a shared (通用) setting; opening the sheet starts a read that a manual choice must survive.
+      await page.locator('#settingsButton').click();await page.locator('#tabGeneral').click();
+      await page.waitForFunction(()=>window.syntheticInventory.snapshot.device_inventory.state==='running');
+      await page.locator('#mic').selectOption('another-mic');await complete(page);
+      assert.equal(await page.locator('#mic').inputValue(),'another-mic');
+      await page.locator('#wizardCancel').click();assert.equal(await page.evaluate(()=>window.syntheticInventory.snapshot.config.mic),'default');
+      assert.equal((await calls(page,'save_preset')).length+(await calls(page,'save_general')).length,0);
     });
     await page.close();
     await check('cancel and reopen ignore a late RPC and consume newer inventory without freezing',async()=>{
       const p=await makePage(snapshot(),'defer');await p.locator('#settingsButton').click();await p.waitForFunction(()=>!!window.syntheticInventory.resolve);
       assert.equal(await p.locator('#wizardCancel').isEnabled(),true);await p.locator('#wizardCancel').click();
-      await p.evaluate(()=>{window.syntheticInventory.mode='hold';});await p.locator('#newPresetButton').click();
+      await p.evaluate(()=>{window.syntheticInventory.mode='hold';});if(!(await p.locator('#gameTabs [data-game-add]').isVisible()))await p.locator('#gamesMoreButton').click();await p.locator('#gameTabs [data-game-add]').click();assert.equal(await p.locator('#sheetTitle').innerText(),'新建游戏');
       await p.evaluate(()=>window.syntheticInventory.resolve({ok:true,data:{inventory_id:'late-old-rpc'}}));
       await complete(p,{device_inventory:{id:'latest-auto-probe',state:'succeeded',window_selection:match}});
-      assert.equal(await p.evaluate(()=>store.draft.source),'游戏窗口');assert.equal(await p.evaluate(()=>store.draft.mic),'');
+      // A new game reuses the shared recording range, display and microphone; no read result replaces them.
+      assert.deepEqual(await p.evaluate(()=>[store.draft.source,store.draft.window,store.draft.monitor,store.draft.mic]),['游戏窗口','','saved-monitor','default']);
       assert.equal(await p.locator('#refreshDevices').isEnabled(),true);await p.close();
     });
-    await check('new drafts get no defaults from automatic reads; explicit first refresh keeps existing defaults semantics',async()=>{
-      const p=await makePage();await p.locator('#newPresetButton').click();await p.locator('#wizardNext').click();await complete(p);
+    await check('first-launch drafts get no defaults from automatic reads',async()=>{
+      const p=await makePage(firstLaunch());await toGeneralStep(p);await complete(p);
       assert.equal(await p.locator('#source').inputValue(),'游戏窗口');assert.equal(await p.locator('#mic').inputValue(),'');
-      await p.locator('#wizardCancel').click();await patch(p,{devices:blank});await p.locator('#newPresetButton').click();await p.locator('#wizardNext').click();
-      await complete(p,{devices:blank,device_defaults:{}});
-      await p.locator('#refreshDevices').click();await complete(p);
-      assert.equal(await p.locator('#source').inputValue(),'整个显示器');assert.equal(await p.locator('#target').inputValue(),'primary');assert.equal(await p.locator('#mic').inputValue(),'default');
-      assert.match(await p.locator('#deviceFeedback').innerText(),/已识别当前选择的显示器和麦克风/);assert.doesNotMatch(await p.locator('#deviceFeedback').innerText(),/游戏窗口/);
-      await p.locator('#target').selectOption('secondary');await p.locator('#mic').selectOption('another-mic');await p.locator('#refreshDevices').click();await complete(p);
-      assert.equal(await p.locator('#target').inputValue(),'secondary');assert.equal(await p.locator('#mic').inputValue(),'another-mic');
+      assert.equal(await p.evaluate(()=>store.draft.monitor),'');
       await p.close();
+    });
+    await check('explicit first refresh on the first-launch device step selects the primary display and default microphone; later choices are kept',async()=>{
+      const p=await makePage(firstLaunch());await toGeneralStep(p);await complete(p,{devices:blank,device_defaults:{}});
+      try{
+        assert.equal(await p.locator('#refreshDevices').isVisible(),true,'the device step that requires a microphone has no device refresh: #refreshDevices lives in #panelGame (游戏与窗口); by that step the microphone is already chosen, so the explicit-first-refresh defaults (app.js completeDeviceSetup) can no longer run');
+        await p.locator('#refreshDevices').click();await complete(p);
+        assert.equal(await p.locator('#source').inputValue(),'整个显示器');assert.equal(await p.evaluate(()=>store.draft.monitor),'primary');assert.equal(await p.locator('#mic').inputValue(),'default');
+        await p.locator('#mic').selectOption('another-mic');await p.locator('#refreshDevices').click();await complete(p);
+        assert.equal(await p.locator('#mic').inputValue(),'another-mic');
+      }finally{await screenshot(p,'first-device-step');await p.close();}
     });
     await check('new draft device choices changed during reading, including changing back, block late defaults',async()=>{
-      const p=await makePage();await p.locator('#newPresetButton').click();await p.locator('#wizardNext').click();await complete(p,{devices:blank,device_defaults:{}});await p.locator('#refreshDevices').click();
-      await p.locator('#source').selectOption('整个显示器');await p.locator('#source').selectOption('游戏窗口');await p.locator('#game').click();await complete(p);
-      assert.equal(await p.locator('#source').inputValue(),'游戏窗口');assert.equal(await p.locator('#mic').inputValue(),'');
+      const p=await makePage(firstLaunch());await toGeneralStep(p);
+      await p.waitForFunction(()=>window.syntheticInventory.snapshot.device_inventory.state==='running');
+      await p.locator('#source').selectOption('整个显示器');await p.locator('#source').selectOption('游戏窗口');await p.locator('#language').click();await complete(p);
+      assert.equal(await p.locator('#source').inputValue(),'游戏窗口');assert.equal(await p.locator('#mic').inputValue(),'');assert.equal(await p.evaluate(()=>store.draft.monitor),'');
       await p.close();
     });
-    await check('RPC rejection is retryable; compact dark layout keeps both device and engine actions usable',async()=>{
-      const p=await makePage(snapshot(),'reject');await p.setViewportSize({width:390,height:667});await p.locator('#themeButton').click();await p.locator('#settingsButton').click();
+    await check('RPC rejection is retryable; the compact layout keeps both device and engine actions usable',async()=>{
+      const p=await makePage(snapshot(),'reject');await p.setViewportSize({width:720,height:520});await p.locator('#settingsButton').click();
       await p.waitForFunction(()=>document.querySelector('#deviceFeedback').textContent.includes('合成读取请求失败'));
       assert.equal(await p.locator('#refreshDevices').isEnabled(),true);assert.equal(await p.locator('#wizardCancel').isEnabled(),true);
       await p.locator('#reconnectEngine').scrollIntoViewIfNeeded();
-      assert.equal(await p.locator('#wizard').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
+      assert.equal(await p.locator('#sheet').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
       assert.equal(await p.locator('#wizardBody').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
-      const box=await p.locator('#reconnectEngine').boundingBox();assert.ok(box.x>=0&&box.x+box.width<=390);
-      await screenshot(p,'compact-dark-read-failed');
+      const box=await p.locator('#reconnectEngine').boundingBox();assert.ok(box.x>=0&&box.x+box.width<=720&&box.y>=0&&box.y+box.height<=520);
+      await screenshot(p,'compact-read-failed');
       await complete(p,{device_inventory:{id:'new-evidence-after-rejection',state:'succeeded',window_selection:match}});
       assert.equal(await p.locator('#target').inputValue(),live);assert.doesNotMatch(await p.locator('#deviceFeedback').innerText(),/合成读取请求失败/);
       await p.evaluate(()=>{window.syntheticInventory.mode='hold';});await p.locator('#refreshDevices').click();await complete(p);
@@ -200,7 +221,7 @@ async function main(){
         await p.evaluate(()=>document.querySelector('#reconnectEngine').click());assert.equal((await calls(p,'refresh_devices')).length,1);
         assert.equal((await calls(p,'start_recording')).length,0);assert.equal((await calls(p,'stop_recording')).length,0);
         await p.locator('#wizardCancel').click();assert.equal(await p.locator('#settingsButton').isDisabled(),true);
-        await p.evaluate(()=>openWizard('edit'));assert.equal(await p.locator('#wizard').isVisible(),false);
+        await p.evaluate(()=>openSheet('settings'));assert.equal(await sheetOpen(p),false);
         await p.close();
       });
     }

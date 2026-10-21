@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>%%TITLE%% · 回看</title>
+  <style>%%FONTS%%</style>
   <style>%%PLYR_CSS%%</style>
   <style>%%CSS%%</style>
 </head>
@@ -11,7 +12,7 @@
   <!-- Plyr 3.8.4 | %%LICENSE%% -->
   <div hidden aria-hidden="true">%%PLYR_SVG%%</div>
   <header class="review-header">
-    <div class="review-brand"><span class="review-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M4 16C4 10 7 7 13 6v4c-3 1-4 3-4 5h4v10H4Z"/><path d="M16 16c0-6 3-9 9-10v4c-3 1-4 3-4 5h4v10h-9Z"/><path d="M30 3h6v35l-3-4-3 4Z"/></svg></span><div class="review-session"><div class="session-title-row"><h1 id="title">%%TITLE%%</h1><button id="renameSession" class="rename-session" aria-label="编辑片段名" title="编辑片段名"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7l-3-3L5 16Z"/></svg></button></div><form id="renameForm" class="rename-form" hidden><label class="sr-only" for="sessionName">片段名称</label><input id="sessionName" maxlength="4096" autocomplete="off"><button type="submit">保存</button><button type="button" id="cancelRename">取消</button></form><div class="session-meta-row"><p id="sessionInfo" class="session-info"></p><div class="copy-split" id="copySplit">
+    <div class="review-brand"><span class="brand" aria-hidden="true"></span><div class="review-session"><div class="session-title-row"><h1 id="title">%%TITLE%%</h1><button id="renameSession" class="rename-session" aria-label="编辑片段名" title="编辑片段名"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-1L20 7l-3-3L5 16Z"/></svg></button></div><form id="renameForm" class="rename-form" hidden><label class="sr-only" for="sessionName">片段名称</label><input id="sessionName" maxlength="4096" autocomplete="off"><button type="submit">保存</button><button type="button" id="cancelRename">取消</button></form><div class="session-meta-row"><p id="sessionInfo" class="session-info"></p><div class="copy-split" id="copySplit">
             <button id="copyPath" data-copy="vault" title="复制资料库路径">
               <svg class="copy-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/></svg>
               <svg class="check-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
@@ -30,7 +31,7 @@
               <button data-document="transcript">打开逐字稿文档</button>
             </div>
           </div></div><p id="sessionContent" class="session-content"></p></div><span id="testLabel" hidden>合成测试</span></div>
-    <div class="review-header-actions"><span class="review-wordmark">Think Aloud</span><button id="themeButton" class="theme-button" aria-label="切换深色模式" title="切换深色模式"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14a8 8 0 0 1-10-10 8.5 8.5 0 1 0 10 10Z"/></svg></button></div>
+    <div class="review-header-actions"><div class="win" aria-label="窗口"><button id="winMin" aria-label="最小化" title="最小化">&#xE921;</button><button id="winMax" aria-label="最大化" title="最大化">&#xE922;</button><button id="winClose" class="close" aria-label="关闭" title="关闭">&#xE8BB;</button></div></div>
   </header>
   <main class="review-layout">
     <section id="videoPane" class="video-column" aria-label="录像与资料">

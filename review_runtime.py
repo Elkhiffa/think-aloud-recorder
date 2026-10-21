@@ -271,6 +271,8 @@ def render_player(root, payload):
         'PLYR_SVG': read('ui/vendor/plyr/plyr.svg'),
         'LICENSE': read('licenses/Plyr-MIT.txt').replace('--', '—'),
         'CSS': read('ui/review.css'), 'JS': read('ui/review.js'),
+        # Inlined into a page under state/reviews: point the font faces at ui/fonts by absolute address.
+        'FONTS': read('ui/fonts.css').replace('url(fonts/', 'url(' + (root / 'ui/fonts').resolve().as_uri() + '/'),
     }
     import re
     return re.sub(r'%%([A-Z_]+)%%', lambda match: values[match[1]], read('player.html'))

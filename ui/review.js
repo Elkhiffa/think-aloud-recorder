@@ -251,14 +251,10 @@
   const $=id=>document.getElementById(id),video=$('video'),lines=$('lines');
   let segments=Array.isArray(data.segments)?data.segments:[],nodes=[],inputUI=null;
   let previewInputOffset=null;
-  function setTheme(value){
-    document.documentElement.dataset.theme=value;
-    const label=value==='dark'?'切换浅色模式':'切换深色模式';
-    $('themeButton').setAttribute('aria-label',label);$('themeButton').title=label;
-    try{localStorage.setItem('recorder-theme',value);}catch(_){}
-  }
-  try{setTheme(localStorage.getItem('recorder-theme')==='dark'?'dark':'light');}catch(_){setTheme('light');}
-  $('themeButton').addEventListener('click',()=>setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark'));
+  function frameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{window.pywebview?.api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
+  frameColor();
+  window.addEventListener('pywebviewready',frameColor);
+  for(const [id,name] of [['winMin','win_minimize'],['winMax','win_toggle_maximize'],['winClose','win_close']])$(id).addEventListener('click',()=>{try{window.pywebview?.api?.[name]?.()?.catch?.(()=>{});}catch(_){}});
   const copySplit=$('copySplit'),fileActions=$('fileActions'),fileActionsToggle=$('fileActionsToggle');
   document.body.append(fileActions);
   const menuButtons=[...fileActions.querySelectorAll('button')];

@@ -118,7 +118,25 @@ install packages globally on a user's working computer.
    upstream zlib license. No global installation or PATH changes. Existing
    differing files are preserved and cause a failure. Add the verified source
    archive to a successor dependency-source manifest before packaging.
-7. Prepare the independently versioned media CLI:
+7. Prepare the UI body font:
+
+   ```powershell
+   runtime/python.exe scripts/fetch_fonts.py --root <stage>
+   ```
+
+   This reads only the two needed collections of the pinned official
+   `Sarasa-TTC-1.0.42.zip` by HTTP range requests (about 80 MB), checks the
+   archive size, both collections, the extracted `Sarasa UI SC` Regular and
+   Bold faces and the OFL text against fixed SHA256 values, and writes
+   `ui/fonts/*.ttf`, `licenses/Sarasa-Gothic-OFL.txt` and
+   `tools/fonts/provenance.json`. `--archive <zip>` reuses a full download.
+   It also downloads the pinned Noto Serif SC Bold (Simplified Chinese subset,
+   noto-cjk tag `Serif2.003`, about 12 MB) and its OFL text for titles.
+   Existing different files stop preparation. The packager checks the fonts
+   against the provenance. A development worktree runs the same command
+   without `--root`; until then the windows fall back to system fonts.
+
+8. Prepare the independently versioned media CLI:
 
    ```powershell
    runtime/python.exe scripts/fetch_media_runtime.py --root <stage>
@@ -140,7 +158,7 @@ install packages globally on a user's working computer.
    a successor lock, not regenerating it from an unreviewed candidate. This is
    accepted-seed identity, not a claim of all upstream signatures or reproducible
    native compilation.
-8. Copy the application's allowlisted source/assets/licenses into `<stage>`.
+9. Copy the application's allowlisted source/assets/licenses into `<stage>`.
    Model weights remain optional. Run the tests and native launcher checks below.
 
 ## Acquire source materials

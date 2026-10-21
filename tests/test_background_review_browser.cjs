@@ -18,7 +18,7 @@ const inputs={version:1,state:'complete',recording_scope:'all',duration:32,timeb
 ]};
 const data={title:'后台操作区域 · 合成验收',game:'合成测试',session_name:'后台操作区域 · 合成验收',desktop:true,test:true,video:'/demo.mp4',segments:[{start:3.2,end:5.5,text:'这段原话在后台区间中，文字和气泡保持正常可读。'}],transcription:{state:'ready'},inputs};
 const media=fs.readFileSync(path.join(root,'docs/prototypes/input-review/demo.mp4'));
-const values={TITLE:data.title,DATA:JSON.stringify(data),CSS:read('ui/review.css'),JS:read('ui/review.js'),PLYR_CSS:read('ui/vendor/plyr/plyr.css'),PLYR_JS:read('ui/vendor/plyr/plyr.min.js'),PLYR_SVG:read('ui/vendor/plyr/plyr.svg'),LICENSE:'Synthetic browser acceptance'};
+const values={TITLE:data.title,DATA:JSON.stringify(data),CSS:read('ui/review.css'),JS:read('ui/review.js'),FONTS: '', PLYR_CSS:read('ui/vendor/plyr/plyr.css'),PLYR_JS:read('ui/vendor/plyr/plyr.min.js'),PLYR_SVG:read('ui/vendor/plyr/plyr.svg'),LICENSE:'Synthetic browser acceptance'};
 const html=read('player.html').replace(/%%([A-Z_]+)%%/g,(_,key)=>values[key]);
 const server=http.createServer((request,response)=>{if(request.url==='/demo.mp4'){response.setHeader('Content-Type','video/mp4');response.setHeader('Accept-Ranges','bytes');const range=/^bytes=(\d+)-(\d*)$/.exec(request.headers.range||'');if(range){const start=+range[1],end=Math.min(range[2]?+range[2]:media.length-1,media.length-1);response.writeHead(206,{'Content-Range':`bytes ${start}-${end}/${media.length}`,'Content-Length':end-start+1});response.end(media.subarray(start,end+1));}else response.end(media);return;}response.setHeader('Content-Type','text/html; charset=utf-8');response.end(html);});
 const checks=[],errors=[];let browser;
@@ -48,10 +48,10 @@ async function main(){
    const layers=await page.evaluate(()=>Object.fromEntries(['.timeline-window-states','.timeline-ticks','.timeline-inputs','.timeline-playhead'].map(s=>[s,+getComputedStyle(document.querySelector(s)).zIndex])));
    assert.ok(layers['.timeline-window-states']<layers['.timeline-ticks']);assert.ok(layers['.timeline-ticks']<layers['.timeline-inputs']);assert.ok(layers['.timeline-inputs']<layers['.timeline-playhead']);
  });
- for(const theme of ['light','dark'])await check(`${theme} theme readable labels outside input and speech columns`,async()=>{
-   if(await page.locator('html').getAttribute('data-theme')!==theme)await page.locator('#themeButton').click();await settle();
-   const geometry=await page.evaluate(()=>({label:document.querySelector('.timeline-window-label').getBoundingClientRect().toJSON(),speech:document.querySelector('.quote-bar').getBoundingClientRect().toJSON(),playhead:document.querySelector('#timelinePlayhead').getBoundingClientRect().toJSON()}));
-   assert.ok(geometry.label.right<=geometry.speech.left);await page.screenshot({path:path.join(out,`background-${theme}.png`)});
+ await check('readable labels outside input and speech columns',async()=>{
+    await settle();
+const geometry=await page.evaluate(()=>({label:document.querySelector('.timeline-window-label').getBoundingClientRect().toJSON(),speech:document.querySelector('.quote-bar').getBoundingClientRect().toJSON(),playhead:document.querySelector('#timelinePlayhead').getBoundingClientRect().toJSON()}));
+   assert.ok(geometry.label.right<=geometry.speech.left);await page.screenshot({path:path.join(out,'background.png')});
  });
  await check('hover still describes original hold and background status; quote pin is unobstructed',async()=>{
    const item=page.locator('[data-input-id="through"]'),box=await item.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+(4.5-1)*32);await settle();

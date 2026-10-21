@@ -4,26 +4,29 @@ const escapeHTML=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<
 const icon=name=>`<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const store=new RecorderState.State();
 const providerNames={later:'仅保存录制',local:'在本机转成文字',qwen:'Qwen 云端转写'};
-let pollTask=null,booted=false,firstSetupHandled=false,toastTimer=null,step=1,saving=false,wizardMode='edit';
+let pollTask=null,booted=false,firstSetupHandled=false,toastTimer=null,step=0,saving=false,wizardMode='edit',sheetMode=null,sheetTab='game';
+let libraryRootDraft=null,gamesSignature='',lastSignature='',currentBlockers=[];
 let downloadDirectory=null,presetSignature='',deviceSignature='',sessionSignature='',expandedSession=null,vocabularySignature='';
 let dialogGeneration=0,connectionMessage='',lastActivitySignature='',actionContext=null;
 let deviceInventoryRequest=null;
 let updatePending='',updateError='',updateChannelDirty=false,updateInstallAccepted=false;
 let microphoneRequest=null,microphoneSession=null,microphoneUpdated=0;
 let microphoneQuiet=0,microphoneWarning=false;
-const firstWizardStep=()=>wizardMode==='edit'?1:0;
 const setText=(id,value)=>{const n=document.getElementById(id);const text=String(value??'');if(n.textContent!==text)n.textContent=text;};
 const show=(id,value)=>document.getElementById(id).classList.toggle('hidden',!value);
 function notify(message){clearTimeout(toastTimer);setText('toast',message);$('#toast').classList.add('show');toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),6000);}
 function wizardError(message=''){setText('wizardError',message);show('wizardError',!!message);}
-function theme(value){document.documentElement.dataset.theme=value;$('#themeButton').setAttribute('aria-label',value==='dark'?'切换浅色模式':'切换深色模式');$('#themeButton').title=value==='dark'?'切换浅色模式':'切换深色模式';try{localStorage.setItem('recorder-theme',value);}catch(_){}}
-try{theme(localStorage.getItem('recorder-theme')==='dark'?'dark':'light');}catch(_){theme('light');}
-$('#themeButton').onclick=()=>theme(document.documentElement.dataset.theme==='dark'?'light':'dark');
+// Light only: the native frame strip takes the paper color.
+function applyFrameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{window.pywebview?.api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
+// Self-drawn title bar: the buttons hand back to Windows (window_chrome.py); dragging is the CSS app-region.
+function windowCommand(name){try{window.pywebview?.api?.['win_'+name]?.()?.catch?.(()=>{});}catch(_){}}
+$('#winMin').onclick=()=>windowCommand('minimize');$('#winMax').onclick=()=>windowCommand('toggle_maximize');$('#winClose').onclick=()=>windowCommand('close');
+function sheetOpen(){return !$('#sheet').classList.contains('hidden');}
 async function api(method,...args){if(!window.pywebview?.api?.[method])throw new Error('尚未连接记录器，请稍后重试。');const response=await window.pywebview.api[method](...args);if(!response||response.ok!==true){const error=new Error(response?.error||'操作未完成，请检查后重试。');error.code=response?.code;throw error;}return response.data;}
 function poll(){if(pollTask)return pollTask;pollTask=(async()=>{try{const snapshot=await api('get_state');store.accept(snapshot);connectionMessage='';render();return true;}catch(error){store.disconnect();connectionMessage=error.message||'连接中断，请稍后重试。';renderHome();renderControls();return false;}finally{pollTask=null;}})();return pollTask;}
 async function freshPoll(){if(pollTask)await pollTask;return poll();}
 async function action(method,args=[],success='',context=null){if(store.requestPending){notify('请等待当前请求完成。');return {ok:false};}store.requestPending=true;actionContext=context;renderControls();try{const data=await api(method,...args);const fresh=await freshPoll();if(success)notify(success);return {ok:true,data,fresh};}catch(error){reportError(error.message||'操作未完成。');return {ok:false};}finally{store.requestPending=false;renderControls();}}
-function reportError(message){if($('#wizard').open){wizardError(message);$('#wizardBody').scrollTop=0;}else showDialog('操作未完成','<p>'+escapeHTML(message)+'</p>');}
+function reportError(message){if(sheetOpen()){wizardError(message);$('#wizardBody').scrollTop=0;}else showDialog('操作未完成','<p>'+escapeHTML(message)+'</p>');}
 function showDialog(title,body,actions=[]){const generation=++dialogGeneration;if($('#actionDialog').open)$('#actionDialog').close();$('#actionDialog').classList.toggle('method-dialog',title==='让想法跟上体验');$('#actionBody').innerHTML='<h2 id="actionTitle">'+escapeHTML(title)+'</h2>'+body;$('#actionFooter').replaceChildren();const close=document.createElement('button');close.className='secondary-button';close.textContent='关闭';close.onclick=()=>$('#actionDialog').close();$('#actionFooter').append(close);for(const item of actions){const button=document.createElement('button');button.className=item.primary?'primary-button':'secondary-button';button.textContent=item.label;button.onclick=async()=>{button.disabled=true;try{const result=await item.run();if(result!==false&&result?.ok!==false&&generation===dialogGeneration&&$('#actionDialog').open)$('#actionDialog').close();}catch(error){reportError(error.message);}finally{button.disabled=false;}};$('#actionFooter').append(button);}$('#actionDialog').showModal();}
 function formatTime(value){if(value==null||value==='')return '—';if(typeof value==='string'&&value.includes(':'))return value;const n=Math.max(0,Math.floor(Number(value)||0));return [Math.floor(n/3600),Math.floor(n/60)%60,n%60].map(x=>String(x).padStart(2,'0')).join(':');}
 function formatDate(value){const raw=String(value??'').trim();if(!raw)return '—';const date=new Date(raw);if(Number.isNaN(date.getTime()))return raw;const pad=n=>String(n).padStart(2,'0');return `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;}
@@ -48,10 +51,6 @@ function renderUpdates(){
  if(updateInstallAccepted&&store.connected&&store.snapshot?.closing===false&&u.error)updateInstallAccepted=false;
  const hasUpdate=['available','downloading','verifying','ready'].includes(u.state)&&!!u.latest_version;
  const versionLabel=currentKnown?'v'+version(u.current_version):'版本与更新';
- setText('versionButton',versionLabel+(hasUpdate?' · 有更新':''));
- $('#versionButton').classList.toggle('has-update',hasUpdate);
- $('#versionButton').title=hasUpdate?'新版本 v'+version(u.latest_version)+'，点击查看':'版本与更新'+(currentKnown?' · v'+version(u.current_version):'');
- $('#versionButton').setAttribute('aria-label',hasUpdate?'有新版本 v'+version(u.latest_version)+'，查看更新':'版本与更新');
  setText('updateCurrent',currentKnown?'v'+version(u.current_version):u.current_version==='unknown'?'版本未知':'尚未获取');
  setText('updateLatest',u.latest_version?'v'+version(u.latest_version):u.state==='no_release'?'暂无发布':'尚未检查');
  const status={idle:['尚未检查更新','点击检查更新，查看当前频道的可用版本。'],checking:['正在检查更新','正在获取 GitHub Release 信息…'],available:['有新版本可用','下载完成并校验后，再由你确认退出更新。'],current:['已是当前频道的最新版本','暂时没有更新版本。'],no_release:['此频道暂无可用版本','稍后重试，或查看 Release 页面。'],downloading:['正在下载更新','关闭此窗口后，下载仍会继续。'],verifying:['正在校验更新','正在确认下载的文件是否完整。'],ready:['更新已下载并校验','准备好后，可退出记录器并安装更新。'],installing:['正在退出并更新','更新完成后会重新打开记录器。'],error:['更新未完成','可以重试，或前往 Release 页面查看。']};
@@ -95,13 +94,15 @@ async function updateAction(actionName){
  }catch(error){updateError=error.message||'更新未完成，请重试。';}
  finally{updatePending='';renderUpdates();}
 }
-$('#versionButton').onclick=()=>{updateChannelDirty=false;renderUpdates();$('#updateDialog').showModal();$('#updateClose').focus();};
-$('#updateClose').onclick=()=>$('#updateDialog').close();
-$('#updateDialog').addEventListener('close',()=>$('#versionButton').focus());
+// Update availability: a dot on the settings gear, the 通用 tab and the 版本与更新 heading.
+function renderUpdateBadge(){const u=updateState(),has=['available','downloading','verifying','ready'].includes(u.state)&&!!u.latest_version;$('#settingsButton').classList.toggle('badge',has);$('#tabGeneral').classList.toggle('badge',has);$('#updateGroup').classList.toggle('badge-text',has);$('#settingsButton').title=has?'设置 · 有新版本 v'+String(u.latest_version).replace(/^v/i,''):'设置';$('#settingsButton').setAttribute('aria-label',$('#settingsButton').title);}
 $('#updateChannel').onchange=()=>{updateChannelDirty=true;updateError='';renderUpdates();};
 $('#updateCheck').onclick=()=>updateAction('check');$('#updateDownload').onclick=()=>updateAction('download');$('#updateCancel').onclick=()=>updateAction('cancel');$('#updateInstall').onclick=()=>updateAction('install');$('#updateRelease').onclick=()=>updateAction('open_release');
-function render(){renderHome();renderPresets();if(store.draft){completeDeviceSetup();renderDeviceOptions();renderResources();renderSummary();renderVaultChoice();}renderSessions();renderControls();const a=store.activity;const signature=JSON.stringify([a.kind,a.status,a.detail]);if(signature!==lastActivitySignature){lastActivitySignature=signature;if($('#wizard').open&&a.status==='操作未完成'&&a.detail)wizardError(a.detail);else if(!$('#wizard').open&&store.readiness.ready&&a.status==='操作未完成'&&a.detail)notify('上次操作未完成：'+a.detail);if($('#wizard').open&&actionContext==='verify'&&a.kind==='idle'&&a.detail)setText('cloudFeedback',a.detail);}
- if(!firstSetupHandled&&store.snapshot){firstSetupHandled=true;if(!store.presets.length&&!store.recording)openWizard('new',0,true);}}
+function render(){renderHome();renderGames();renderLast();renderInsight();if(store.draft){completeDeviceSetup();renderDeviceOptions();renderResources();renderVaultChoice();renderVocabulary();}renderControls();const a=store.activity;const signature=JSON.stringify([a.kind,a.status,a.detail]);if(signature!==lastActivitySignature){lastActivitySignature=signature;if(sheetOpen()&&a.status==='操作未完成'&&a.detail)wizardError(a.detail);else if(!sheetOpen()&&store.readiness.ready&&a.status==='操作未完成'&&a.detail)notify('上次操作未完成：'+a.detail);if(sheetOpen()&&actionContext==='verify'&&a.kind==='idle'&&a.detail)setText('cloudFeedback',a.detail);}
+ if(!firstSetupHandled&&store.snapshot){firstSetupHandled=true;if(!store.presets.length&&!store.recording)openSheet('first');}}
+// What the ready record block lists under 已就绪: the target and the microphone (with input capture when on).
+function readyLines(){const c=store.saved;return [c.source==='整个显示器'?'整个显示器 · '+deviceLabel('monitor',c.monitor):'游戏窗口 · '+deviceLabel('window',c.window),'麦克风'+(c.record_inputs?' · 操作记录':'')];}
+function liveSummary(){const c=store.saved;return [c.source==='整个显示器'?'录整个显示器':'只录游戏窗口',String(c.preset||'').split(' ').pop(),c.record_inputs?'操作记录中':'',providerNames[c.transcription_provider]||''].filter(Boolean).join('　');}
 function renderHome(){
  const a=store.activity,r=store.readiness,recording=store.recording;
  syncMicrophoneVisibility();
@@ -109,18 +110,18 @@ function renderHome(){
  const foreground=!!a.busy&&!['devices','idle'].includes(a.kind);
  const checking=r.checking===true||a.kind==='devices'&&a.busy===true;
  const errors=Array.isArray(r.errors)?r.errors:[];
- let label='请选择或新建录制预设',title='记录体验',subtitle='边体验，边说出你此刻的想法。',button='开始录制';
+ let label=store.presets.length?'':'先在设置里添加一个游戏',button='开始录制';
  if(recording){
   label=/中断|异常|失败/.test(a.status||'')?a.status:'';
   if(microphoneWarning)label=(/中断|异常/.test(label)?label+'；':'')+'超过 2 分钟未检测到麦克风声音';
-  button=store.saved.transcription_provider==='later'?'结束并保存':'结束并整理';
+  button=store.saved.transcription_provider==='later'?'结束并保存':'结束录制';
  }else if(foreground){
   label=a.status||'正在处理';button=a.kind==='starting'?'正在开始…':a.kind==='saving'?'正在保存…':'正在处理…';
  }else if(!store.connected)label='正在连接记录器';
  else if(store.requestPending)label='正在处理请求…';
  else if(checking)label='正在检查录制条件';
- else if(r.ready)label='准备就绪';
- else if(store.activeId)label='录制条件尚未满足，请重新检查';
+ else if(r.ready)label='已就绪';
+ else if(store.activeId)label='录制条件尚未满足';
  if(closing){label='正在安全关闭';button='正在安全关闭…';}
  const cancelPending=store.snapshot?.updates?.cancel_pending===true;
  if(cancelPending){label='取消尚未确认，请保留窗口';button='等待取消确认';}
@@ -128,27 +129,101 @@ function renderHome(){
  if(!closing&&!store.connected&&connectionMessage)blockers=[connectionMessage];
  else if(!closing&&!recording&&!foreground&&!checking&&!store.requestPending){
   blockers=errors.map(e=>e.message).filter(Boolean);
-  if(!r.ready&&!$('#wizard').open&&a.status==='操作未完成'&&a.detail&&!blockers.includes(a.detail))blockers.push(a.detail);
+  if(!r.ready&&!sheetOpen()&&a.status==='操作未完成'&&a.detail&&!blockers.includes(a.detail))blockers.push(a.detail);
  }
- // Readiness and its blockers replace each other inside ONE above-button slot.
- // Keep the service's start/stop authority; presentation never enables capture.
- $('#capturePanel').classList.toggle('is-recording',recording);
- setText('recordingTime',recording?formatTime(a.elapsed_seconds):'00:00:00');show('recordingTime',recording);
- setText('homeTitle',title);setText('homeSubtitle',subtitle);
- setText('homeStatus',blockers.length?'':label);
- $('#homeStatus').className='capture-label'+(recording?' recording':!closing&&!checking&&!store.requestPending&&r.ready&&store.connected?' ready':'');
- $('#homeStatus').classList.toggle('microphone-warning',recording&&microphoneWarning);
- const blockerText=blockers.join('\n'),changed=$('#blockers').textContent!==blockerText;
- show('homeStatus',!blockers.length);setText('blockers',blockerText);show('blockers',!!blockers.length);
- show('statusSlot',!!label||!!blockers.length);
- if(changed)$('#statusSlot').scrollTop=0;
- $('#statusSlot').tabIndex=$('#statusSlot').scrollHeight>$('#statusSlot').clientHeight?0:-1;
- setText('recordButtonText',button);$('#recordButton').classList.toggle('stopping',recording);
+ // Blocked: the record block says it cannot record; the reasons are listed on the right, never scrolled.
+ const alerting=blockers.length>0&&!recording;
+ const ready=!recording&&!alerting&&!closing&&!checking&&!foreground&&!store.requestPending&&r.ready===true&&store.connected;
+ if(alerting)button='暂不能录制';
+ const panel=$('#capturePanel');panel.classList.toggle('recording',recording);panel.classList.toggle('alerting',alerting);panel.classList.toggle('off',!recording&&!ready);
+ setText('recordingTime',recording?formatTime(a.elapsed_seconds):'00:00:00');show('liveClock',recording);
+ setText('recordButtonText',button);setText('recordGame',recording?'':store.presets.find(p=>p.id===store.activeId)?.name||'');
+ $('#recordButton').classList.toggle('stopping',recording);
+ const status=alerting?`${blockers.length} 项检查未通过\n处理右侧事项后重新检查`:ready?[label,...readyLines()].join('\n'):label;
+ // Ready: one line per item, cut with an ellipsis rather than wrapped, so the record button keeps its size.
+ if(ready){$('#homeStatus').innerHTML=status.split('\n').map(line=>'<span>'+escapeHTML(line)+'</span>').join('');$('#homeStatus').title=readyLines().join('\n');}else{setText('homeStatus',status);$('#homeStatus').title='';}
+ $('#homeStatus').className='checks'+(ready?' ready':'')+(recording&&microphoneWarning?' microphone-warning':'');show('homeStatus',!!status);
+ currentBlockers=blockers;
+ $('#blockers').innerHTML=blockers.slice(0,2).map(message=>'<li><span>'+escapeHTML(message)+'</span></li>').join('');
+ show('statusSlot',alerting);show('alertRecheck',alerting&&store.connected);show('alertSettings',alerting&&store.connected);
+ const clipped=$$('#blockers li span').some(el=>el.scrollHeight>el.clientHeight+1);
+ setText('alertMore',blockers.length>2?`全部 ${blockers.length} 项`:'查看全文');show('alertMore',alerting&&(blockers.length>2||clipped));
  show('jobDetail',cancelPending||closing||foreground&&!!a.detail);
- setText('jobDetail',cancelPending?'更新助手尚未确认取消，请打开顶部“版本与更新”重试取消。':closing?'正在保存并等待现有整理完成，完成后此窗口会自动关闭。':foreground?a.detail:'');
- setText('savedLocation','打开当前资料库');
- $('#openVault').title=store.saved.vault||'';
+ setText('jobDetail',cancelPending?'更新助手尚未确认取消，请在设置的“版本与更新”里重试取消。':closing?'正在保存并等待现有整理完成，完成后此窗口会自动关闭。':foreground?a.detail:'');
+ // Recording: only what is glanced at from a second monitor.
+ show('livePrompt',recording);setText('liveSummary',recording?liveSummary():'');
+ show('lastSection',!recording);show('insightSection',!recording&&!alerting&&!!store.snapshot?.sessions?.length);
+ // The alert takes the cards' place; the desk stays one click away in the footer.
+ show('footDesk',!recording&&alerting);
 }
+function renderGames(){
+ const signature=JSON.stringify([store.presets.map(p=>[p.id,p.name]),store.activeId,store.recording]);if(signature===gamesSignature)return;gamesSignature=signature;
+ if(store.recording){const active=store.presets.find(p=>p.id===store.activeId);$('#gameTabs').innerHTML=`<span class="g on">${escapeHTML(active?.name||'')}</span><span class="g lock">录制中不能切换游戏</span>`;return;}
+ $('#gameTabs').innerHTML=store.presets.map(p=>`<a href="#" class="g${p.id===store.activeId?' on':''}" data-game="${escapeHTML(p.id)}"${p.id===store.activeId?' aria-current="page"':''}>${escapeHTML(p.name)}</a>`).join('')+'<span class="more hidden" id="gamesMore"><button type="button" class="g more-toggle" id="gamesMoreButton" aria-haspopup="menu" aria-expanded="false" aria-controls="gamesMoreMenu">更多</button><span class="more-menu hidden" id="gamesMoreMenu" role="menu" aria-label="其他游戏"></span></span><a href="#" class="g add" data-game-add title="新游戏" aria-label="新游戏">＋ 新增</a>';
+ fitGames();
+}
+// Games that do not fit move, last first, into 更多; ＋ goes last. The current game keeps its width.
+function fitGames(){
+ const nav=$('#gameTabs'),more=$('#gamesMore'),menu=$('#gamesMoreMenu');if(!more||!menu)return;
+ nav.classList.add('fitting');try{fold(nav,more,menu);}finally{nav.classList.remove('fitting');}
+}
+function fold(nav,more,menu){
+ if(!(nav.scrollWidth>nav.clientWidth))return;
+ more.classList.remove('hidden');
+ for(const tab of [...nav.querySelectorAll('.g[data-game]:not(.on)')].reverse()){if(nav.scrollWidth<=nav.clientWidth)break;tab.className='item';tab.setAttribute('role','menuitem');menu.prepend(tab);}
+ const add=nav.querySelector('.g[data-game-add]');if(add&&nav.scrollWidth>nav.clientWidth){add.className='item';add.setAttribute('role','menuitem');add.textContent='＋ 新游戏';menu.append(add);}
+}
+function toggleGamesMenu(open){const menu=$('#gamesMoreMenu'),button=$('#gamesMoreButton');if(!menu||!button)return;open=open??menu.classList.contains('hidden');if(open){const r=button.getBoundingClientRect();menu.style.left=Math.round(r.left)+'px';menu.style.top=Math.round(r.bottom+4)+'px';}menu.classList.toggle('hidden',!open);button.setAttribute('aria-expanded',String(open));}
+document.addEventListener('click',event=>{if(!event.target?.closest?.('#gamesMore'))toggleGamesMenu(false);});
+// On resize the same nodes are put back and folded again, so focus and the current game survive.
+function unfoldGames(){const more=$('#gamesMore'),menu=$('#gamesMoreMenu');if(!more||!menu)return;toggleGamesMenu(false);for(const item of [...menu.children]){const add=item.hasAttribute('data-game-add');item.className=add?'g add':'g';item.removeAttribute('role');if(add){item.textContent='＋ 新增';more.after(item);}else{const at=id=>store.presets.findIndex(p=>p.id===id),next=[...$('#gameTabs').querySelectorAll(':scope > [data-game]')].find(tab=>at(tab.dataset.game)>at(item.dataset.game));(next||more).before(item);}}more.classList.add('hidden');}
+let gamesFrame=0;window.addEventListener?.('resize',()=>{cancelAnimationFrame(gamesFrame);gamesFrame=requestAnimationFrame(()=>{unfoldGames();fitGames();});});
+$('#gameTabs').addEventListener('click',async event=>{if(event.target.closest('#gamesMoreButton')){toggleGamesMenu();return;}const target=event.target.closest('[data-game],[data-game-add]');if(!target)return;event.preventDefault();toggleGamesMenu(false);if(target.hasAttribute('data-game-add')){openSheet('new');return;}const id=target.dataset.game;if(id===store.activeId)return;const result=await action('select_preset',[id]);if(!result.ok){gamesSignature='';renderGames();}else{lastSignature='';renderLast();}});
+// The four problem types; a session's 问题数 counts only these.
+const KIND_NAMES={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
+const WEEKDAYS='日一二三四五六';
+function pad2(n){return String(n).padStart(2,'0');}
+function sessionDisplayTitle(s){const named=s.session_name||(s.title&&s.title!==s.game?s.title:'');if(named)return {named:true,text:named};const titles=(s.preprocessing?.event_titles||[]).filter(Boolean);return {named:false,text:titles.length?titles.join('、'):(()=>{const d=new Date(s.created);return Number.isNaN(d.getTime())?'未命名的记录':pad2(d.getHours())+':'+pad2(d.getMinutes())+' 开始的记录';})()};}
+function pipeline(s,job,kind,p){
+ const saved=!/录制中|启动中|保存中/.test(String(s.state||'')),transcribed=kind==='ready',ps=p.state||'none',failedPre=['failed','interrupted','invalid','stale'].includes(ps);
+ const steps=[[saved?'done':'now',saved?'已保存':'保存中'],
+  [transcribed?'done':kind==='failed'?'fail':saved?'now':'',transcribed?'已转写':kind==='failed'?'转写失败':job?(job.state==='queued'?'等待转写':'转写中'):'待转写'],
+  [!transcribed?'':ps==='processing'?'now':failedPre?'fail':'now',!transcribed?'待整理':ps==='processing'?'整理中':failedPre?(p.label||'整理未完成'):'待整理']];
+ const list='<ul class="steps">'+steps.map(([c,t])=>`<li class="${c}">${escapeHTML(t)}</li>`).join('')+'</ul>';
+ const handoff=transcribed&&ps!=='processing'?`<div class="handoff"><button class="btn solid" data-copy-handoff="${escapeHTML(s.id)}">复制整理指令</button><p>粘贴给 Codex 或 Claude。整理完成后，问题数和原话会出现在这里。</p></div>`:'';
+ const retry=kind==='failed'||kind==='pending'&&!job?`<div class="handoff"><button class="btn" data-last-process="${escapeHTML(s.id)}">${kind==='failed'?'重试转写':'开始转写'}</button>${s.error?`<p>${escapeHTML(s.error)}</p>`:''}</div>`:'';
+ return list+handoff+retry;
+}
+function shortDate(d){return `${d.getMonth()+1}月${d.getDate()}日`;}
+function renderLast(){
+ const sessions=store.snapshot?.sessions||[],s=sessions[0],alerting=$('#capturePanel').classList.contains('alerting');
+ const signature=JSON.stringify([s,store.backgroundJobs,sessions.length,alerting]);if(signature===lastSignature)return;lastSignature=signature;
+ setText('sessionCount',sessions.length);
+ const latest=s?new Date(s.created):null;setText('libraryBrief',latest&&!Number.isNaN(latest.getTime())?' · 最近 '+shortDate(latest):'');
+ const jobs=store.backgroundJobs,running=jobs.filter(job=>job.state==='running').length,queued=jobs.filter(job=>job.state==='queued').length;
+ setText('queueBrief',[running?running+' 段转写中':'',queued?queued+' 段排队':''].filter(Boolean).join(' · '));show('queueBrief',(running||queued)>0);
+ if(!s){$('#lastSession').innerHTML='<p class="empty">还没有记录。点开始录制，边玩边说出你此刻的想法。</p>';return;}
+ const d=new Date(s.created),valid=!Number.isNaN(d.getTime()),p=s.preprocessing||{},title=sessionDisplayTitle(s);
+ const when=(valid?`${shortDate(d)} 周${WEEKDAYS[d.getDay()]} ${pad2(d.getHours())}:${pad2(d.getMinutes())} · `:'')+formatTime(s.duration);
+ let body='';
+ if(p.state==='complete'){
+  const kinds=p.kinds||{},present=Object.keys(KIND_NAMES).filter(k=>kinds[k]);
+  const bar=present.length?`<div class="fp">${present.map(k=>`<i class="k-${k}" data-flex="${kinds[k]}"></i>`).join('')}</div>`:'';
+  const legend=`<p class="kleg">${present.map(k=>`<span class="k-${k}"><b>${kinds[k]}</b> ${KIND_NAMES[k]}</span>`).join('')||'<span>没有问题类型的判断</span>'}</p>`;
+  // Blocked: the quote steps aside so the reasons and the session both fit.
+  const quote=p.quote&&!alerting?`<div class="quote"><p class="note">${escapeHTML(formatTime(p.quote.at))}${KIND_NAMES[p.quote.kind]?' · '+KIND_NAMES[p.quote.kind]:''}</p><p>“${escapeHTML(p.quote.text)}”</p></div>`:'';
+  body=bar+legend+quote;
+ }else body=pipeline(s,store.sessionJob(s.id),sessionKind(s),p);
+ $('#lastSession').innerHTML=`<div class="last-top"><h2 class="sec-title">上一场</h2><button class="btn sm" data-last-review="${escapeHTML(s.id)}"${canReview(s)?'':' disabled'}>回看</button></div><p class="last-name">${escapeHTML(title.text)}${s.test?'<span class="test-tag">合成测试</span>':''}</p><p class="note">${escapeHTML(when)}</p>${body}`;
+ $$('#lastSession [data-flex]').forEach(el=>{el.style.flex=el.dataset.flex;});
+}
+function renderInsight(){const insight=store.snapshot?.insight||{},latest=insight.latest;setText('insightCount',insight.insights??'—');let brief=' · 还没有报告';if(latest){const d=new Date(latest.modified*1000);brief=' · 最新报告 '+(Number.isNaN(d.getTime())?latest.name:shortDate(d));}setText('insightBrief',brief);}
+async function copyHandoff(s){if(!s)return;const text=['请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。','场次文件夹：'+s.path,'资料库：'+store.saved.vault,'只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。'].join('\n');try{await navigator.clipboard.writeText(text);}catch(_){const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();}notify('整理指令已复制，粘贴给 Codex 或 Claude 即可。');}
+$('#lastSession').addEventListener('click',event=>{const review=event.target.closest('[data-last-review]');if(review){action('open_review',[review.dataset.lastReview]);return;}const copy=event.target.closest('[data-copy-handoff]');if(copy){copyHandoff(findSession(copy.dataset.copyHandoff));return;}const process=event.target.closest('[data-last-process]');if(process){const s=findSession(process.dataset.lastProcess);if(s)processSession(s);}});
+function openDesk(tab){const api=window.pywebview?.api;return api?.open_desk?action('open_desk',[tab]):action('open_insight');}
+$('#openLibrary').onclick=event=>{event.preventDefault();openDesk('sessions');};
+$('#openInsight').onclick=event=>{event.preventDefault();openDesk('insight');};
+$('#footLibrary').onclick=()=>openDesk('sessions');$('#footInsight').onclick=()=>openDesk('insight');
 function showMicrophone(data={state:'connecting',level:0}){
  const states={
   connecting:['正在读取音量…','说句话，确认音量条随声音变化。'],
@@ -196,30 +271,135 @@ async function pollMicrophone(){
  }catch(_){if(id===microphoneSession)showMicrophone({state:'unavailable'});}
  finally{if(microphoneRequest===token)microphoneRequest=null;}
 }
-function renderPresets(){const signature=JSON.stringify([store.presets,store.activeId]);if(signature===presetSignature)return;presetSignature=signature;$('#presetSelect').innerHTML=(store.activeId?'':'<option value="">选择录制预设</option>')+store.presets.map(p=>`<option value="${escapeHTML(p.id)}">${escapeHTML(p.name)}</option>`).join('');$('#presetSelect').value=store.activeId||'';}
-function renderControls(){renderHome();renderUpdates();const locked=!store.connected||store.requestPending||store.busy;$('#recordButton').disabled=store.recording?(!store.connected||store.requestPending||!!store.activity.busy):!store.canStart;$('#presetSelect').disabled=locked||!store.presets.length;$('#newPresetButton').disabled=locked;$('#settingsButton').disabled=locked||!store.activeId;$('#openVault').disabled=!store.connected||store.requestPending||!store.activeId;$('#openInsight').disabled=!store.connected||store.requestPending;
- const requestLocked=!store.connected||store.requestPending||saving;const conflict=store.recording||!!store.activity.busy&&store.activity.kind!=='devices';const fieldsLocked=requestLocked||conflict;$('#deviceFields').disabled=fieldsLocked;$('#recordingFields').disabled=fieldsLocked;
- ['game','source','target','mic','preset','language','hotwords','cloudKey'].forEach(id=>$('#'+id).disabled=fieldsLocked);
+function renderControls(){renderHome();renderUpdates();renderUpdateBadge();const locked=!store.connected||store.requestPending||store.busy;$('#recordButton').disabled=store.recording?(!store.connected||store.requestPending||!!store.activity.busy):!store.canStart;$('#settingsButton').disabled=!store.connected||store.requestPending||store.busy&&!sheetOpen();$('#openVault').disabled=!store.connected||store.requestPending||!store.activeId;
+ const requestLocked=!store.connected||store.requestPending||saving;const conflict=store.recording||!!store.activity.busy&&store.activity.kind!=='devices';const fieldsLocked=requestLocked||conflict;
+ ['game','source','target','monitor','mic','preset','language','hotwords','cloudKey'].forEach(id=>$('#'+id).disabled=fieldsLocked);
  $$('[data-provider]').forEach(button=>button.disabled=fieldsLocked);renderInputRecording(fieldsLocked);
- ['chooseVault','chooseHotwordFiles','existingModel','modelLocation','verifyCloud','reconnectEngine'].forEach(id=>$('#'+id).disabled=locked||saving);
+ ['chooseVault','chooseHotwordFiles','chooseGameHotwordFiles','chooseLibrary','deleteGame','existingModel','modelLocation','verifyCloud','reconnectEngine'].forEach(id=>$('#'+id).disabled=locked||saving);
  $('#refreshDevices').disabled=locked||saving||deviceInventory().state==='running';
  $$('[data-remove-vocabulary]').forEach(button=>button.disabled=fieldsLocked);$('#dictionaryDownload').setAttribute('aria-disabled',requestLocked?'true':'false');$('#dictionaryDownload').tabIndex=requestLocked?-1:0;$('#bailianConsole').setAttribute('aria-disabled',requestLocked?'true':'false');$('#bailianConsole').tabIndex=requestLocked?-1:0;
- ['wizardClose','wizardCancel','wizardBack'].forEach(id=>$('#'+id).disabled=store.requestPending||saving);$('#reuseVault').disabled=fieldsLocked||store.snapshot?.default_vault?.is_directory===false;$('#wizardNext').disabled=locked||saving||(step===3&&store.needsVaultConfirmation);$('#wizardBack').classList.toggle('hidden',step===firstWizardStep());setText('wizardNext',saving?'正在保存…':step===3?'保存预设':step===0?'开始设置':'下一步');$$('[data-step]').forEach(b=>b.disabled=store.requestPending||saving);
- const m=store.snapshot?.model||{};$('#downloadModel').disabled=locked||saving||['verifying','ready'].includes(m.state);$('#existingModel').disabled=locked||saving||['downloading','verifying'].includes(m.state);$('#modelLocation').disabled=locked||saving||['downloading','verifying'].includes(m.state);$('#verifyCloud').disabled=locked||saving||!store.snapshot?.capabilities?.cloud_key||!!$('#cloudKey').value.trim();$$('[data-session-action]').forEach(b=>b.disabled=(!store.connected||store.requestPending||store.snapshot?.closing||(!['review','folder','rename'].includes(b.dataset.sessionAction)&&store.busy)||sessionActionBlocked(b.dataset.id,b.dataset.sessionAction)));}
+ ['wizardCancel','wizardBack'].forEach(id=>$('#'+id).disabled=store.requestPending||saving);$('#reuseVault').disabled=fieldsLocked||store.snapshot?.default_vault?.is_directory===false;$('#wizardNext').disabled=locked&&!sheetOpen()||store.requestPending||saving||conflict||(currentStepKey()==='vault'||sheetMode==='settings'&&sheetTab==='game')&&store.needsVaultConfirmation;
+ const m=store.snapshot?.model||{};$('#downloadModel').disabled=locked||saving||['verifying','ready'].includes(m.state);$('#existingModel').disabled=locked||saving||['downloading','verifying'].includes(m.state);$('#modelLocation').disabled=locked||saving||['downloading','verifying'].includes(m.state);$('#verifyCloud').disabled=locked||saving||!store.snapshot?.capabilities?.cloud_key||!!$('#cloudKey').value.trim();
+ renderSheetFoot();}
 $('#methodButton').onclick=()=>showDialog('让想法跟上体验',$('#methodContent').innerHTML);
+$('#methodLink').onclick=()=>showDialog('让想法跟上体验',$('#methodContent').innerHTML);
 $('#recordButton').onclick=()=>{if(store.recording)action('stop_recording');else if(store.canStart)action('start_recording',[store.startPayload()]);};
 $('#openVault').onclick=()=>action('open_folder');
-$('#openInsight').onclick=()=>action('open_insight');
-$('#newPresetButton').onclick=()=>openWizard('new');$('#settingsButton').onclick=()=>openWizard('edit');
-$('#presetSelect').onchange=async event=>{const id=event.target.value;if(!id||id===store.activeId)return;const result=await action('select_preset',[id]);if(!result.ok){presetSignature='';renderPresets();}else{expandedSession=null;sessionSignature='';renderSessions();}};
-function openWizard(mode='edit',requestedStep=null,automatic=false){if(!store.connected||store.requestPending||store.recording||(!automatic&&store.busy))return;wizardMode=mode;deviceInventoryRequest=null;store.openDraft(mode);step=Math.min(3,Math.max(firstWizardStep(),requestedStep??firstWizardStep()));store.step=step;deviceSignature='';vocabularySignature='';downloadDirectory=null;wizardError();$('#cloudKey').value='';setText('cloudFeedback','新密钥在完成设置时保存，取消时清空。');setText('downloadDestination','下载到软件所在文件夹。下载可暂停，关闭设置后会继续。');$('#advancedSettings').open=false;$('#manualWords').open=false;for(const el of $$('[data-draft]'))el.value=String(store.draft[el.dataset.draft]??'');$('#games').innerHTML=store.presets.map(p=>`<option value="${escapeHTML(p.name)}"></option>`).join('');setText('wizardContext',mode==='new'?'新建录制预设':'编辑录制预设');setText('presetDescription',mode==='new'?'为这款游戏保存一套录制设置。':'修改这套预设，下次录制会使用更新后的设置。');show('presetOnce',mode==='new');renderDeviceOptions(true);renderResources();renderVocabulary();renderSummary();renderVaultChoice();setStep(step,false);$('#wizard').showModal();renderControls();focusWizardStep();void refreshDeviceInventory();}
-function cancelWizard(){if(store.requestPending||saving)return;deviceInventoryRequest=null;$('#cloudKey').value='';store.cancelDraft();$('#wizard').close();renderHome();renderControls();}
-$('#wizardClose').onclick=cancelWizard;$('#wizardCancel').onclick=cancelWizard;$('#wizard').addEventListener('cancel',event=>{event.preventDefault();cancelWizard();});
-function setStep(next,focus=true){step=Math.min(3,Math.max(firstWizardStep(),next));store.step=step;for(let i=0;i<=3;i++)show('step'+i,i===step);setText('wizardTitle',['记录方法','游戏与设备','录制与转写','保存位置'][step]);$$('[data-step]').forEach(b=>{const n=Number(b.dataset.step);b.classList.toggle('hidden',n<firstWizardStep());const number=b.querySelector('span');if(number)number.textContent=String(n-firstWizardStep()+1);b.classList.toggle('active',n===step);b.classList.toggle('completed',n<step);if(n===step)b.setAttribute('aria-current','step');else b.removeAttribute('aria-current');});$('#wizardBody').scrollTop=0;renderResources();renderSummary();renderControls();if(focus)focusWizardStep();}
-function focusWizardStep(){const target=step===1?$('#game'):$('#wizardTitle');target.focus({preventScroll:true});}
-function moveStep(next){if(next>step){for(let i=step;i<next;i++){const error=store.validateStep(i);if(error){wizardError(error);return;}}}wizardError();setStep(next);}
-$('#wizardBack').onclick=()=>moveStep(Math.max(firstWizardStep(),step-1));$$('[data-step]').forEach(b=>b.onclick=()=>moveStep(Number(b.dataset.step)));$('#wizardNext').onclick=()=>{if(step<3)moveStep(step+1);else finishWizard();};
-function fieldChanged(element){store.updateDraft(element.dataset.draft,element.value);if(element.id==='source'){deviceSignature='';renderDeviceOptions(true);renderInputRecording();}if(element.id==='mic')renderDeviceOptions();if(element.dataset.draft==='hotword_manual')renderVocabulary();renderSummary();}
+$('#settingsButton').onclick=()=>{if(sheetOpen())return;openSheet(store.presets.length?'settings':'first','game');};
+$('#alertMore').onclick=()=>showDialog('录制条件尚未满足','<ol class="alert-list">'+currentBlockers.map(message=>'<li>'+escapeHTML(message)+'</li>').join('')+'</ol>');
+$('#alertRecheck').onclick=()=>{if(store.canConfigure)action('refresh_devices');};
+$('#alertSettings').onclick=()=>{const codes=(store.readiness.errors||[]).map(e=>String(e.code||''));openSheet(store.presets.length?'settings':'first',codes.some(code=>/MIC|MICROPHONE|AUDIO/.test(code))?'general':'game');};
+// ---- Settings page and wizards share one sheet and one set of fields ----
+// settings: 游戏 | 通用 tabs; new: a new game in two steps; first: the first launch.
+const SHEET_STEPS={new:[['game','游戏与窗口'],['vault','保存位置']],first:[['method','记录方法'],['general','设备与转写'],['game','游戏与窗口'],['vault','保存位置']]};
+function sheetSteps(){return SHEET_STEPS[sheetMode]||[];}
+function currentStepKey(){return sheetMode==='settings'?sheetTab:sheetSteps()[step]?.[0]||'';}
+function settingsDirty(){return store.dirty||!!$('#cloudKey').value.trim()||libraryRootDraft!==null;}
+function fillFields(){for(const el of $$('[data-draft]'))el.value=String(store.draft[el.dataset.draft]??'');$('#libraryRoot').value=libraryRootDraft??store.saved.library_root??'';}
+function openSheet(mode='settings',tab='game'){
+ if(!store.connected||store.requestPending||store.recording||mode!=='first'&&store.busy)return;
+ if(mode==='new'&&!store.presets.length)mode='first';
+ sheetMode=mode;sheetTab=tab;wizardMode=mode==='settings'?'edit':'new';deviceInventoryRequest=null;libraryRootDraft=null;
+ store.openDraft(wizardMode);store.addedGeneralIds=[];if(mode==='first')store.markGeneral(store.draft.hotword_files);
+ if(mode==='new'&&store.presets.length){for(const key of RecorderState.GENERAL_KEYS)if(store.saved[key]!==undefined)store.draft[key]=JSON.parse(JSON.stringify(store.saved[key]));store.draft.hotword_files=JSON.parse(JSON.stringify(store.saved.general_hotword_files||[]));store.draft.hotword_manual='';store.draft.vault='';store.syncVocabulary();}
+ step=0;deviceSignature='';vocabularySignature='';downloadDirectory=null;wizardError();$('#cloudKey').value='';
+ setText('cloudFeedback','新密钥在保存设置时保存，取消时清空。');setText('downloadDestination','下载到软件所在文件夹。下载可暂停，关闭设置后会继续。');
+ fillFields();
+ store.snapshotBaseline();
+ $('#sheet').classList.remove('hidden');$('#settingsButton').classList.add('on');
+ layoutSheet();renderDeviceOptions(true);renderResources();renderVocabulary();renderVaultChoice();renderControls();
+ if(currentStepKey()!=='game')$('#sheetTitle').focus({preventScroll:true});void refreshDeviceInventory();
+}
+function layoutSheet(){
+ const settings=sheetMode==='settings',current=currentStepKey(),steps=sheetSteps();
+ setText('sheetTitle',settings?'设置':sheetMode==='first'?'开始使用':'新建游戏');
+ show('sheetTabs',settings);show('wizardSteps',!settings);
+ $('#tabGame').classList.toggle('on',settings&&sheetTab==='game');$('#tabGeneral').classList.toggle('on',settings&&sheetTab==='general');
+ show('gameSubtabs',settings&&sheetTab==='game');
+ if(settings)$('#gameSubtabs').innerHTML=store.presets.map(p=>`<a href="#" data-sub-game="${escapeHTML(p.id)}" class="${p.id===store.activeId?'on':''}">${escapeHTML(p.name)}</a>`).join('')+'<a href="#" class="add" data-sub-add>＋ 新游戏</a>';
+ else $('#wizardSteps').innerHTML=steps.map(([,label],i)=>`<span class="${i===step?'on':''}"><b>${i+1}</b>${escapeHTML(label)}</span>`).join('');
+ show('deviceBar',current==='game'||current==='general');show('panelMethod',current==='method');show('panelGeneral',current==='general');show('panelGame',current==='game'||current==='vault');
+ $('#panelGeneral').classList.toggle('wizard',!settings);
+ $$('#panelGame [data-in]').forEach(field=>{const key=field.dataset.in;field.classList.toggle('hidden',current==='vault'?key!=='game-vault':!settings&&(key==='game-vault'||key==='game-delete'));});
+ $('#wizardBody').scrollTop=0;renderSheetFoot();renderUpdateBadge();
+ if(current==='game')$('#game').focus({preventScroll:true});
+}
+function renderSheetFoot(){
+ if(!sheetOpen())return;const settings=sheetMode==='settings',steps=sheetSteps(),last=!settings&&step===steps.length-1,dirty=settingsDirty();
+ setText('sheetMessage',settings&&dirty?'有未保存的修改':'');
+ setText('wizardCancel',settings&&!dirty?'关闭':'取消');
+ show('wizardNext',!settings||dirty);show('wizardBack',!settings&&step>0);
+ setText('wizardNext',saving?'正在保存…':settings?'保存':last?(sheetMode==='first'?'开始使用':'创建游戏'):step===0&&sheetMode==='first'?'开始设置':'下一步');
+}
+function renderSummary(){renderSheetFoot();}
+function closeSheet(){deviceInventoryRequest=null;libraryRootDraft=null;$('#cloudKey').value='';store.cancelDraft();$('#sheet').classList.add('hidden');$('#settingsButton').classList.remove('on');sheetMode=null;wizardError();renderHome();renderControls();}
+function cancelWizard(){if(store.requestPending||saving)return;closeSheet();}
+$('#wizardCancel').onclick=cancelWizard;
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&sheetOpen()&&!$('#actionDialog').open)cancelWizard();});
+function setSheetTab(tab){if(sheetTab===tab)return;if(settingsDirty()){wizardError('请先保存或取消当前修改，再切换。');return;}wizardError();sheetTab=tab;layoutSheet();}
+$('#tabGame').onclick=event=>{event.preventDefault();setSheetTab('game');};$('#tabGeneral').onclick=event=>{event.preventDefault();setSheetTab('general');};
+$('#gameSubtabs').addEventListener('click',async event=>{const target=event.target.closest('[data-sub-game],[data-sub-add]');if(!target)return;event.preventDefault();if(settingsDirty()){wizardError('请先保存或取消当前修改，再切换游戏。');return;}if(target.hasAttribute('data-sub-add')){closeSheet();openSheet('new');return;}const id=target.dataset.subGame;if(id===store.activeId)return;closeSheet();const result=await action('select_preset',[id]);if(result.ok)openSheet('settings','game');});
+function gameStepError(){const d=store.draft;if(!d.game.trim())return '请填写游戏名称。';if(d.source!=='整个显示器'&&!d.window)return '请选择游戏窗口。';return '';}
+function proposeVault(){const d=store.draft,root=libraryRootDraft??store.saved.library_root;if(d.vault)return;if(root)d.vault=root.replace(/[\\/]+$/,'')+'\\'+d.game.trim().replace(/[<>:"/\\|?*\x00-\x1f]/g,'_');else if(sheetMode==='first')d.vault=store.snapshot?.default_vault?.path||'';$('#vault').value=d.vault;}
+function nextStep(){const key=currentStepKey(),error=key==='general'?store.validateGeneral():key==='game'?gameStepError():key==='vault'?store.validateGame():'';if(error){wizardError(error);return;}wizardError();if(step<sheetSteps().length-1){step++;if(currentStepKey()==='vault')proposeVault();layoutSheet();renderVaultChoice();renderControls();}else finishWizard();}
+$('#wizardBack').onclick=()=>{if(step>0){step--;wizardError();layoutSheet();renderControls();}};
+$('#wizardNext').onclick=()=>{if(sheetMode==='settings')saveSettingsSheet();else nextStep();};
+async function finishWizard(){
+ if(saving||store.requestPending)return;const full=!(sheetMode==='new'&&store.presets.length);const error=store.validateGame()||(full?store.validateGeneral():'');if(error){wizardError(error);return;}
+ saving=true;store.requestPending=true;wizardError();renderControls();let saved=false;
+ try{
+  const payload=full?store.presetPayload():store.gamePayload();
+  await api('save_preset',payload,null);saved=true;
+  const key=$('#cloudKey').value.trim();if(store.draft.transcription_provider==='qwen'&&key){await api('save_cloud_key',key);$('#cloudKey').value='';}
+  const fresh=await freshPoll();if(!fresh)throw new Error('游戏已创建，但还没有收到新的检查结果。请稍后重试。');
+  const first=sheetMode==='first';closeSheet();notify(first?'设置完成，正在检查是否可以开始录制。':'游戏已创建，正在检查是否可以开始录制。');
+ }catch(error){if(error.code==='VAULT_REUSE_REQUIRED'){store.confirmedVault='';await freshPoll();renderVaultChoice();}wizardError((saved?'游戏已创建。':'')+(error.message||'保存未完成，请检查后重试。'));$('#wizardBody').scrollTop=0;}
+ finally{saving=false;store.requestPending=false;renderHome();renderControls();}
+}
+async function saveSettingsSheet(){
+ if(saving||store.requestPending)return;const general=sheetTab==='general';const error=general?store.validateGeneral():store.validateGame();if(error){wizardError(error);return;}
+ saving=true;store.requestPending=true;wizardError();renderControls();let saved=false;
+ try{
+  if(general)await api('save_general',{...store.generalPayload(),...(libraryRootDraft!==null?{library_root:libraryRootDraft}:{})});else await api('save_preset',store.gamePayload(),store.editingId);
+  saved=true;const key=$('#cloudKey').value.trim();if(general&&store.draft.transcription_provider==='qwen'&&key){await api('save_cloud_key',key);$('#cloudKey').value='';}
+  const fresh=await freshPoll();if(!fresh)throw new Error('设置已保存，但还没有收到新的检查结果。请稍后重试。');
+  libraryRootDraft=null;store.openDraft('edit');store.addedGeneralIds=[];fillFields();store.snapshotBaseline();vocabularySignature='';
+  renderVocabulary();renderResources();renderDeviceOptions(true);layoutSheet();notify(general?'通用设置已保存，所有游戏都会使用。':'游戏设置已保存。');
+ }catch(error){if(error.code==='VAULT_REUSE_REQUIRED'){store.confirmedVault='';await freshPoll();renderVaultChoice();}wizardError((saved?'设置已保存。':'')+(error.message||'保存未完成，请检查后重试。'));$('#wizardBody').scrollTop=0;}
+ finally{saving=false;store.requestPending=false;renderHome();renderControls();}
+}
+// Deleting a game removes its settings and entries; the data folder stays unless ticked and the name is repeated.
+let deletingGame=false,deleteSync=null;
+function confirmDeleteGame(){
+ const preset=store.presets.find(p=>p.id===store.editingId);if(!preset||!store.canConfigure||deletingGame)return;
+ const name=preset.name;
+ showDialog('删除游戏“'+name+'”？',
+  '<p>会从软件里移除这个游戏：游戏窗口、游戏词库和补充词条的设置，以及页签和资料台里的入口。</p>'+
+  '<p>资料文件夹默认保留，里面的录像、逐字稿和整理结果都不动：</p><p class="path-text">'+escapeHTML(preset.vault||'')+'</p>'+
+  '<label class="check"><input type="checkbox" id="deleteData"><span>同时把资料文件夹移到回收站</span></label>'+
+  '<div class="delete-data hidden" id="deleteDataConfirm"><p class="inline-error">文件夹里的全部场次、录像、逐字稿、整理结果和洞察报告会一起移走，可以从回收站还原。</p><label for="deleteConfirmName">输入游戏名称“'+escapeHTML(name)+'”确认</label><input id="deleteConfirmName" autocomplete="off" spellcheck="false"></div>'+
+  '<p class="inline-error hidden" id="deleteError" role="alert"></p>',
+  [{label:'删除游戏',primary:true,run:()=>deleteGame(preset)}]);
+ const button=$('#actionFooter').lastElementChild;button.classList.add('danger');$('#actionFooter').firstElementChild.textContent='取消';
+ deleteSync=()=>{const data=$('#deleteData').checked;show('deleteDataConfirm',data);button.textContent=deletingGame?'正在删除…':data?'删除游戏和资料':'删除游戏';button.disabled=deletingGame||data&&$('#deleteConfirmName').value!==name;};
+ $('#deleteData').onchange=deleteSync;$('#deleteConfirmName').oninput=deleteSync;deleteSync();
+}
+async function deleteGame(preset){
+ if(deletingGame)return false;
+ const data=$('#deleteData').checked,confirmName=data?$('#deleteConfirmName').value:'';
+ deletingGame=true;store.requestPending=true;deleteSync?.();renderControls();
+ try{
+  const result=await api('delete_preset',preset.id,{delete_data:data,confirm_name:confirmName});
+  closeSheet();await freshPoll();
+  if(result.data_error){showDialog('游戏已删除，资料文件夹没有移走','<p>'+escapeHTML(result.data_error)+'</p><p class="path-text">'+escapeHTML(result.vault)+'</p>');return false;}
+  notify(result.recycled?'已删除“'+result.name+'”，资料文件夹已移到回收站。':'已删除“'+result.name+'”，资料文件夹保留在原处。');
+  return {ok:true};
+ }catch(error){setText('deleteError',error.message||'删除未完成，请重试。');show('deleteError',true);return false;}
+ finally{deletingGame=false;store.requestPending=false;renderHome();renderControls();setTimeout(()=>deleteSync?.(),0);}
+}
+$('#deleteGame').onclick=confirmDeleteGame;
+$('#chooseLibrary').onclick=async()=>{const result=await action('choose_directory',['vault']);if(result.ok&&result.data?.path){libraryRootDraft=result.data.path;$('#libraryRoot').value=libraryRootDraft;renderSheetFoot();}};
+function fieldChanged(element){store.updateDraft(element.dataset.draft,element.value);if(element.id==='source'){deviceSignature='';renderDeviceOptions(true);renderInputRecording();}if(element.id==='mic'||element.id==='monitor')renderDeviceOptions();if(element.dataset.draft==='hotword_manual')renderVocabulary();renderSummary();}
 $$('[data-draft]').forEach(el=>el.addEventListener(el.tagName==='SELECT'?'change':'input',()=>fieldChanged(el)));
 $('#cloudKey').addEventListener('input',()=>{setText('cloudFeedback',$('#cloudKey').value.trim()?'新密钥将在完成设置时保存。取消会清空输入。':'留空将保留已保存密钥。');renderControls();});
 function deviceItems(kind){return store.snapshot?.devices?.[kind]||[];}
@@ -281,21 +461,21 @@ function renderDeviceOptions(force=false){
  if(!store.draft)return;
  const d=store.draft,kind=d.source==='整个显示器'?'monitor':'window',inventory=deviceInventory();
  const signature=JSON.stringify([store.snapshot?.devices,inventory,kind,d.window,d.monitor,d.mic]);
- if(force||signature!==deviceSignature){const a=fillDevice($('#target'),kind,d[kind]);const b=fillDevice($('#mic'),'mic',d.mic);if(a&&b)deviceSignature=signature;}
- setText('targetLabel',kind==='monitor'?'显示器':'游戏窗口');setText('refreshDevices',inventory.state==='running'?'正在读取…':'刷新设备');
+ if(force||signature!==deviceSignature){const a=fillDevice($('#target'),'window',d.window);const b=fillDevice($('#mic'),'mic',d.mic);const c=fillDevice($('#monitor'),'monitor',d.monitor);if(a&&b&&c)deviceSignature=signature;}
+ show('target',kind!=='monitor');show('targetMonitorNote',kind==='monitor');show('monitorField',kind==='monitor');setText('refreshDevices',inventory.state==='running'?'正在读取…':'刷新设备');
  const feedback={idle:'尚未读取设备，已保存的选择待确认。',running:'正在读取可用窗口和麦克风，已保存的选择保持不变…',failed:'设备读取失败：'+(inventory.error||'请重试。')+' 已保存的选择尚未确认。',cached:'显示上次读取的设备，请刷新确认当前是否可用。',succeeded:successfulDeviceFeedback(d,inventory)};
  setText('deviceFeedback',feedback[inventory.state]);
  const recovery=engineRecovery();
  show('reconnectEngine',!!recovery);show('engineFeedback',!!recovery);
  setText('reconnectEngine',recovery?.[1]||'重新连接录制引擎');setText('engineFeedback',recovery?.[2]||'');
 }
-$('#target').onchange=()=>{if(store.draft){store.updateDraft(store.draft.source==='整个显示器'?'monitor':'window',$('#target').value);renderDeviceOptions();renderSummary();}};
+$('#target').onchange=()=>{if(store.draft){store.updateDraft('window',$('#target').value);renderDeviceOptions();renderSummary();}};
 function devicesEmpty(){return ['monitor','window','mic'].every(kind=>!deviceItems(kind).some(item=>item.itemEnabled!==false&&String(item.itemValue??'')));}
 function selectionSignature(draft){return JSON.stringify([draft.source,draft.window,draft.monitor,draft.mic]);}
 function inventorySignature(){const inventory=store.snapshot?.device_inventory;return JSON.stringify([inventory?.id,inventory?.checked_at,inventory?.state]);}
 function completeDeviceSetup(){
  const pending=deviceInventoryRequest;if(!pending?.initialize||pending.requesting)return;
- if(store.draft!==pending.draft||!$('#wizard').open||store.deviceChoiceRevision!==pending.revision||selectionSignature(store.draft)!==pending.selection){pending.initialize=false;return;}
+ if(store.draft!==pending.draft||!sheetOpen()||store.deviceChoiceRevision!==pending.revision||selectionSignature(store.draft)!==pending.selection){pending.initialize=false;return;}
  const refresh=store.snapshot?.device_inventory;if(!refresh||!['succeeded','failed'].includes(refresh.state))return;
  pending.initialize=false;
  if(refresh.id!==pending.id||refresh.state!=='succeeded'||wizardMode!=='new'||store.editingId||store.draft.window||store.draft.monitor||store.draft.mic)return;
@@ -317,7 +497,7 @@ async function refreshDeviceInventory(explicit=false){
  deviceInventoryRequest=request;deviceSignature='';renderDeviceOptions();renderControls();
  try{
   const result=await api('refresh_device_inventory');
-  if(deviceInventoryRequest!==request||store.draft!==draft||!$('#wizard').open)return;
+  if(deviceInventoryRequest!==request||store.draft!==draft||!sheetOpen())return;
   if(!result?.inventory_id)throw new Error('尚未确认设备读取结果，请重试。');
   request.id=result.inventory_id;request.requesting=false;
   await freshPoll();
@@ -339,79 +519,45 @@ $$('[data-provider]').forEach(button=>{
   event.preventDefault();chooseProvider(event.key==='Home'?'local':event.key==='End'?'qwen':button.dataset.provider==='local'?'qwen':'local',true);
  };
 });
-function renderResources(){if(!store.draft)return;const provider=store.draft.transcription_provider;show('localControls',provider==='local');show('cloudControls',provider==='qwen');show('advancedSettings',['local','qwen'].includes(provider));show('providerChoiceHint',!['local','qwen'].includes(provider));setText('providerChoiceHint','此预设尚未选择转写方式，请选择本地转写或 Qwen 转写。');$$('[data-provider]').forEach(button=>{const selected=button.dataset.provider===provider;button.setAttribute('aria-selected',String(selected));button.tabIndex=selected||!provider&&button.dataset.provider==='local'?0:-1;});const m=store.snapshot?.model||{};const names={missing:'未准备',downloading:'下载中',paused:'已暂停',verifying:'正在校验',ready:'已准备好',error:'未完成'};setText('modelStatus',names[m.state]||'正在读取');$('#modelStatus').className='state-label '+(m.state||'');setText('modelPath',m.path||'可选择已有的模型文件夹，无需再次复制。');show('modelProgressArea',['downloading','paused','verifying'].includes(m.state));setText('modelProgressLabel',m.state==='verifying'?'正在检查文件是否完整':'已下载');setText('modelBytes',bytes(m.downloaded_bytes)+(m.total_bytes?' / '+bytes(m.total_bytes):''));if(m.total_bytes&&m.state!=='verifying')$('#modelProgress').value=Math.min(100,(m.downloaded_bytes||0)/m.total_bytes*100);else $('#modelProgress').removeAttribute('value');setText('modelError',m.error||'');show('modelError',!!m.error);setText('downloadModel',{downloading:'暂停下载',paused:'继续下载',verifying:'正在校验',ready:'已准备好',error:'重试下载'}[m.state]||'下载模型');setText('cloudStatus',store.snapshot?.capabilities?.cloud_key?'密钥已保存':'尚未保存密钥');renderControls();}
-function renderSummary(){if(!store.draft)return;const d=store.draft,kind=d.source==='整个显示器'?'monitor':'window';setText('summaryGame',d.game.trim()||'未命名预设');setText('summaryChoices',deviceLabel(kind,d[kind])+' · '+d.preset+' · '+(providerNames[d.transcription_provider]||'')+(d.record_inputs?' · 记录操作':''));}
-async function finishWizard(){if(saving||store.requestPending)return;for(let i=1;i<=3;i++){const error=store.validateStep(i);if(error){setStep(i);wizardError(error);return;}}saving=true;store.requestPending=true;wizardError();renderControls();let saved=false;try{const result=await api('save_preset',store.presetPayload(),store.editingId);saved=true;store.editingId=result?.id||result?.active_preset_id||store.editingId;let key=$('#cloudKey').value.trim();if(store.draft.transcription_provider==='qwen'&&key){await api('save_cloud_key',key);key='';$('#cloudKey').value='';}const fresh=await freshPoll();if(!fresh)throw new Error('预设已保存，但还没有收到新的检查结果。请稍后重试。');store.cancelDraft();$('#wizard').close();notify('预设已保存，正在检查是否可以开始。');}catch(error){if(error.code==='VAULT_REUSE_REQUIRED'){store.confirmedVault='';await freshPoll();setStep(3);renderVaultChoice();}wizardError((saved?'预设已保存。':'')+(error.message||'保存未完成，请检查后重试。'));$('#wizardBody').scrollTop=0;}finally{saving=false;store.requestPending=false;renderHome();renderControls();}}
+function renderResources(){if(!store.draft)return;const provider=store.draft.transcription_provider;show('localControls',provider==='local');show('cloudControls',provider==='qwen');show('providerChoiceHint',!['local','qwen'].includes(provider));setText('providerChoiceHint','尚未选择转写方式，请选择本地转写或 Qwen 转写。');$$('[data-provider]').forEach(button=>{const selected=button.dataset.provider===provider;button.setAttribute('aria-selected',String(selected));button.tabIndex=selected||!provider&&button.dataset.provider==='local'?0:-1;});const m=store.snapshot?.model||{};const names={missing:'未准备',downloading:'下载中',paused:'已暂停',verifying:'正在校验',ready:'已准备好',error:'未完成'};setText('modelStatus',names[m.state]||'正在读取');$('#modelStatus').className='state-label '+(m.state||'');setText('modelPath',m.path||'可选择已有的模型文件夹，无需再次复制。');show('modelProgressArea',['downloading','paused','verifying'].includes(m.state));setText('modelProgressLabel',m.state==='verifying'?'正在检查文件是否完整':'已下载');setText('modelBytes',bytes(m.downloaded_bytes)+(m.total_bytes?' / '+bytes(m.total_bytes):''));if(m.total_bytes&&m.state!=='verifying')$('#modelProgress').value=Math.min(100,(m.downloaded_bytes||0)/m.total_bytes*100);else $('#modelProgress').removeAttribute('value');setText('modelError',m.error||'');show('modelError',!!m.error);setText('downloadModel',{downloading:'暂停下载',paused:'继续下载',verifying:'正在校验',ready:'已准备好',error:'重试下载'}[m.state]||'下载模型');setText('cloudStatus',store.snapshot?.capabilities?.cloud_key?'密钥已保存':'尚未保存密钥');renderControls();}
 $('#chooseVault').onclick=async()=>{const result=await action('choose_directory',['vault']);if(result.ok&&result.data?.path&&store.draft){store.updateDraft('vault',result.data.path);store.confirmVault();$('#vault').value=result.data.path;renderSummary();renderVaultChoice();renderControls();}};
 function renderVaultChoice(){if(!store.draft)return;const info=store.snapshot?.default_vault||{},same=store.defaultVaultSelected,exists=same&&info.requires_confirmation===true;show('reuseVaultNotice',exists);show('reuseVault',exists&&store.needsVaultConfirmation&&info.is_directory!==false);setText('reuseVaultMessage',info.is_directory===false?'该位置已有同名文件，请选择其他文件夹。':store.needsVaultConfirmation?'发现已有同名资料库。是否使用它并保留其中的录像和笔记？':'将使用已有资料库，保留其中的录像和笔记。');setText('chooseVault',exists?'选择其他位置':'选择');setText('vaultHint',same?'默认保存在软件父级的 think-aloud-database，更新版本后可继续使用。':'每场体验分别保存，不覆盖已有录像或笔记。');}
 $('#reuseVault').onclick=()=>{if(!store.canConfigure||!store.draft||store.snapshot?.default_vault?.is_directory===false)return;store.confirmVault();renderVaultChoice();renderControls();};
+// Vocabulary: the shared list lives in 通用, each game's own list in 游戏; transcription merges both.
+function vocabularyChips(files){return files.map(file=>`<span class="chip file" title="${escapeHTML(file.name)}">${escapeHTML(file.name)} <b>${file.words.length}</b><button type="button" class="x" data-view-vocabulary="${escapeHTML(file.id)}" aria-label="查看词库 ${escapeHTML(file.name)}" title="查看">&#xE890;</button><button type="button" class="x" data-remove-vocabulary="${escapeHTML(file.id)}" aria-label="移除词库 ${escapeHTML(file.name)}" title="移除">&#xE711;</button></span>`).join('');}
 function renderVocabulary(){
  if(!store.draft)return;
- const files=store.draft.hotword_files||[],signature=JSON.stringify(files);
- if(signature!==vocabularySignature){
-  vocabularySignature=signature;
-  $('#hotwordFiles').innerHTML=files.map(file=>`<li><div class="vocabulary-file-info"><span class="vocabulary-file-name" title="${escapeHTML(file.name)}">${escapeHTML(file.name)}</span><span class="field-note">${file.words.length} 个词</span></div><button type="button" class="text-button vocabulary-view" data-view-vocabulary="${escapeHTML(file.id)}" aria-label="查看词库 ${escapeHTML(file.name)}">查看</button><button type="button" class="icon-button" data-remove-vocabulary="${escapeHTML(file.id)}" aria-label="移除词库 ${escapeHTML(file.name)}" title="移除词库">${icon('close')}</button></li>`).join('');
- }
- show('hotwordFiles',files.length>0);
+ const general=store.generalFiles(),game=store.gameFiles(),signature=JSON.stringify([general,game]);
+ if(signature!==vocabularySignature){vocabularySignature=signature;$('#hotwordFiles').innerHTML=vocabularyChips(general);$('#gameHotwordFiles').innerHTML=vocabularyChips(game);}
  const manualCount=new Set(RecorderState.splitWords(store.draft.hotword_manual)).size,total=RecorderState.vocabularyWords(store.draft).length;
- const hasDefault=files.some(file=>(store.snapshot?.default_hotword_files||[]).some(bundled=>bundled.id===file.id));
- setText('vocabularySummary',hasDefault?'UI/UX 已选':files.length?'已选 '+files.length+' 份词库':total?'已添加词条':'未选词库');
- setText('vocabularyCount',total?`${files.length?'已选 '+files.length+' 份词库 · ':''}合并后 ${total} 个词`:'尚未选择词库');
- setText('manualWordCount',manualCount?manualCount+' 个词':'可选');show('vocabularyStorage',files.length>0);
+ setText('vocabularyCount',total?`通用 ${general.length} 份 · 本游戏 ${game.length} 份 · 合并后 ${total} 个词`:'尚未选择词库');
+ setText('manualWordCount',manualCount?manualCount+' 个词':'可选');show('vocabularyStorage',general.length>0);
+ renderSheetFoot();
 }
-$('#chooseHotwordFiles').onclick=async()=>{const result=await action('choose_hotword_files');if(result.ok&&store.draft&&result.data?.files?.length){const count=store.addVocabularyFiles(result.data.files);renderVocabulary();renderControls();notify(count?'已加入 '+count+' 份词库，完成设置后生效。':'这些词库已在列表中。');}};
-$('#hotwordFiles').onclick=event=>{
+async function chooseVocabulary(general){const result=await action('choose_hotword_files');if(result.ok&&store.draft&&result.data?.files?.length){const count=store.addVocabularyFiles(result.data.files);if(general)store.markGeneral(result.data.files);vocabularySignature='';renderVocabulary();renderControls();notify(count?'已加入 '+count+' 份词库，保存后生效。':'这些词库已在列表中。');}}
+$('#chooseHotwordFiles').onclick=()=>chooseVocabulary(true);$('#chooseGameHotwordFiles').onclick=()=>chooseVocabulary(false);
+$('#wizardBody').addEventListener('click',event=>{
  if(!store.draft)return;
  const view=event.target.closest('[data-view-vocabulary]');
- if(view?.dataset.viewVocabulary){
-  const file=store.draft.hotword_files.find(item=>item.id===view.dataset.viewVocabulary);if(!file)return;
-  showDialog(file.name,`<p>${file.words.length} 个词 · 当前预设选用的词条</p><ul class="vocabulary-words" aria-label="词库词条">${file.words.map(word=>'<li>'+escapeHTML(word)+'</li>').join('')}</ul><p>词条用于辅助识别，不会替换原话。移除词库只影响当前预设，不删除原文件。</p>`);
-  return;
- }
+ if(view?.dataset.viewVocabulary){const file=store.draft.hotword_files.find(item=>item.id===view.dataset.viewVocabulary);if(!file)return;showDialog(file.name,`<p>${file.words.length} 个词</p><ul class="vocabulary-words" aria-label="词库词条">${file.words.map(word=>'<li>'+escapeHTML(word)+'</li>').join('')}</ul><p>词条用于辅助识别，不会替换原话。移除词库不删除原文件。</p>`);return;}
  const button=event.target.closest('[data-remove-vocabulary]');if(!button||!store.canConfigure||saving)return;
- store.removeVocabularyFile(button.dataset.removeVocabulary);renderVocabulary();renderControls();$('#chooseHotwordFiles').focus();
-};
+ store.removeVocabularyFile(button.dataset.removeVocabulary);vocabularySignature='';renderVocabulary();renderControls();
+});
 $('#dictionaryDownload').onclick=event=>{event.preventDefault();if(!store.connected||store.requestPending||saving)return;action('open_dictionary_site');};
 $('#verifyCloud').onclick=async()=>{setText('cloudFeedback','正在验证已保存的密钥…');await action('verify_cloud_key',[],'','verify');};
 $('#modelLocation').onclick=async()=>{const result=await action('choose_directory',['download']);if(result.ok&&result.data?.path){downloadDirectory=result.data.path;setText('downloadDestination','下载到 '+downloadDirectory+'。关闭设置后下载会继续。');}};
 $('#downloadModel').onclick=()=>{const m=store.snapshot?.model;if(m?.state==='downloading')action('model_action',['pause']);else if(m?.state==='paused')action('model_action',['download',downloadDirectory]);else showDialog('准备本地转写模型','<p>下载 Whisper large-v3，约 3.09 GB。下载完成后会检查文件完整性，之后更新软件无需重复下载。</p><p>保存位置：'+escapeHTML(downloadDirectory||'软件文件夹内的 models / large-v3')+'</p>',[{label:'开始下载',primary:true,run:()=>action('model_action',['download',downloadDirectory])}]);};
 $('#existingModel').onclick=async()=>{const result=await action('choose_directory',['model']);if(result.ok&&result.data?.path)showDialog('使用已有模型','<p>'+escapeHTML(result.data.path)+'</p><p>检查通过后直接使用，不复制文件。移动目录后需要重新选择。</p>',[{label:'检查并使用',primary:true,run:()=>action('model_action',['import',result.data.path])}]);};
-function sessionActionBlocked(id,action){
- const s=findSession(id);
- if(action==='review')return s?.can_review===false||(!s?.can_review&&!!store.sessionJob(id));
- return !!store.sessionJob(id)&&!['folder','raw','rename'].includes(action);
-}
 function sessionTitle(s){return s.title||s.session_name||s.game||s.id;}
 function canReview(s){return s.can_review===true||(s.can_review!==false&&sessionKind(s)==='ready');}
 
 function sessionKind(s){if(store.sessionJob(s.id))return 'processing';const status=String(s.state||'');if(s.error||/失败|错误|failed|error/i.test(status))return 'failed';if(/待整理|待转写|pending|recorded|saved/i.test(status))return 'pending';if(/可回看|完成|就绪|ready|done|complete/i.test(status))return 'ready';return 'other';}
 function preprocessingLabel(s){return s.preprocessing?.state==='complete'&&Number.isInteger(s.preprocessing.events)?`预处理 ${s.preprocessing.events} 个事件`:s.preprocessing?.label||'';}
-function sessionDetail(s){const analysis=preprocessingLabel(s);return '<div class="session-detail">'+(analysis?'<p class="preprocessing-badge">'+escapeHTML(analysis)+'</p>':'')+(s.error?'<p class="error-text">'+escapeHTML(s.error)+'</p>':'')+(s.warning?'<p>'+escapeHTML(s.warning)+'</p>':'')+'<p>'+escapeHTML(s.path||'')+'</p><div class="button-row">'+[['review','打开回看'],['process','重新整理'],['raw','原始录像'],['folder','资料文件夹'],['export','导出场次'],['recover','恢复云端任务']].map(([action,label])=>`<button class="text-button" data-session-action="${action}" data-id="${escapeHTML(s.id)}">${label}</button>`).join('')+'</div></div>';}
-function sessionRow(s){
- const kind=sessionKind(s),job=store.sessionJob(s.id),state=job?(job.state==='queued'?'等待整理':'后台整理'):s.state||'状态未知';
- const progress=job?(job.state==='queued'?'等待整理，前面的场次完成后继续。':job.detail||'正在整理，仍可继续录制。'):kind!=='ready'?state:'';
- const title=sessionTitle(s),ident=escapeHTML(s.id);
- const analysis=preprocessingLabel(s),attention=analysis&&['processing','stale','failed','error','invalid'].includes(s.preprocessing?.state);
- const rename=`<button class="session-rename" data-session-action="rename" data-id="${ident}" aria-label="编辑片段名称：${escapeHTML(title)}" title="编辑片段名称"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 4 5 5M4 20l5-1L20 8a2 2 0 0 0-5-5L4 14Z"/></svg></button>`;
- return `<article class="session-row"><div class="session-main"><div class="session-name"><div class="session-title-row"><strong>${escapeHTML(title)}${s.test?' <span class="test-tag">合成测试</span>':''}</strong>${rename}</div><p class="session-meta"><span class="session-game">${escapeHTML(s.game||'')}</span><span class="session-date">${escapeHTML(formatDate(s.created))}</span><span class="session-duration"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg>${escapeHTML(formatTime(s.duration))}</span></p>${progress?`<p class="session-progress ${kind}">${escapeHTML(progress)}</p>`:''}${attention?`<p class="session-progress preprocessing-badge" title="${escapeHTML(s.preprocessing.reason||'')}">${escapeHTML(analysis)}</p>`:''}</div><div class="session-actions">${canReview(s)?`<button class="session-quick" data-session-action="review" data-id="${ident}">${icon('play')}回看</button>`:['pending','failed'].includes(kind)?`<button class="session-quick" data-session-action="process" data-id="${ident}">${kind==='failed'?'重试':'整理'}</button>`:''}<button class="session-toggle" data-detail="${ident}" aria-expanded="${expandedSession===s.id}" aria-label="${expandedSession===s.id?'收起':'展开'}${escapeHTML(title)}详情">${icon('chevron')}</button></div>${s.activity_details?`<p class="session-content">${escapeHTML(s.activity_details)}</p>`:''}</div>${expandedSession===s.id?sessionDetail(s):''}</article>`;
-}
-function renameSession(s){
- showDialog('编辑片段名称',`<p class="field-note">${escapeHTML(s.game||'')} · ${escapeHTML(formatDate(s.created))}</p><label for="sessionName">片段名称</label><input id="sessionName" maxlength="4096" autocomplete="off" value="${escapeHTML(s.session_name||'')}" placeholder="例如：通道入口、首次使用背包"><p class="field-note">留空恢复默认名称。预设名称与保存位置不变。</p><p id="sessionNameError" class="error-text" role="alert"></p>`,[{label:'保存',primary:true,run:async()=>{
-  const input=$('#sessionName'),name=input.value.trim();
-  if(name.length>4096||/[\u0000-\u001f\u007f]/.test(name)){setText('sessionNameError','名称最多 4096 字，不能包含换行或控制字符。');return false;}
-  try{await api('rename_session',s.id,name);await freshPoll();notify('片段名称已保存');return true;}
-  catch(error){setText('sessionNameError',error.message||'名称保存失败，请重试。');return false;}
- }}]);
- const field=$('#sessionName');field.focus();field.select();
- field.addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.isComposing){event.preventDefault();$('#actionFooter').lastElementChild?.click();}});
-}
-function renderSessions(force=false){const sessions=store.snapshot?.sessions||[],jobs=store.backgroundJobs,filter=$('#filter').value,search=$('#search').value.trim().toLowerCase();const signature=JSON.stringify([sessions,jobs,filter,search,expandedSession,store.activeId]);if(!force&&signature===sessionSignature)return;sessionSignature=signature;setText('sessionCount',sessions.length);const running=jobs.filter(job=>job.state==='running').length,queued=jobs.filter(job=>job.state==='queued').length;setText('backgroundSummary',[running?running+' 段整理中':'',queued?queued+' 段排队':''].filter(Boolean).join(' · '));show('backgroundSummary',!!jobs.length);const list=sessions.filter(s=>(filter==='all'||(filter==='ready'?canReview(s):sessionKind(s)===filter))&&`${sessionTitle(s)} ${s.activity_details||''} ${s.game||''} ${s.id||''}`.toLowerCase().includes(search));const region=$('#sessionList'),scroll=region.scrollTop;region.innerHTML=list.length?list.map(sessionRow).join(''):'<div class="empty-state">'+(sessions.length?'没有符合条件的场次。':'<strong>这里会留下你的体验片段</strong><p>完成第一段录制后，回来看看当时的想法。</p>')+'</div>';region.scrollTop=scroll;renderControls();}
-$('#search').oninput=()=>renderSessions();$('#filter').onchange=()=>renderSessions();
 function findSession(id){return (store.snapshot?.sessions||[]).find(s=>String(s.id)===String(id));}
-function processSession(s){if(store.saved.transcription_provider==='later'){showDialog('先选择整理方式','<p>当前预设只保存录制。选择本地或云端转写后，再回来整理此场次。</p>',[{label:'设置整理方式',primary:true,run:()=>{setTimeout(()=>openWizard('edit',2),0);}}]);return;}showDialog('整理这次体验','<p>'+escapeHTML(s.game||s.id)+'\n使用'+escapeHTML(providerNames[store.saved.transcription_provider]||'已保存的方式')+'。旧版文字与复盘会保留。</p>'+(store.saved.transcription_provider==='qwen'?'<p>将上传这次的麦克风录音到 Qwen，可能产生服务费用。</p>':'')+'<p>如果上次云端任务结果不确定，请从详情恢复原任务，避免重复提交。</p>',[{label:'开始整理',primary:true,run:()=>action('process_session',[s.id])}]);}
+function processSession(s){if(store.saved.transcription_provider==='later'){showDialog('先选择整理方式','<p>当前预设只保存录制。选择本地或云端转写后，再回来整理此场次。</p>',[{label:'设置整理方式',primary:true,run:()=>{setTimeout(()=>openSheet('settings','general'),0);}}]);return;}showDialog('整理这次体验','<p>'+escapeHTML(s.game||s.id)+'\n使用'+escapeHTML(providerNames[store.saved.transcription_provider]||'已保存的方式')+'。旧版文字与复盘会保留。</p>'+(store.saved.transcription_provider==='qwen'?'<p>将上传这次的麦克风录音到 Qwen，可能产生服务费用。</p>':'')+'<p>如果上次云端任务结果不确定，请从详情恢复原任务，避免重复提交。</p>',[{label:'开始整理',primary:true,run:()=>action('process_session',[s.id])}]);}
 function recoverSession(s){showDialog('恢复已有云端任务','<p>填写已有任务编号，继续查询原任务，不重新上传录音。</p><label for="recoveryId">云端任务编号</label><input id="recoveryId" autocomplete="off" spellcheck="false" placeholder="已有 task_id">',[{label:'恢复任务',primary:true,run:()=>{const id=$('#recoveryId').value.trim();if(!id){notify('请填写已有任务编号。');return false;}return action('recover_cloud_task',[s.id,id]);}}]);}
-$('#sessionList').addEventListener('click',event=>{const detail=event.target.closest('[data-detail]');if(detail){const id=detail.dataset.detail;expandedSession=String(expandedSession)===id?null:id;renderSessions();$('#sessionList').querySelector(`[data-detail="${CSS.escape(id)}"]`)?.focus();return;}const button=event.target.closest('[data-session-action]');if(!button)return;const s=findSession(button.dataset.id);if(!s)return;const name=button.dataset.sessionAction;if(name==='rename')renameSession(s);else if(name==='process')processSession(s);else if(name==='recover')recoverSession(s);else if(name==='review')action('open_review',[s.id]);else action({folder:'open_folder',raw:'open_raw',export:'package_session'}[name],[s.id]);});
 function begin(){if(booted)return;booted=true;poll();setInterval(poll,1000);setInterval(pollMicrophone,200);}window.addEventListener('pywebviewready',begin);if(window.pywebview?.api)begin();setTimeout(()=>{if(!booted){connectionMessage='尚未连接记录器。请从桌面应用打开。';renderHome();}},6000);
 
 // A fixed external destination, opened by the native bridge without any key.
 $('#bailianConsole').onclick=async event=>{event.preventDefault();if(store.requestPending||saving)return;await action('open_bailian_console');};
+applyFrameColor();window.addEventListener('pywebviewready',applyFrameColor);
