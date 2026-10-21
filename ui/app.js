@@ -153,6 +153,8 @@ function renderHome(){
  // Recording: only what is glanced at from a second monitor.
  show('livePrompt',recording);setText('liveSummary',recording?liveSummary():'');
  show('lastSection',!recording);show('insightSection',!recording&&!alerting&&!!store.snapshot?.sessions?.length);
+ // The alert takes the cards' place; the desk stays one click away in the footer.
+ show('footDesk',!recording&&alerting);
 }
 function renderGames(){
  const signature=JSON.stringify([store.presets.map(p=>[p.id,p.name]),store.activeId,store.recording]);if(signature===gamesSignature)return;gamesSignature=signature;
@@ -221,6 +223,7 @@ $('#lastSession').addEventListener('click',event=>{const review=event.target.clo
 function openDesk(tab){const api=window.pywebview?.api;return api?.open_desk?action('open_desk',[tab]):action('open_insight');}
 $('#openLibrary').onclick=event=>{event.preventDefault();openDesk('sessions');};
 $('#openInsight').onclick=event=>{event.preventDefault();openDesk('insight');};
+$('#footLibrary').onclick=()=>openDesk('sessions');$('#footInsight').onclick=()=>openDesk('insight');
 function showMicrophone(data={state:'connecting',level:0}){
  const states={
   connecting:['正在读取音量…','说句话，确认音量条随声音变化。'],

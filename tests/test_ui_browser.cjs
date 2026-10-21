@@ -415,6 +415,7 @@ async function homeChecks(context, origin) {
       assert.deepEqual(await page.locator('#capturePanel').evaluate(n => [n.classList.contains('alerting'), n.classList.contains('off')]), [true, true]);
       assert.equal(await page.locator('#alertRecheck').isVisible(), true); assert.equal(await page.locator('#alertSettings').isVisible(), true);
       assert.equal(await page.locator('#insightSection').isVisible(), false, 'the library cards step aside for the reasons');
+      assert.equal(await page.locator('#footDesk').isVisible(), true, 'the desk stays reachable from the footer');
       const reasonBox = await box(page, '#statusSlot'), panel = await box(page, '#capturePanel');
       assert.ok(reasonBox.x >= panel.x + panel.width, 'the alert sits beside the record block');
       const button = await box(page, '#recordButton');
@@ -422,6 +423,8 @@ async function homeChecks(context, origin) {
       for (const key of ['x', 'y', 'width', 'height']) closeEnough(panel[key], readyPanel[key], `record block ${key} stays put`);
       for (const selector of ['#alertRecheck', '#lastSession', '#settingsButton']) await assertInsideViewport(page, selector);
     }
+    await page.locator('#footLibrary').click(); await page.locator('#footInsight').click();
+    assert.deepEqual((await calls(page, 'open_desk')).map(call => call.args), [['sessions'], ['insight']]);
     await page.locator('#alertRecheck').click(); assert.equal((await calls(page, 'refresh_devices')).length, 1);
     } finally {
       await patchSnapshot(page, { readiness: snapshot().readiness });
@@ -540,8 +543,9 @@ async function homeChecks(context, origin) {
     } finally { await patchSnapshot(page, { sessions: base, background_jobs: snapshot().background_jobs }); }
   });
   await pageCheck(page, 'all-sessions and insight cards open the desk window on the matching tab', async () => {
+    assert.equal(await page.locator('#footDesk').isVisible(), false, 'without an alert the cards are the way in');
     await page.locator('#openLibrary').click(); await page.locator('#openInsight').click();
-    assert.deepEqual((await calls(page, 'open_desk')).map(call => call.args), [['sessions'], ['insight']]);
+    assert.deepEqual((await calls(page, 'open_desk')).map(call => call.args).slice(-2), [['sessions'], ['insight']]);
     assert.equal(await page.locator('#sessionCount').innerText(), '14');
   });
   await pageCheck(page, 'an empty library invites the first recording and hides the library and insight cards', async () => {

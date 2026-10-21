@@ -141,6 +141,7 @@ button:disabled{cursor:default;opacity:.5}
 .card b{font:700 var(--t4)/1.05 var(--sans);font-variant-numeric:tabular-nums}
 .card .queue{color:var(--ink)}
 .foot{display:flex;justify-content:space-between;margin-top:auto}
+.foot-l,.foot-desk{display:flex;gap:var(--s1)}
 
 /* 设置 / 向导：盖住标题栏以下的整个窗口 */
 .sheet{position:absolute;top:40px;left:0;right:0;bottom:0;background:var(--paper);display:flex;flex-direction:column;z-index:5}
