@@ -1,16 +1,19 @@
 'use strict';
-/* 资料台 · 场次页签。洞察页签由 insight.js 负责；两者共用同一个窗口接口（desk_runtime.DeskAPI）。 */
+/* 资料台 · 场次库页签。洞察页签由 insight.js 负责；两者共用同一个窗口接口（desk_runtime.DeskAPI）。 */
 (function(){
   const $=id=>document.getElementById(id);
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const KIND={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面'};
+  // The four problem types; a session's 问题数 counts only these.
+  const KIND={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
   const OTHER=['expectation','suggestion','positive','observation','self_correction'];
   const WEEK='日一二三四五六';
-  const STATES=[['all','全部'],['todo','待整理'],['done','已整理'],['failed','失败']];
+  const STATES=[['all','全部'],['done','已整理'],['todo','待整理'],['running','转写中'],['failed','失败']];
+  const SHOWN=3;
   const state={sessions:[],jobs:[],busy:false,game:'',filter:'all',kinds:new Set(),sort:'time',search:'',selected:null,detail:null,signature:''};
   let api=null,toastTimer=null;
+  const PLAY='<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg>';
 
-  // ---- appearance and window ----
+  // ---- window ----
   function applyFrameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
   applyFrameColor();
   document.querySelectorAll('[data-win]').forEach(button=>button.onclick=()=>{const name={min:'win_minimize',max:'win_toggle_maximize',close:'win_close'}[button.dataset.win];try{api?.[name]?.()?.catch?.(()=>{});}catch(_){}});
@@ -18,7 +21,7 @@
   async function call(method,...args){const response=await api[method](...args);if(!response||response.ok!==true)throw new Error(response?.error||'操作未完成，请重试。');return response.data;}
 
   // Sizes go through CSSOM: the page's content policy forbids inline style attributes.
-  function sizes(root){root.querySelectorAll('[data-flex]').forEach(el=>el.style.flex=el.dataset.flex);root.querySelectorAll('[data-width]').forEach(el=>el.style.width=el.dataset.width+'%');}
+  function sizes(root){root.querySelectorAll('[data-flex]').forEach(el=>el.style.flex=el.dataset.flex);}
   // ---- tabs ----
   function deskShow(tab){const insight=tab==='insight';$('paneSessions').classList.toggle('hidden',insight);$('paneInsight').classList.toggle('hidden',!insight);
     $('deskTabSessions').classList.toggle('on',!insight);$('deskTabInsight').classList.toggle('on',insight);$('deskTabSessions').setAttribute('aria-selected',String(!insight));$('deskTabInsight').setAttribute('aria-selected',String(insight));}
@@ -27,13 +30,27 @@
   $('deskTabInsight').onclick=event=>{event.preventDefault();deskShow('insight');};
 
   // ---- session rows ----
-  const problems=s=>Object.keys(KIND).reduce((n,k)=>n+((s.preprocessing?.kinds||{})[k]||0),0);
-  function status(s){if(s.error||/失败|错误|failed|error/i.test(String(s.state||'')))return 'failed';return s.preprocessing?.state==='complete'?'done':'todo';}
-  const preFailed=s=>['failed','invalid','interrupted','stale'].includes(s.preprocessing?.state);
-  function title(s){const named=s.session_name||(s.title&&s.title!==s.game?s.title:'');if(named)return {named:true,text:named};const titles=(s.preprocessing?.event_titles||[]).filter(Boolean);const d=new Date(s.created);return {named:false,text:titles.length?titles.join('、'):(Number.isNaN(d.getTime())?'未命名的记录':pad(d.getHours())+':'+pad(d.getMinutes())+' 开始的记录')};}
   const pad=n=>String(n).padStart(2,'0');
+  const problems=s=>Object.keys(KIND).reduce((n,k)=>n+((s.preprocessing?.kinds||{})[k]||0),0);
+  const jobFor=s=>state.jobs.find(j=>String(j.session_id)===String(s.id));
+  function status(s){
+    if(s.error||/失败|错误|failed|error/i.test(String(s.state||'')))return 'failed';
+    if(s.preprocessing?.state==='complete')return 'done';
+    if(jobFor(s)||/转写中|排队/.test(String(s.state||'')))return 'running';
+    return 'todo';
+  }
+  const preFailed=s=>['failed','invalid','interrupted','stale'].includes(s.preprocessing?.state);
+  function statusLabel(s){
+    const st=status(s);
+    if(st==='failed')return '转写失败';
+    if(st==='running')return jobFor(s)?.state==='queued'?'等待转写':'转写中';
+    if(st==='todo')return preFailed(s)?'整理未完成':/待转写/.test(String(s.state||''))?'待转写':'待整理';
+    return '';
+  }
+  function title(s){const named=s.session_name||(s.title&&s.title!==s.game?s.title:'');if(named)return {named:true,text:named};const titles=(s.preprocessing?.event_titles||[]).filter(Boolean);const d=new Date(s.created);return {named:false,text:titles.length?titles.join('、'):(Number.isNaN(d.getTime())?'未命名的记录':pad(d.getHours())+':'+pad(d.getMinutes())+' 开始的记录')};}
   function clock(value){const n=Math.max(0,Math.floor(Number(value)||0));return Math.floor(n/3600)+':'+pad(Math.floor(n/60)%60)+':'+pad(n%60);}
   function short(value){const n=Math.max(0,Math.floor(Number(value)||0));return n>=3600?clock(n):pad(Math.floor(n/60))+':'+pad(n%60);}
+  const bar=(kinds,big)=>{const present=Object.keys(KIND).filter(k=>kinds[k]);return present.length?`<div class="fp${big?' big':''}">${present.map(k=>`<i class="k-${k}" data-flex="${kinds[k]}"></i>`).join('')}</div>`:'';};
   function visible(){
     const q=state.search.trim().toLowerCase();
     let rows=state.sessions.filter(s=>(state.filter==='all'||status(s)===state.filter)
@@ -42,30 +59,32 @@
     if(state.sort==='problems')rows=[...rows].sort((a,b)=>problems(b)-problems(a));
     return rows;
   }
-  function renderChips(){
-    const counts={all:state.sessions.length,todo:0,done:0,failed:0};state.sessions.forEach(s=>counts[status(s)]++);
-    $('stateChips').innerHTML=STATES.map(([key,label])=>`<button class="chip${state.filter===key?' on':''}" data-filter="${key}" aria-pressed="${state.filter===key}">${label} <b>${counts[key]}</b></button>`).join('');
-    $('kindChips').innerHTML=Object.entries(KIND).map(([key,label])=>`<button class="chip k k-${key}${state.kinds.has(key)?' on':''}" data-kind="${key}" aria-pressed="${state.kinds.has(key)}">${label}</button>`).join('');
+  function renderFilters(){
+    const counts={all:state.sessions.length,done:0,todo:0,running:0,failed:0};state.sessions.forEach(s=>counts[status(s)]++);
+    $('stateChips').innerHTML=STATES.map(([key,label])=>`<button type="button" class="${state.filter===key?'on':''}" data-filter="${key}" aria-pressed="${state.filter===key}">${label} <b>${counts[key]}</b></button>`).join('');
+    $('kindMenu').innerHTML=Object.entries(KIND).map(([key,label])=>`<label class="k-${key}"><input type="checkbox" data-kind="${key}"${state.kinds.has(key)?' checked':''}><i class="dot"></i>${label}</label>`).join('');
+    $('kindToggle').textContent=state.kinds.size?`问题类型 · ${state.kinds.size}`:'问题类型';$('kindToggle').classList.toggle('on',state.kinds.size>0);
   }
   function item(s){
-    const d=new Date(s.created),valid=!Number.isNaN(d.getTime()),t=title(s),k=s.preprocessing?.kinds||{};
-    const mini=Object.keys(KIND).filter(key=>k[key]).map(key=>`<i class="k-${key}" data-flex="${k[key]}"></i>`).join('');
-    const st=status(s)==='failed'?'<span class="st">转写失败</span>':status(s)==='todo'?(preFailed(s)?'<span class="st">整理未完成</span>':'<span class="st">待整理</span>'):'';
-    return `<div class="item${state.selected===s.id?' sel':''}" data-session="${escape(s.id)}" role="button" tabindex="0"><div><div class="d">${valid?d.getDate():''}</div><div class="w">${valid?'周'+WEEK[d.getDay()]:''}</div></div>
-      <div><h4>${t.named?'':'<span class="unnamed">未命名</span>'}${escape(t.text)}</h4><div class="m">${valid?pad(d.getHours())+':'+pad(d.getMinutes())+' · ':''}${clock(s.duration)}${st}</div></div>
-      <div class="n">${status(s)==='done'?`<b>${problems(s)}</b><div class="mini">${mini}</div>`:''}</div></div>`;
+    const d=new Date(s.created),valid=!Number.isNaN(d.getTime()),t=title(s),st=status(s),label=statusLabel(s);
+    const counts=st==='done'?`<span class="pc"><b>${problems(s)}</b>${bar(s.preprocessing?.kinds||{})}</span>`:'<span></span>';
+    return `<div class="srow cols${state.selected===s.id?' sel':''}" data-session="${escape(s.id)}" role="button" tabindex="0">`
+      +`<span class="day">${valid?pad(d.getMonth()+1)+'/'+pad(d.getDate()):''}</span>`
+      +`<span class="nm${t.named?'':' auto'}" title="${escape(t.text)}">${escape(t.text)}</span>`
+      +`<span class="c-start">${valid?pad(d.getHours())+':'+pad(d.getMinutes()):''}</span><span class="dur">${clock(s.duration)}</span>${counts}`
+      +`<span class="c-st${st==='running'?' running':''}">${escape(label)}</span></div>`;
   }
   function renderList(){
     const rows=visible();let html='',month='';
     for(const s of rows){
       const d=new Date(s.created),key=state.sort==='time'&&!Number.isNaN(d.getTime())?d.getFullYear()+'-'+d.getMonth():'';
       if(state.sort==='time'&&key&&key!==month){month=key;const count=rows.filter(r=>{const x=new Date(r.created);return x.getFullYear()===d.getFullYear()&&x.getMonth()===d.getMonth();}).length;
-        html+=`<div class="month">${['一','二','三','四','五','六','七','八','九','十','十一','十二'][d.getMonth()]}月<small>${d.getFullYear()} · ${count} 场</small></div>`;}
+        html+=`<div class="month">${d.getFullYear()} 年 ${d.getMonth()+1} 月<small>${count} 场</small></div>`;}
       html+=item(s);
     }
     $('sessionScroll').innerHTML=html||'<p class="empty">没有符合筛选的场次。</p>';sizes($('sessionScroll'));
   }
-  function render(){renderChips();renderList();$('deskGame').textContent=state.game||'资料台';document.title='资料台 · '+(state.game||'');}
+  function render(){renderFilters();renderList();$('deskGame').textContent=state.game||'资料台';document.title='资料台 · '+(state.game||'');}
 
   // ---- detail ----
   async function select(id){
@@ -74,26 +93,32 @@
     try{const detail=await call('session_detail',id);if(state.selected===id){state.detail=detail;renderDetail(s,detail);}}
     catch(error){if(state.selected===id)$('sessionDetail').insertAdjacentHTML('beforeend',`<p class="d-note">${escape(error.message)}</p>`);}
   }
+  const quoteLine=(k,q)=>`<li><button class="ln k-${k}" data-at="${q.at}" title="在回看中打开这一刻"><span class="at">${short(q.at)}</span><span class="tx">${escape(q.text)}</span></button></li>`;
   function renderDetail(s,detail){
-    const d=new Date(s.created),valid=!Number.isNaN(d.getTime()),t=title(s),job=state.jobs.find(j=>String(j.session_id)===String(s.id));
+    const d=new Date(s.created),valid=!Number.isNaN(d.getTime()),t=title(s),job=jobFor(s);
     const locked=state.busy||!!job,done=status(s)==='done';
-    const date=valid?`${d.getFullYear()} 年 ${d.getMonth()+1} 月 ${d.getDate()} 日 周${WEEK[d.getDay()]} · ${pad(d.getHours())}:${pad(d.getMinutes())} 开始 · 时长 ${clock(s.duration)}`:'时长 '+clock(s.duration);
-    const actions=`<div class="d-acts"><button class="btn solid" data-act="review"${s.can_review===false?' disabled':''}>回看</button>${done?'':`<button class="btn" data-act="handoff">复制整理指令</button>`}<button class="link" data-act="rename">重命名</button><button class="link" data-act="process"${locked?' disabled':''}>重新整理</button><button class="link" data-act="folder">资料文件夹</button><button class="link" data-act="export"${locked?' disabled':''}>导出</button><button class="link" data-act="raw">原始录像</button><button class="link" data-act="recover"${locked?' disabled':''}>恢复云端任务</button></div>`;
+    const end=valid?new Date(d.getTime()+(Number(s.duration)||0)*1000):null;
+    const meta=[valid?`${d.getMonth()+1}月${d.getDate()}日 周${WEEK[d.getDay()]}`:'',valid?`${pad(d.getHours())}:${pad(d.getMinutes())}–${pad(end.getHours())}:${pad(end.getMinutes())}`:'',clock(s.duration),detail?.events?.length?`${detail.events.length} 个体验事件`:''].filter(Boolean).join(' · ');
+    const actions=`<div class="d-acts"><button class="btn solid" data-act="review"${s.can_review===false?' disabled':''}>${PLAY}回看</button>${done?'':`<button class="btn sm" data-act="handoff">复制整理指令</button>`}`
+      +`<button class="btn sm" data-act="rename">重命名</button><button class="btn sm" data-act="process"${locked?' disabled':''}>重新整理</button><button class="btn sm" data-act="folder">资料文件夹</button>`
+      +`<span class="pop"><button class="btn sm" data-act="more" aria-haspopup="true" aria-expanded="false">更多</button><span class="pop-menu right hidden" id="moreMenu"><button data-act="export"${locked?' disabled':''}>导出</button><button data-act="raw">原始录像</button><button data-act="recover"${locked?' disabled':''}>恢复云端任务</button></span></span></div>`;
     let body='';
     if(!detail)body='<p class="d-note">正在读取这一场的整理结果…</p>';
     else if(detail.state!=='complete')body=`<p class="d-note">${escape(detail.label||'这一场还没有整理结果。')} 复制整理指令，粘贴给 Codex 或 Claude 整理后，原话和问题分布会出现在这里。</p>`;
     else{
-      const kinds=detail.kinds||{},max=Math.max(1,...Object.keys(KIND).map(k=>kinds[k]||0)),other=OTHER.reduce((n,k)=>n+(kinds[k]||0),0);
-      const quotes=Object.entries(KIND).map(([k,label])=>{const rows=detail.quotes[k]||[];if(!rows.length)return '';const shown=rows.filter(q=>q.text.length>=6&&q.text.length<=40);const list=(shown.length?shown:rows);
-        return `<div class="kq k-${k}"><h5>${label}<small>${rows.length} 条</small></h5><ul>${list.slice(0,3).map(q=>`<li><button data-at="${q.at}" title="在回看中打开这一刻">${short(q.at)}</button><p>${escape(q.text)}</p></li>`).join('')}</ul>${list.length>3?`<button class="link more" data-more="${k}">展开其余 ${list.length-3} 条</button>`:''}</div>`;}).join('');
-      const dist=Object.entries(KIND).map(([k,label])=>`<li class="k-${k}"><span>${label}</span><b>${kinds[k]||0}</b><i class="bar" data-width="${(kinds[k]||0)/max*100}"></i></li>`).join('');
-      const ins=detail.insights.length?`<ul class="ins">${detail.insights.slice(0,8).map(i=>`<li data-issue="${escape(i.id)}">${escape(i.title)}<b>${i.count}</b></li>`).join('')}</ul>`:'<p class="note">这一场的证据还没有挂到洞察下。</p>';
-      const evs=detail.events.map(e=>`<li><span>${short(e.start)}–${short(e.end)}</span>${escape(e.title)}</li>`).join('');
-      body=`<div class="d-grid"><div><h3 class="d-h">原话 · 按问题类型</h3>${quotes||'<p class="note">这一场没有整理出问题。</p>'}</div>
-        <div><div class="side-sec"><h3 class="d-h">问题分布</h3><ul class="dist">${dist}</ul><p class="note">另有 ${other} 条期待、建议、观察和正面评价</p></div>
-        <div class="side-sec"><h3 class="d-h">挂在这些洞察下</h3>${ins}</div><div class="side-sec"><h3 class="d-h">活动</h3><ul class="evs">${evs}</ul></div></div></div>`;
+      const kinds=detail.kinds||{},total=Object.keys(KIND).reduce((n,k)=>n+(kinds[k]||0),0),other=OTHER.reduce((n,k)=>n+(kinds[k]||0),0);
+      const legend=Object.entries(KIND).filter(([k])=>kinds[k]).map(([k,label])=>`<span class="k-${k}"><b>${kinds[k]}</b> ${label}</span>`).join('');
+      const groups=Object.entries(KIND).map(([k,label])=>{const rows=detail.quotes[k]||[];if(!rows.length)return '';const fit=rows.filter(q=>q.text.length>=6&&q.text.length<=40);const list=fit.length?fit:rows;
+        return `<section class="grp kq k-${k}"><div class="gh"><i class="dot"></i><span class="name">${label}</span><small>${rows.length}</small><span class="sp"></span>${rows.length>SHOWN?`<button class="link" data-more="${k}">全部</button>`:''}</div><ul class="lns">${list.slice(0,SHOWN).map(q=>quoteLine(k,q)).join('')}</ul></section>`;}).join('');
+      const ins=detail.insights.length?`<ul class="lns">${detail.insights.slice(0,8).map(i=>`<li><button class="ln ins" data-issue="${escape(i.id)}"><span class="tx">${escape(i.title)}</span><span class="ct">${i.count}</span></button></li>`).join('')}</ul>`:'<p class="note">这一场的证据还没有挂到洞察下。</p>';
+      const evs=detail.events.map(e=>`<li><span class="ln"><span class="at">${short(e.start)}</span><span class="tx">${escape(e.title)}</span></span></li>`).join('');
+      body=`<div class="d-sum">${bar(kinds,true)}<div class="d-sum-row"><span class="total"><b>${total}</b> 个问题</span><span class="kleg">${legend}</span></div>${other?`<p class="note">另有 ${other} 条期待、建议、观察和正面评价</p>`:''}</div>`
+        +(groups||'<p class="d-note">这一场没有整理出问题。</p>')
+        +`<section class="grp"><div class="gh"><span class="name">关联洞察</span></div>${ins}</section>`
+        +(evs?`<section class="grp"><div class="gh"><span class="name">体验事件</span><small>${detail.events.length}</small></div><ul class="lns">${evs}</ul></section>`:'');
     }
-    $('sessionDetail').innerHTML=`<p class="d-date">${escape(date)}</p><h1>${t.named?'':'<span class="unnamed">未命名</span>'}${escape(t.text)}</h1>${actions}${job?`<p class="d-note">${escape(job.state==='queued'?'等待转写，前面的场次完成后继续。':job.detail||'正在转写，可以继续录制。')}</p>`:''}${s.error?`<p class="d-note">${escape(s.error)}</p>`:''}${body}`;
+    const notes=(job?`<p class="d-note">${escape(job.state==='queued'?'等待转写，前面的场次完成后继续。':job.detail||'正在转写，可以继续录制。')}</p>`:'')+(s.error?`<p class="d-note warn">${escape(s.error)}</p>`:'');
+    $('sessionDetail').innerHTML=`<p class="d-meta">${escape(meta)}</p><h1>${t.named?'':'<span class="unnamed">未命名</span>'}${escape(t.text)}</h1>${actions}${notes}${body}`;
     sizes($('sessionDetail'));
   }
   function dialog(titleText,html,buttons){
@@ -115,20 +140,28 @@
       if(name==='recover'){dialog('恢复已有云端任务','<p>填写已有任务编号，继续查询原任务，不重新上传录音。</p><input id="recoverInput" autocomplete="off" spellcheck="false" placeholder="已有 task_id">',[['恢复任务',async()=>{const id=$('recoverInput').value.trim();if(!id){toast('请填写任务编号。');return false;}await call('recover_cloud_task',s.id,id);toast('已开始恢复云端任务。');}]]);}
     }catch(error){toast(error.message);}
   }
+  // A small menu under its button: 问题类型 and 更多. A click elsewhere closes both.
+  function toggleMenu(button,menu,open){open=open??menu.classList.contains('hidden');menu.classList.toggle('hidden',!open);button.setAttribute('aria-expanded',String(open));}
+  document.addEventListener('click',event=>{
+    if(!event.target.closest('#kindMenu,#kindToggle'))toggleMenu($('kindToggle'),$('kindMenu'),false);
+    const more=$('moreMenu');if(more&&!event.target.closest('#moreMenu,[data-act="more"]'))toggleMenu(document.querySelector('[data-act="more"]'),more,false);
+  });
 
   // ---- events ----
   $('stateChips').onclick=event=>{const chip=event.target.closest('[data-filter]');if(!chip)return;state.filter=chip.dataset.filter;render();};
-  $('kindChips').onclick=event=>{const chip=event.target.closest('[data-kind]');if(!chip)return;const k=chip.dataset.kind;state.kinds.has(k)?state.kinds.delete(k):state.kinds.add(k);render();};
+  $('kindToggle').onclick=()=>toggleMenu($('kindToggle'),$('kindMenu'));
+  $('kindMenu').onchange=event=>{const k=event.target.dataset.kind;if(!k)return;event.target.checked?state.kinds.add(k):state.kinds.delete(k);renderFilters();renderList();toggleMenu($('kindToggle'),$('kindMenu'),true);};
   $('sortSelect').onchange=()=>{state.sort=$('sortSelect').value;renderList();};
-  $('searchToggle').onclick=()=>{$('searchInput').classList.toggle('hidden');if(!$('searchInput').classList.contains('hidden'))$('searchInput').focus();else{$('searchInput').value='';state.search='';renderList();}};
   $('searchInput').oninput=()=>{state.search=$('searchInput').value;renderList();};
   $('sessionScroll').addEventListener('click',event=>{const row=event.target.closest('[data-session]');if(row)select(row.dataset.session);});
   $('sessionScroll').addEventListener('keydown',event=>{const row=event.target.closest('[data-session]');if(row&&(event.key==='Enter'||event.key===' ')){event.preventDefault();select(row.dataset.session);}});
   $('sessionDetail').addEventListener('click',event=>{
     const s=state.sessions.find(row=>row.id===state.selected);if(!s)return;
-    const button=event.target.closest('[data-act]');if(button){act(button.dataset.act,s);return;}
+    const button=event.target.closest('[data-act]');
+    if(button?.dataset.act==='more'){toggleMenu(button,$('moreMenu'));return;}
+    if(button){if(button.closest('#moreMenu'))toggleMenu(document.querySelector('[data-act="more"]'),$('moreMenu'),false);act(button.dataset.act,s);return;}
     const at=event.target.closest('[data-at]');if(at){call('open_review',s.id,Number(at.dataset.at)).catch(error=>toast(error.message));return;}
-    const more=event.target.closest('[data-more]');if(more){const box=more.closest('.kq'),k=more.dataset.more,rows=state.detail?.quotes?.[k]||[];box.querySelector('ul').innerHTML=rows.map(q=>`<li><button data-at="${q.at}" title="在回看中打开这一刻">${short(q.at)}</button><p>${escape(q.text)}</p></li>`).join('');more.remove();return;}
+    const more=event.target.closest('[data-more]');if(more){const box=more.closest('.kq'),k=more.dataset.more,rows=state.detail?.quotes?.[k]||[];box.querySelector('ul').innerHTML=rows.map(q=>quoteLine(k,q)).join('');more.remove();return;}
     const issue=event.target.closest('[data-issue]');if(issue){deskShow('insight');const label=title(s).text;window.insightBridge?.showSession(s.id,label);setTimeout(()=>window.insightBridge?.goToIssue(issue.dataset.issue),60);}
   });
 

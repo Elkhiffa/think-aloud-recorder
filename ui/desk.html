@@ -1,30 +1,28 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'"><title>资料台</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="insight.css"><link rel="stylesheet" href="desk.css"></head>
 <body>
-<svg class="icon-sprite" aria-hidden="true"><defs><symbol id="i-record" viewBox="0 0 40 40"><path d="M4 16C4 10 7 7 13 6v4c-3 1-4 3-4 5h4v10H4Z"/><path d="M16 16c0-6 3-9 9-10v4c-3 1-4 3-4 5h4v10h-9Z"/><path d="M30 3h6v35l-3-4-3 4Z"/></symbol></defs></svg>
-<div class="desk-frame">
-<aside class="rail" aria-hidden="true"><span class="logo"><svg><use href="#i-record"/></svg></span><span class="rail-space app-drag"></span></aside>
-<div class="desk-col">
-<header class="desk-head app-drag">
-  <div class="desk-title"><span class="name" id="deskGame">资料台</span>
-    <nav class="desk-tabs" role="tablist" aria-label="资料台"><a href="#" role="tab" id="deskTabSessions" aria-selected="true" class="on">场次</a><a href="#" role="tab" id="deskTabInsight" aria-selected="false">洞察</a></nav>
-  </div>
-  <div class="win"><button data-win="min" aria-label="最小化">&#xE921;</button><button data-win="max" aria-label="最大化">&#xE922;</button><button data-win="close" class="close" aria-label="关闭">&#xE8BB;</button></div>
+<div class="desk">
+<header class="tb app-drag">
+  <span class="brand" aria-hidden="true"></span><span class="tb-name">Think Aloud</span><span class="tb-game" id="deskGame">资料台</span>
+  <nav class="dtabs" role="tablist" aria-label="资料台"><a href="#" role="tab" id="deskTabSessions" aria-selected="true" class="on">场次库</a><a href="#" role="tab" id="deskTabInsight" aria-selected="false">洞察</a></nav>
+  <span class="tb-space"></span>
+  <div class="win"><button data-win="min" aria-label="最小化" title="最小化">&#xE921;</button><button data-win="max" aria-label="最大化" title="最大化">&#xE922;</button><button data-win="close" class="close" aria-label="关闭" title="关闭">&#xE8BB;</button></div>
 </header>
 
-<section class="desk-pane" id="paneSessions" aria-label="场次">
-  <div class="desk-split">
-    <section class="list" aria-label="场次列表">
-      <div class="filters">
-        <div class="frow"><span class="fl">状态</span><div class="chips" id="stateChips"></div></div>
-        <div class="frow"><span class="fl">问题</span><div class="chips" id="kindChips"></div><span class="sp"></span>
-          <label class="sort"><span class="sr-only">排序</span><select id="sortSelect"><option value="time">按时间</option><option value="problems">按问题数</option></select></label>
-          <button class="icon" id="searchToggle" aria-label="搜索场次名" title="搜索场次名"><svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg></button></div>
-        <input class="hidden" id="searchInput" type="search" placeholder="搜索场次名或活动">
+<section class="desk-pane" id="paneSessions" aria-label="场次库">
+  <div class="lib">
+    <section class="panel list" aria-label="场次列表">
+      <div class="fbar">
+        <label class="search"><span class="sr-only">搜索</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="searchInput" type="search" placeholder="搜索场次" title="按场次名和活动搜索"></label>
+        <nav class="seg" id="stateChips" aria-label="按状态筛选"></nav>
+        <span class="pop"><button class="btn" id="kindToggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="kindMenu">问题类型</button><span class="pop-menu hidden" id="kindMenu" role="group" aria-label="按问题类型筛选"></span></span>
+        <span class="fsp"></span>
+        <label class="sort"><span class="sr-only">排序</span><select id="sortSelect"><option value="time">最新在前</option><option value="problems">问题最多</option></select></label>
       </div>
+      <div class="thead cols"><span>日期</span><span>场次</span><span class="c-start">开始</span><span>时长</span><span>问题</span><span class="c-st">状态</span></div>
       <div class="scroll" id="sessionScroll" tabindex="0"></div>
     </section>
-    <section class="detail" id="sessionDetail" aria-live="polite"><p class="empty">选择左边的一场查看详情。</p></section>
+    <section class="panel detail" id="sessionDetail" aria-live="polite"><p class="empty">选择左边的一场查看详情。</p></section>
   </div>
 </section>
 
@@ -66,7 +64,7 @@
   </section>
 </main>
 </section>
-</div></div>
+</div>
 <div id="menu" class="menu" role="menu" hidden></div>
 <div id="lightbox" class="lightbox" hidden><img id="lightboxImage" alt="所指时刻的大图"><p id="lightboxCaption"></p></div>
 <dialog id="deskDialog" class="desk-dialog"><div id="deskDialogBody"></div><div class="desk-dialog-foot" id="deskDialogFoot"></div></dialog>

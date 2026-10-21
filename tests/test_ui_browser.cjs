@@ -1156,7 +1156,13 @@ async function vocabularyChecks(context, origin) {
   }
 }
 
-// ---------------------------------------------------------------- desk window (场次 / 洞察)
+// ---------------------------------------------------------------- desk window (场次库 / 洞察)
+// A detail action: the rare ones (导出, 原始录像, 恢复云端任务) sit in 更多.
+async function deskAct(page, act) {
+  if (['export', 'raw', 'recover'].includes(act)) await page.locator('#sessionDetail [data-act="more"]').click();
+  await page.locator(`#sessionDetail [data-act="${act}"]`).click();
+}
+const deskEnabled = page => page.locator('#sessionDetail [data-act]').evaluateAll(nodes => Object.fromEntries(nodes.map(n => [n.dataset.act, !n.disabled])));
 const deskSessions = () => [
   { id: 'd1', game: '示例游戏', created: '2026-09-22T10:30:00', duration: 3725, state: '可回看', can_review: true, test: true, path: 'D:\\synthetic-only\\think-aloud-database\\d1',
     session_name: '清河探索与初次止戈', activity_details: '清河任务 + 野外探索 + 萌宠争锋', preprocessing: { state: 'complete', kinds: { obstacle: 2, confusion: 1, suggestion: 2 } } },
@@ -1198,74 +1204,88 @@ async function deskPage(context, origin, desk = deskState(), viewport = { width:
       throw new Error('Synthetic desk harness did not authorize native action: ' + String(method));
     } }) };
   }, { desk, details: deskDetails, overview: deskOverview });
-  await page.goto(origin + '/ui/desk.html'); await page.locator('#sessionScroll .item').first().waitFor({ state: 'attached' });
+  await page.goto(origin + '/ui/desk.html'); await page.locator('#sessionScroll .srow').first().waitFor({ state: 'attached' });
   return page;
 }
 const deskCalls = (page, method) => page.evaluate(name => window.__deskFixture.calls.filter(call => call.method === name).map(call => call.args), method);
-const deskRows = page => page.locator('#sessionScroll .item').evaluateAll(nodes => nodes.map(n => n.dataset.session));
+const deskRows = page => page.locator('#sessionScroll .srow').evaluateAll(nodes => nodes.map(n => n.dataset.session));
 async function deskChecks(context, origin) {
   const page = await deskPage(context, origin);
-  await check('desk lists sessions by month, newest first, with sticky month headings and the game as title', async () => {
+  await check('desk lists sessions by month, newest first, with sticky month headings and the game in the title bar', async () => {
     assert.equal(await page.locator('#deskGame').innerText(), '示例游戏 · 合成测试');
-    assert.deepEqual(await page.locator('#sessionScroll .month').evaluateAll(n => n.map(x => x.textContent)), ['九月2026 · 3 场', '八月2026 · 2 场']);
+    assert.deepEqual(await page.locator('#sessionScroll .month').evaluateAll(n => n.map(x => x.textContent)), ['2026 年 9 月3 场', '2026 年 8 月2 场']);
     assert.deepEqual(await deskRows(page), ['d1', 'd2', 'd3', 'd4', 'd5']);
     assert.equal(await page.locator('#sessionScroll .month').first().evaluate(n => getComputedStyle(n).position), 'sticky');
     const d4 = page.locator('#sessionScroll [data-session="d4"]');
-    assert.match(await d4.locator('h4').innerText(), /^未命名萌宠争锋、城镇养成/);
-    assert.equal(await d4.locator('.n b').innerText(), '7', 'problem count covers the four problem kinds only');
-    assert.equal(await page.locator('#sessionScroll [data-session="d1"] .n b').innerText(), '3');
-    assert.equal(await page.locator('#sessionScroll [data-session="d2"] .st').innerText(), '待整理');
-    assert.equal(await page.locator('#sessionScroll [data-session="d3"] .st').innerText(), '转写失败');
-    assert.equal(await page.locator('#sessionScroll [data-session="d2"] .n b').count(), 0, 'unorganized sessions show no problem count');
+    assert.equal(await d4.locator('.nm').innerText(), '萌宠争锋、城镇养成');
+    assert.equal(await d4.locator('.nm').evaluate(n => n.classList.contains('auto')), true, 'an unnamed session shows its activities in quiet type');
+    assert.deepEqual(await d4.locator('span').allInnerTexts(), ['08/28', '萌宠争锋、城镇养成', '19:40', '1:10:10', '7', '']);
+    assert.equal(await d4.locator('.pc b').innerText(), '7', 'problem count covers the four problem kinds only');
+    assert.deepEqual(await d4.locator('.fp i').evaluateAll(n => n.map(i => [i.className, i.style.flex.split(' ')[0]])), [['k-confusion', '4'], ['k-cost', '3']]);
+    assert.equal(await page.locator('#sessionScroll [data-session="d1"] .pc b').innerText(), '3');
+    assert.equal(await page.locator('#sessionScroll [data-session="d2"] .c-st').innerText(), '转写中', 'a session with a running job is transcribing');
+    assert.equal(await page.locator('#sessionScroll [data-session="d3"] .c-st').innerText(), '转写失败');
+    assert.equal(await page.locator('#sessionScroll [data-session="d2"] .pc b').count(), 0, 'unorganized sessions show no problem count');
     assert.equal(await page.locator('#deskTabSessions').getAttribute('aria-selected'), 'true');
     await noHorizontalOverflow(page);
-    await screen(page, 'desk-sessions-light-1240x900');
+    await screen(page, 'desk-sessions-1240x900');
   });
-  await check('state filter chips count and filter sessions; problem-kind chips multi-select', async () => {
-    assert.deepEqual(await page.locator('#stateChips .chip').evaluateAll(n => n.map(x => x.textContent)), ['全部 5', '待整理 1', '已整理 3', '失败 1']);
-    await page.locator('#stateChips [data-filter="todo"]').click(); assert.deepEqual(await deskRows(page), ['d2']);
-    assert.equal(await page.locator('#stateChips [data-filter="todo"]').getAttribute('aria-pressed'), 'true');
+  await check('status segments count and filter sessions; the 问题类型 menu multi-selects', async () => {
+    assert.deepEqual(await page.locator('#stateChips button').evaluateAll(n => n.map(x => x.textContent)), ['全部 5', '已整理 3', '待整理 0', '转写中 1', '失败 1']);
+    await page.locator('#stateChips [data-filter="running"]').click(); assert.deepEqual(await deskRows(page), ['d2']);
+    assert.equal(await page.locator('#stateChips [data-filter="running"]').getAttribute('aria-pressed'), 'true');
     await page.locator('#stateChips [data-filter="done"]').click(); assert.deepEqual(await deskRows(page), ['d1', 'd4', 'd5']);
     await page.locator('#stateChips [data-filter="failed"]').click(); assert.deepEqual(await deskRows(page), ['d3']);
-    await page.locator('#stateChips [data-filter="all"]').click(); assert.deepEqual(await deskRows(page), ['d1', 'd2', 'd3', 'd4', 'd5']);
-    await page.locator('#kindChips [data-kind="obstacle"]').click(); assert.deepEqual(await deskRows(page), ['d1']);
-    await page.locator('#kindChips [data-kind="cost"]').click(); assert.deepEqual(await deskRows(page), ['d1', 'd4']);
-    assert.deepEqual(await page.locator('#kindChips [aria-pressed="true"]').evaluateAll(n => n.map(b => b.dataset.kind)), ['obstacle', 'cost']);
     await page.locator('#stateChips [data-filter="todo"]').click(); assert.match(await page.locator('#sessionScroll').innerText(), /没有符合筛选的场次/);
-    await page.locator('#stateChips [data-filter="all"]').click(); await page.locator('#kindChips [data-kind="obstacle"]').click(); await page.locator('#kindChips [data-kind="cost"]').click();
+    await page.locator('#stateChips [data-filter="all"]').click(); assert.deepEqual(await deskRows(page), ['d1', 'd2', 'd3', 'd4', 'd5']);
+    assert.equal(await page.locator('#kindMenu').isVisible(), false);
+    await page.locator('#kindToggle').click(); assert.equal(await page.locator('#kindMenu').isVisible(), true);
+    await page.locator('#kindMenu [data-kind="obstacle"]').check(); assert.deepEqual(await deskRows(page), ['d1']);
+    await page.locator('#kindMenu [data-kind="cost"]').check(); assert.deepEqual(await deskRows(page), ['d1', 'd4']);
+    assert.equal(await page.locator('#kindMenu').isVisible(), true, 'the menu stays open while choosing');
+    assert.deepEqual(await page.locator('#kindMenu input:checked').evaluateAll(n => n.map(b => b.dataset.kind)), ['obstacle', 'cost']);
+    assert.equal(await page.locator('#kindToggle').innerText(), '问题类型 · 2');
+    await screen(page, 'desk-kind-menu-1240x900');
+    await page.locator('#sessionScroll').click({ position: { x: 4, y: 4 } }); assert.equal(await page.locator('#kindMenu').isVisible(), false, 'a click elsewhere closes it');
+    await page.locator('#stateChips [data-filter="running"]').click(); assert.match(await page.locator('#sessionScroll').innerText(), /没有符合筛选的场次/);
+    await page.locator('#stateChips [data-filter="all"]').click();
+    await page.locator('#kindToggle').click(); await page.locator('#kindMenu [data-kind="obstacle"]').uncheck(); await page.locator('#kindMenu [data-kind="cost"]').uncheck();
+    assert.equal(await page.locator('#kindToggle').innerText(), '问题类型');
     assert.deepEqual(await deskRows(page), ['d1', 'd2', 'd3', 'd4', 'd5']);
+    await page.locator('#kindToggle').click();
   });
-  await check('sorting by problems drops month headings; keyboard selection works; search is behind an icon', async () => {
+  await check('sorting by problems drops month headings; keyboard selection works; search filters names and activities', async () => {
     await page.locator('#sortSelect').focus(); await page.keyboard.press('ArrowDown');
     assert.equal(await page.locator('#sortSelect').inputValue(), 'problems');
     assert.deepEqual((await deskRows(page)).slice(0, 3), ['d4', 'd1', 'd5']);
     assert.equal(await page.locator('#sessionScroll .month').count(), 0);
     await page.locator('#sortSelect').selectOption('time'); assert.equal(await page.locator('#sessionScroll .month').count(), 2);
-    assert.equal(await page.locator('#searchInput').isVisible(), false);
-    await page.locator('#searchToggle').click(); assert.equal(await page.evaluate(() => document.activeElement.id), 'searchInput');
+    assert.equal(await page.locator('#searchInput').isVisible(), true);
     await page.locator('#searchInput').fill('萌宠'); assert.deepEqual(await deskRows(page), ['d1', 'd4']);
-    await page.locator('#searchToggle').click(); assert.equal(await page.locator('#searchInput').isVisible(), false);
-    assert.deepEqual(await deskRows(page), ['d1', 'd2', 'd3', 'd4', 'd5'], 'closing search clears it');
+    await page.locator('#searchInput').fill(''); assert.deepEqual(await deskRows(page), ['d1', 'd2', 'd3', 'd4', 'd5'], 'clearing the search shows everything');
   });
   await check('the first session opens by default; its detail groups quotes, problems, insights and activities', async () => {
     await page.locator('#sessionDetail .kq').first().waitFor();
     assert.deepEqual(await deskCalls(page, 'session_detail'), [['d1']]);
     assert.equal(await page.locator('#sessionScroll [data-session="d1"]').evaluate(n => n.classList.contains('sel')), true);
     assert.equal(await page.locator('#sessionDetail h1').innerText(), '清河探索与初次止戈');
-    assert.match(await page.locator('#sessionDetail .d-date').innerText(), /2026 年 9 月 22 日 周二 · 10:30 开始 · 时长 1:02:05/);
-    assert.deepEqual(await page.locator('#sessionDetail .kq h5').evaluateAll(n => n.map(x => x.textContent)), ['困惑1 条', '阻碍2 条']);
-    assert.deepEqual(await page.locator('#sessionDetail .dist li b').allInnerTexts(), ['1', '2', '0', '0']);
-    assert.match(await page.locator('#sessionDetail .side-sec .note').first().innerText(), /另有 2 条/);
-    assert.deepEqual(await page.locator('#sessionDetail .ins li').evaluateAll(n => n.map(x => x.textContent)), ['目标明确仍有摩擦2']);
-    assert.equal(await page.locator('#sessionDetail .evs li').count(), 2);
+    assert.equal(await page.locator('#sessionDetail .d-meta').innerText(), '9月22日 周二 · 10:30–11:32 · 1:02:05 · 2 个体验事件');
+    assert.deepEqual(await page.locator('#sessionDetail .kq .gh').evaluateAll(n => n.map(x => x.textContent)), ['困惑1', '阻碍2']);
+    assert.equal(await page.locator('#sessionDetail .d-sum .total').innerText(), '3 个问题', 'the four problem kinds only');
+    assert.deepEqual(await page.locator('#sessionDetail .d-sum .kleg span').allInnerTexts(), ['1 困惑', '2 阻碍']);
+    assert.match(await page.locator('#sessionDetail .d-sum .note').innerText(), /另有 2 条/);
+    assert.deepEqual(await page.locator('#sessionDetail .ln.ins').evaluateAll(n => n.map(x => x.textContent)), ['目标明确仍有摩擦2']);
+    assert.equal(await page.locator('#sessionDetail .grp', { hasText: '体验事件' }).locator('li').count(), 2);
     assert.equal(await page.locator('[data-act="handoff"]').count(), 0, 'organized sessions need no hand-off');
     await page.locator('#sessionDetail [data-at="30"]').click();
     assert.deepEqual((await deskCalls(page, 'open_review')).at(-1), ['d1', 30]);
-    await screen(page, 'desk-detail-light-1240x900');
+    await screen(page, 'desk-detail-1240x900');
   });
   await check('detail actions call the matching bridge methods; rename, process and recover confirm first', async () => {
+    assert.equal(await page.locator('#moreMenu').isVisible(), false);
     for (const [act, method] of [['review', 'review_session'], ['folder', 'open_folder'], ['raw', 'open_raw'], ['export', 'package_session']]) {
-      await page.locator(`#sessionDetail [data-act="${act}"]`).click();
+      await deskAct(page, act);
+      assert.equal(await page.locator('#moreMenu').isVisible(), false, `${act}: 更多 closes after a choice`);
       await page.waitForFunction(name => window.__deskFixture.calls.some(call => call.method === name), method);
       assert.deepEqual((await deskCalls(page, method)).at(-1), ['d1'], act);
     }
@@ -1280,8 +1300,8 @@ async function deskChecks(context, origin) {
     await page.locator('[data-act="rename"]').click(); await page.locator('#renameInput').fill('合成新名称');
     await page.locator('#deskDialogFoot .btn.solid').click(); await page.waitForFunction(() => !document.querySelector('#deskDialog').open);
     assert.deepEqual(await deskCalls(page, 'rename_session'), [['d1', '合成新名称']]);
-    await page.waitForFunction(() => document.querySelector('#sessionScroll [data-session="d1"] h4').textContent.includes('合成新名称'));
-    await page.locator('[data-act="recover"]').click(); await page.locator('#deskDialog[open]').waitFor();
+    await page.waitForFunction(() => document.querySelector('#sessionScroll [data-session="d1"] .nm').textContent.includes('合成新名称'));
+    await deskAct(page, 'recover'); await page.locator('#deskDialog[open]').waitFor();
     await page.locator('#deskDialogFoot .btn.solid').click();
     assert.equal(await page.locator('#deskDialog').evaluate(n => n.open), true, 'an empty task id keeps the dialog open');
     assert.equal((await deskCalls(page, 'recover_cloud_task')).length, 0);
@@ -1294,41 +1314,39 @@ async function deskChecks(context, origin) {
     assert.deepEqual((await deskCalls(page, 'session_detail')).at(-1), ['d2']);
     assert.match(await page.locator('#sessionDetail h1').innerText(), /^未命名09:05 开始的记录/);
     assert.match(await page.locator('#sessionDetail').innerText(), /合成测试：后台转写中。/);
-    const enabled = await page.locator('#sessionDetail [data-act]').evaluateAll(nodes => Object.fromEntries(nodes.map(n => [n.dataset.act, !n.disabled])));
-    assert.deepEqual(enabled, { review: true, handoff: true, rename: true, process: false, folder: true, export: false, raw: true, recover: false });
+    assert.deepEqual(await deskEnabled(page), { review: true, handoff: true, rename: true, process: false, folder: true, more: true, export: false, raw: true, recover: false });
     await page.locator('[data-act="handoff"]').click(); await page.waitForFunction(() => document.querySelector('#deskToast').classList.contains('show'));
     const copied = await page.evaluate(() => navigator.clipboard.readText());
     assert.match(copied, /场次文件夹：D:\\synthetic-only\\think-aloud-database\\d2/); assert.match(copied, /只整理这一场/);
-    await screen(page, 'desk-unorganized-light-1240x900');
+    await screen(page, 'desk-transcribing-1240x900');
   });
   await check('a failed session without a playable recording cannot be reviewed; its other actions stay available', async () => {
     await page.locator('#sessionScroll [data-session="d3"]').click(); await page.waitForFunction(() => document.querySelector('#sessionDetail h1')?.textContent.includes('21:00'));
     assert.match(await page.locator('#sessionDetail').innerText(), /合成测试：转写失败。/);
-    const enabled = await page.locator('#sessionDetail [data-act]').evaluateAll(nodes => Object.fromEntries(nodes.map(n => [n.dataset.act, !n.disabled])));
-    assert.deepEqual(enabled, { review: false, handoff: true, rename: true, process: true, folder: true, export: true, raw: true, recover: true });
+    assert.deepEqual(await deskEnabled(page), { review: false, handoff: true, rename: true, process: true, folder: true, more: true, export: true, raw: true, recover: true });
+    await screen(page, 'desk-failed-1240x900');
   });
   await check('while recording, processing, export and cloud recovery lock on every session', async () => {
     await page.locator('#sessionScroll [data-session="d1"]').click(); await page.locator('#sessionDetail .kq').first().waitFor();
     await page.evaluate(() => { window.__deskFixture.desk.busy = true; window.__deskFixture.desk.recording = true; });
     await page.waitForFunction(() => document.querySelector('#sessionDetail [data-act="process"]')?.disabled === true, null, { timeout: 8000 });
-    const enabled = await page.locator('#sessionDetail [data-act]').evaluateAll(nodes => Object.fromEntries(nodes.map(n => [n.dataset.act, !n.disabled])));
-    assert.deepEqual(enabled, { review: true, rename: true, process: false, folder: true, export: false, raw: true, recover: false });
+    assert.deepEqual(await deskEnabled(page), { review: true, rename: true, process: false, folder: true, more: true, export: false, raw: true, recover: false });
     await page.evaluate(() => { window.__deskFixture.desk.busy = false; window.__deskFixture.desk.recording = false; });
     await page.waitForFunction(() => document.querySelector('#sessionDetail [data-act="process"]')?.disabled === false, null, { timeout: 8000 });
   });
   await check('insight links in a session open the insight tab; the tabs switch back', async () => {
-    await page.locator('#sessionDetail .ins li[data-issue="TA-01"]').click();
+    await page.locator('#sessionDetail .ln.ins[data-issue="TA-01"]').click();
     await page.waitForFunction(() => !document.querySelector('#paneInsight').classList.contains('hidden'));
     assert.equal(await page.locator('#paneSessions').isVisible(), false);
     assert.equal(await page.locator('#deskTabInsight').getAttribute('aria-selected'), 'true');
-    await screen(page, 'desk-insight-light-1240x900');
+    await screen(page, 'desk-insight-1240x900');
     await page.locator('#deskTabSessions').click();
     assert.equal(await page.locator('#paneSessions').isVisible(), true); assert.equal(await page.locator('#deskTabSessions').getAttribute('aria-selected'), 'true');
     await page.locator('#deskTabInsight').click(); assert.equal(await page.locator('#paneInsight').isVisible(), true);
     await page.locator('#deskTabSessions').click();
   });
   await check('desk window buttons hand off to the native frame', async () => {
-    for (const name of ['min', 'max', 'close']) await page.locator(`.desk-head [data-win="${name}"]`).click();
+    for (const name of ['min', 'max', 'close']) await page.locator(`.tb [data-win="${name}"]`).click();
     assert.deepEqual((await page.evaluate(() => window.__deskFixture.calls.map(call => call.method))).filter(name => name.startsWith('win_')), ['win_minimize', 'win_toggle_maximize', 'win_close']);
   });
   await page.close();
@@ -1339,7 +1357,9 @@ async function deskChecks(context, origin) {
       await noHorizontalOverflow(p); await screen(p, 'desk-insight-960x600');
       await p.locator('#deskTabSessions').click(); await p.locator('#sessionDetail .kq').first().waitFor();
       await noHorizontalOverflow(p);
-      for (const selector of ['#sessionScroll', '#sessionDetail', '.desk-head [data-win="close"]']) await assertInsideViewport(p, selector);
+      for (const selector of ['#sessionScroll', '#sessionDetail', '.tb [data-win="close"]', '#kindToggle', '#sortSelect']) await assertInsideViewport(p, selector);
+      assert.ok((await box(p, '#sessionScroll [data-session="d1"] .nm')).width >= 120, 'session names keep room at the minimum size');
+      assert.equal(await p.locator('#sessionScroll [data-session="d1"] .c-start').isVisible(), false, 'the start column gives way first');
       await screen(p, 'desk-sessions-960x600');
     } finally { await p.close(); }
   });
