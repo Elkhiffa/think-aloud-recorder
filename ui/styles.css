@@ -115,9 +115,12 @@ button:disabled{cursor:default;opacity:.5}
 /* 上一场 */
 .last-section{min-height:0}
 .empty{color:var(--muted)}
-.last-top{display:flex;justify-content:space-between;align-items:center;gap:var(--s3);margin:var(--s1) 0 var(--s2)}
+/* 区块标题（上一场、全部场次、洞察）：宋体 22，是所在区块里最醒目的字 */
+.sec-title{font:700 var(--t3)/1.35 var(--serif);color:var(--ink)}
+.last-top{display:flex;justify-content:space-between;align-items:center;gap:var(--s3)}
+.last-name{margin-top:var(--s1)}
+.last-section .last-name+.note{margin-bottom:var(--s2)}
 .last-name{font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.unnamed{font-size:var(--t1);color:var(--muted);font-weight:400;margin-right:var(--s2)}
 .test-tag{font-size:var(--t1);color:var(--warn);font-weight:400;margin-left:var(--s2)}
 .fp{display:flex;height:8px;border-radius:4px;overflow:hidden;gap:2px}
 .fp i{display:block;background:var(--kc,var(--k-other))}
@@ -138,7 +141,7 @@ button:disabled{cursor:default;opacity:.5}
 .cards{display:grid;grid-template-columns:1fr 1fr;gap:var(--s3)}
 .card{display:flex;flex-direction:column;border-radius:var(--r-md);background:var(--fill);padding:var(--s4);color:var(--ink)}
 .card:hover{background:var(--fill2)}
-.card b{font:700 var(--t4)/1.05 var(--sans);font-variant-numeric:tabular-nums}
+.card .note b{font-size:var(--t2);color:var(--ink);font-variant-numeric:tabular-nums}
 .card .queue{color:var(--ink)}
 .foot{display:flex;justify-content:space-between;margin-top:auto}
 .foot-l,.foot-desk{display:flex;gap:var(--s1)}

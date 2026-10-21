@@ -340,9 +340,15 @@ async function homeChecks(context, origin) {
     await page.locator('#winMin').click(); await page.locator('#winMax').click(); await page.locator('#winClose').click();
     assert.deepEqual((await page.evaluate(() => window.__syntheticFixture.calls.map(call => call.method))).filter(name => name.startsWith('win_')), ['win_minimize', 'win_toggle_maximize', 'win_close']);
   });
-  await pageCheck(page, 'the two library numbers share one style; record title and each ready line never wrap', async () => {
-    const numbers = await page.locator('#sessionCount,#insightCount').evaluateAll(nodes => nodes.map(node => { const s = getComputedStyle(node); return [s.fontSize, s.fontWeight, s.fontFamily].join('|'); }));
-    assert.equal(numbers.length, 2); assert.equal(numbers[0], numbers[1]);
+  await pageCheck(page, 'each section title is the strongest text in its section; record title and each ready line never wrap', async () => {
+    const numbers = await page.locator('.sec-title').evaluateAll(nodes => nodes.map(node => { const s = getComputedStyle(node); return [node.textContent, s.fontSize, s.fontWeight, s.fontFamily].join('|'); }));
+    assert.deepEqual(numbers.map(n => n.split('|')[0]), ['上一场', '全部场次', '洞察']);
+    assert.equal(new Set(numbers.map(n => n.split('|').slice(1).join('|'))).size, 1, 'the three titles share one style');
+    for (const section of ['#lastSection', '#openLibrary', '#openInsight']) {
+      const sizes = await page.locator(section).evaluate(root => { const title = root.querySelector('.sec-title'); const size = n => parseFloat(getComputedStyle(n).fontSize);
+        return { title: size(title), others: [...root.querySelectorAll('*')].filter(n => !title.contains(n) && [...n.childNodes].some(c => c.nodeType === 3 && c.textContent.trim())).map(size) }; });
+      assert.ok(sizes.others.every(size => size < sizes.title), `${section}: nothing outweighs its title ${JSON.stringify(sizes)}`);
+    }
     assert.equal(await textLines(page, '#recordButtonText'), 1);
     assert.deepEqual(await lineBoxes(page, '#homeStatus span'), [1, 1, 1], '已就绪 and two lines, each cut rather than wrapped');
     const button = await box(page, '#recordButton'), status = await box(page, '#homeStatus'), tile = await box(page, '#capturePanel');
@@ -499,14 +505,15 @@ async function homeChecks(context, origin) {
       await patchSnapshot(page, { sessions }); await page.waitForFunction(() => document.querySelector('#lastSession .quote'));
       assert.match(await page.locator('#lastSession .last-name').innerText(), /^清河探索与初次止戈/);
       const created = new Date(completeSession().created);
-      assert.equal(await page.locator('#lastSession > .note').innerText(), `上一场 · 9月23日 周${'日一二三四五六'[created.getDay()]} 20:05 · 01:02:05`);
+      assert.equal(await page.locator('#lastSession .sec-title').innerText(), '上一场');
+    assert.equal(await page.locator('#lastSession > .note').innerText(), `9月23日 周${'日一二三四五六'[created.getDay()]} 20:05 · 01:02:05`);
       // Only the four problem types are counted and drawn; 建议 is not a problem.
       assert.deepEqual(await page.locator('#lastSession .kleg span').allInnerTexts(), ['3 困惑', '2 阻碍', '1 操作成本']);
       assert.deepEqual(await page.locator('#lastSession .fp i').evaluateAll(nodes => nodes.map(n => [n.className, n.style.flex.split(' ')[0]])), [['k-confusion', '3'], ['k-obstacle', '2'], ['k-cost', '1']]);
       assert.match(await page.locator('#lastSession .quote').innerText(), /00:12:34 · 阻碍[\s\S]*这个入口很显眼但我没找到返回/);
       assert.equal(await page.locator('#sessionCount').innerText(), String(sessions.length));
       assert.equal(await page.locator('#insightCount').innerText(), '6');
-      assert.match(await page.locator('#insightBrief').innerText(), /^洞察 · 最新报告 \d+月\d+日$/);
+      assert.match(await page.locator('#openInsight .note').innerText(), /^6 个 · 最新报告 \d+月\d+日$/);
       await screen(page, 'home-last-complete-720x520');
       for (const selector of ['#lastSession .quote', '[data-last-review]', '#openLibrary', '#openInsight', '#insightBrief']) await assertInsideViewport(page, selector);
       await page.locator('[data-last-review]').click(); assert.deepEqual((await calls(page, 'open_review')).at(-1).args, ['synthetic-complete']);
@@ -1278,8 +1285,11 @@ async function deskChecks(context, origin) {
     assert.equal(await page.locator('#sessionDetail .d-sum .total').innerText(), '3 个问题', 'the four problem kinds only');
     assert.deepEqual(await page.locator('#sessionDetail .d-sum .kleg span').allInnerTexts(), ['1 困惑', '2 阻碍']);
     assert.match(await page.locator('#sessionDetail .d-sum .note').innerText(), /另有 2 条/);
-    assert.deepEqual(await page.locator('#sessionDetail .ln.ins').evaluateAll(n => n.map(x => x.textContent)), ['目标明确仍有摩擦2']);
-    assert.equal(await page.locator('#sessionDetail .grp', { hasText: '体验事件' }).locator('li').count(), 2);
+    assert.deepEqual(await page.locator('#sessionDetail .ln.ins').evaluateAll(n => n.map(x => [x.querySelector('.tx').textContent, x.querySelector('.ct').textContent])), [['目标明确仍有摩擦', '2']]);
+    const events = page.locator('#sessionDetail .grp', { hasText: '体验事件' });
+    assert.equal(await events.locator('li').count(), 2);
+    await events.locator('[data-at="120"]').click();
+    assert.deepEqual((await deskCalls(page, 'open_review')).at(-1), ['d1', 120], 'an activity opens review at its start');
     assert.equal(await page.locator('[data-act="handoff"]').count(), 0, 'organized sessions need no hand-off');
     await page.locator('#sessionDetail [data-at="30"]').click();
     assert.deepEqual((await deskCalls(page, 'open_review')).at(-1), ['d1', 30]);
@@ -1292,11 +1302,15 @@ async function deskChecks(context, origin) {
     await page.locator('#sessionScroll [data-session="d4"]').click(); await page.locator('#sessionScroll [data-session="d1"]').click();
     const block = page.locator('#sessionDetail .kq.k-confusion');
     await block.locator('[data-fold]').waitFor();
-    assert.match(await block.evaluate(n => getComputedStyle(n).boxShadow), /inset/, 'a strong strip on the left');
-    assert.notEqual(await block.evaluate(n => getComputedStyle(n).backgroundColor), await page.locator('#sessionDetail').evaluate(n => getComputedStyle(n).backgroundColor), 'a weak fill of the same hue');
-    assert.equal(await block.locator('.ln').count(), 3); assert.equal(await block.locator('.fold').innerText(), '展开');
-    await block.locator('[data-fold]').click(); assert.equal(await block.locator('.ln').count(), 5); assert.equal(await block.locator('.fold').innerText(), '收起');
-    assert.equal(await block.locator('[data-fold]').getAttribute('aria-expanded'), 'true');
+    const head = block.locator('[data-fold]'), sheet = await page.locator('#sessionDetail').evaluate(n => getComputedStyle(n).backgroundColor);
+    assert.equal(await head.evaluate(n => getComputedStyle(n).borderLeftWidth), '3px', 'a strong strip on the left of the header');
+    assert.notEqual(await head.evaluate(n => getComputedStyle(n).backgroundColor), sheet, 'the header has a weak fill of the same hue');
+    assert.equal(await block.locator('.lns').evaluate(n => getComputedStyle(n).backgroundColor), 'rgba(0, 0, 0, 0)', 'quotes sit on the sheet');
+    assert.equal(await block.locator('.ln').count(), 3); assert.equal(await head.getAttribute('aria-expanded'), 'false');
+    await head.click(); assert.equal(await block.locator('.ln').count(), 5); assert.equal(await head.getAttribute('aria-expanded'), 'true');
+    const line = block.locator('.ln').first();
+    assert.equal(await line.locator('.go').evaluate(n => getComputedStyle(n).visibility), 'hidden');
+    await line.hover(); assert.equal(await line.locator('.go').evaluate(n => getComputedStyle(n).visibility), 'visible', 'hovering a quote shows the jump arrow');
     await block.locator('[data-fold]').click(); assert.equal(await block.locator('.ln').count(), 3);
     assert.equal(await page.locator('#sessionDetail .kq.k-obstacle [data-fold]').count(), 0, 'three or fewer quotes need no fold');
     await page.evaluate(() => { window.__deskFixture.details.d1.quotes.confusion = [{ text: '这个标记是什么意思我没看懂', at: 12.5 }]; });

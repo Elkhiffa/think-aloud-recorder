@@ -116,7 +116,7 @@ test('latest session: external preprocessing labels never change recording state
     assert.equal(findTag(last,'data-last-process'),null,'a finished transcription is not offered again');
     assert.doesNotMatch(last.innerHTML,/<整理>/);
     if(['failed','stale'].includes(s.preprocessing.state))assert.match(last.innerHTML,/<li class="fail">外部 &lt;整理&gt;<\/li>/);
-    titles.add(/<span class="last-name">(.*?)<\/span><button/.exec(last.innerHTML)[1]);
+    titles.add(/<p class="last-name">(.*?)<\/p>/.exec(last.innerHTML)[1]);
   }
   assert.equal(titles.size,1,'the external label never replaces the session title');assert.doesNotMatch([...titles][0],/外部/);
 });
@@ -348,7 +348,7 @@ test('session dates use local minute precision and preserve readable invalid val
   const f=await fixture(snapshot({sessions:[{id:'dated',game:'Dated session',created:timestamp,duration:10,state:'待整理'}]}));
   assert.equal(f.run(`formatDate(${JSON.stringify(timestamp)})`),expected);
   const local=new Date(timestamp),pad=n=>String(n).padStart(2,'0'),rendered=f.elements.get('lastSession').innerHTML;
-  assert.ok(rendered.includes(`上一场 · ${local.getMonth()+1}月${local.getDate()}日 周${'日一二三四五六'[local.getDay()]} ${pad(local.getHours())}:${pad(local.getMinutes())} · 00:00:10`));
+  assert.ok(rendered.includes('<h2 class="sec-title">上一场</h2>'));assert.ok(rendered.includes(`<p class="note">${local.getMonth()+1}月${local.getDate()}日 周${'日一二三四五六'[local.getDay()]} ${pad(local.getHours())}:${pad(local.getMinutes())} · 00:00:10`));
   assert.ok(!rendered.includes(timestamp));assert.ok(!rendered.includes(`${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}`));
   assert.equal(f.run("formatDate('2026-01-02T03:04:59')"),'2026-01-02 03:04');
   assert.equal(f.run("formatDate('未记录时间')"),'未记录时间');

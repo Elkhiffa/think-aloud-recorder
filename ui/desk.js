@@ -12,6 +12,7 @@
   const state={sessions:[],jobs:[],busy:false,game:'',filter:'all',kinds:new Set(),sort:'time',search:'',selected:null,detail:null,signature:'',open:new Set(),editing:false};
   let api=null,toastTimer=null;
   const PLAY='<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg>';
+  const GO='<span class="go" aria-hidden="true">→</span>',CHEV='<svg class="chev" viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6z"/></svg>';
   const PENCIL='<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.8 2.6a1.3 1.3 0 0 1 1.8 0l.8.8a1.3 1.3 0 0 1 0 1.8L6 12.6l-2.9.6.6-2.9z"/></svg>';
 
   // ---- window ----
@@ -94,7 +95,7 @@
     try{const detail=await call('session_detail',id);if(state.selected===id){state.detail=detail;renderDetail(s,detail);}}
     catch(error){if(state.selected===id)$('sessionDetail').insertAdjacentHTML('beforeend',`<p class="d-note">${escape(error.message)}</p>`);}
   }
-  const quoteLine=(k,q)=>`<li><button class="ln k-${k}" data-at="${q.at}" title="在回看中打开这一刻"><span class="at">${short(q.at)}</span><span class="tx">${escape(q.text)}</span></button></li>`;
+  const quoteLine=(k,q)=>`<li><button class="ln k-${k}" data-at="${q.at}" title="在回看中打开这一刻"><span class="at">${short(q.at)}</span><span class="tx">${escape(q.text)}</span>${GO}</button></li>`;
   function renderDetail(s,detail){
     const d=new Date(s.created),valid=!Number.isNaN(d.getTime()),t=title(s),job=jobFor(s);
     const locked=state.busy||!!job,done=status(s)==='done';
@@ -111,10 +112,10 @@
       const legend=Object.entries(KIND).filter(([k])=>kinds[k]).map(([k,label])=>`<span class="k-${k}"><b>${kinds[k]}</b> ${label}</span>`).join('');
       const groups=Object.entries(KIND).map(([k,label])=>{const rows=detail.quotes[k]||[];if(!rows.length)return '';const fit=rows.filter(q=>q.text.length>=6&&q.text.length<=40);
         const more=rows.length>SHOWN,open=more&&state.open.has(k),list=open?rows:(fit.length?fit:rows).slice(0,SHOWN);
-        const head=`<span class="name">${label}</span><small>${rows.length}</small><span class="sp"></span>${more?`<span class="fold">${open?'收起':'展开'}</span>`:''}`;
-        return `<section class="kq k-${k}">${more?`<button class="gh" data-fold="${k}" aria-expanded="${open}">${head}</button>`:`<div class="gh">${head}</div>`}<ul class="lns">${list.map(q=>quoteLine(k,q)).join('')}</ul></section>`;}).join('');
-      const ins=detail.insights.length?`<ul class="lns">${detail.insights.slice(0,8).map(i=>`<li><button class="ln ins" data-issue="${escape(i.id)}"><span class="tx">${escape(i.title)}</span><span class="ct">${i.count}</span></button></li>`).join('')}</ul>`:'<p class="note">这一场的证据还没有挂到洞察下。</p>';
-      const evs=detail.events.map(e=>`<li><span class="ln"><span class="at">${short(e.start)}</span><span class="tx">${escape(e.title)}</span></span></li>`).join('');
+        const head=`<span class="name">${label}</span><small>${rows.length}</small><span class="sp"></span>${more?CHEV:''}`;
+        return `<section class="kq k-${k}">${more?`<button class="gh" data-fold="${k}" aria-expanded="${open}" title="${open?'收起，只看前 3 条':'展开全部 '+rows.length+' 条'}">${head}</button>`:`<div class="gh">${head}</div>`}<ul class="lns">${list.map(q=>quoteLine(k,q)).join('')}</ul></section>`;}).join('');
+      const ins=detail.insights.length?`<ul class="lns">${detail.insights.slice(0,8).map(i=>`<li><button class="ln ins" data-issue="${escape(i.id)}" title="在洞察里查看"><span class="tx">${escape(i.title)}</span><span class="ct">${i.count}</span>${GO}</button></li>`).join('')}</ul>`:'<p class="note">这一场的证据还没有挂到洞察下。</p>';
+      const evs=detail.events.map(e=>`<li><button class="ln" data-at="${e.start}" title="在回看中打开这段活动"><span class="at">${short(e.start)}</span><span class="tx">${escape(e.title)}</span>${GO}</button></li>`).join('');
       body=`<div class="d-sum">${bar(kinds,true)}<div class="d-sum-row"><span class="total"><b>${total}</b> 个问题</span><span class="kleg">${legend}</span></div>${other?`<p class="note">另有 ${other} 条期待、建议、观察和正面评价</p>`:''}</div>`
         +(groups?`<div class="kqs">${groups}</div>`:'<p class="d-note">这一场没有整理出问题。</p>')
         +`<section class="grp"><div class="gh"><span class="name">关联洞察</span></div>${ins}</section>`
