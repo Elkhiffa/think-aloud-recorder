@@ -1,40 +1,27 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"><title>Think Aloud · 体验记录器</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="styles.css"><script defer src="state.js"></script><script defer src="app.js"></script></head><body>
-<svg class="icon-sprite" aria-hidden="true"><defs><symbol id="i-record" viewBox="0 0 40 40"><path d="M4 16C4 10 7 7 13 6v4c-3 1-4 3-4 5h4v10H4Z"/><path d="M16 16c0-6 3-9 9-10v4c-3 1-4 3-4 5h4v10h-9Z"/><path d="M30 3h6v35l-3-4-3 4Z"/></symbol><symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.6v.6M12 17v.2"/></symbol><symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a7.5 7.5 0 0 0 0-3l2-1.6-2-3.4-2.4 1a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.5A7.6 7.6 0 0 0 7 6.5l-2.4-1-2 3.4 2 1.6a7.5 7.5 0 0 0 0 3l-2 1.6 2 3.4 2.4-1a7.6 7.6 0 0 0 2.6 1.5l.4 2.5h4l.4-2.5a7.6 7.6 0 0 0 2.6-1.5l2.4 1 2-3.4Z"/></symbol><symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v10H3V6Z"/></symbol><symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 5 7 7-7 7"/></symbol><symbol id="i-open" viewBox="0 0 24 24"><path d="M13 4h7v7M20 4 10 14M10 4H4v16h16v-6"/></symbol><symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol></defs></svg>
-<div class="frame">
-<aside class="rail" aria-label="工具">
-  <span class="logo" aria-hidden="true"><svg><use href="#i-record"/></svg></span><span class="rail-space app-drag"></span>
-  <button class="rail-button" id="methodButton" title="记录方法" aria-label="记录方法"><svg aria-hidden="true"><use href="#i-help"/></svg></button>
-  <button class="rail-button" id="settingsButton" title="设置" aria-label="设置"><svg aria-hidden="true"><use href="#i-gear"/></svg></button>
-</aside>
-<div class="col">
-<header class="top app-drag"><nav class="games" id="gameTabs" aria-label="游戏"></nav><div class="win" aria-label="窗口"><button id="winMin" aria-label="最小化" title="最小化">&#xE921;</button><button id="winMax" aria-label="最大化" title="最大化">&#xE922;</button><button id="winClose" class="close" aria-label="关闭" title="关闭">&#xE8BB;</button></div></header>
-<main class="home" id="home">
-<section class="sec s1" id="capturePanel" aria-label="录制">
-  <div class="capture-main">
-    <button class="rec" id="recordButton" aria-describedby="statusSlot" disabled><span class="dot"></span><span id="recordButtonText">开始录制</span></button>
-    <div class="live-clock hidden" id="liveClock"><time class="timer" id="recordingTime" role="timer" aria-live="off" aria-label="已录制时长">00:00:00</time><p class="live-sub">正在录制 · 画面、口述和操作都在记录</p></div>
-    <div class="status-slot" id="statusSlot" role="status" aria-live="polite" aria-atomic="true"><span class="capture-label" id="homeStatus">正在连接</span><div class="blockers hidden" id="blockers"></div><div class="alert-actions hidden" id="alertActions"><button class="link hidden" id="alertMore" type="button"></button><button class="btn" id="alertRecheck">重新检查</button><button class="link" id="alertSettings">去设置</button></div></div>
-  </div>
+<div class="app">
+<header class="tb app-drag"><span class="brand" aria-hidden="true"></span><span class="tb-name" id="windowName">Think Aloud</span><span class="tb-space"></span><div class="win" aria-label="窗口"><button id="winMin" aria-label="最小化" title="最小化">&#xE921;</button><button id="winMax" aria-label="最大化" title="最大化">&#xE922;</button><button id="winClose" class="close" aria-label="关闭" title="关闭">&#xE8BB;</button></div></header>
+<main class="mw" id="home">
+<section class="tile" id="capturePanel" aria-label="录制">
+  <div class="live hidden" id="liveClock"><p class="live-sub">正在录制</p><time class="timer" id="recordingTime" role="timer" aria-live="off" aria-label="已录制时长">00:00:00</time>
+    <div class="gauge" id="liveGauges"><span class="name">麦克风</span><div class="microphone-monitor" id="microphoneMonitor" data-state="connecting" aria-label="录制麦克风音量"><div class="microphone-level" id="microphoneLevel" role="meter" aria-label="口述音量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="microphoneFill"></span></div></div><p class="gauge-note" id="microphoneNote">说句话，确认音量条随声音变化。</p></div></div>
+  <button class="rec" id="recordButton" aria-describedby="homeStatus" disabled><span class="rec-title" id="recordButtonText">开始录制</span><span class="rec-game" id="recordGame"></span><svg class="rec-icon" aria-hidden="true" viewBox="0 0 40 40"><circle cx="20" cy="20" r="17" fill="none" stroke="currentColor" stroke-width="3"/><circle cx="20" cy="20" r="9" fill="currentColor"/></svg></button>
+  <p class="checks" id="homeStatus" role="status" aria-live="polite">正在连接</p>
   <p class="job-detail hidden" id="jobDetail" aria-live="polite"></p>
 </section>
-<section class="sec s2" id="lastSection" aria-labelledby="lastHeading">
-  <h2 class="h" id="lastHeading">上一场</h2>
-  <div id="lastSession"><p class="empty">正在读取场次…</p></div>
-  <div class="gauges hidden" id="liveGauges"><div class="gauge"><span class="name">麦克风</span><div class="microphone-monitor" id="microphoneMonitor" data-state="connecting" aria-label="录制麦克风音量"><div class="microphone-level" id="microphoneLevel" role="meter" aria-label="口述音量" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span id="microphoneFill"></span></div></div></div><p class="gauge-note" id="microphoneNote">说句话，确认音量条随声音变化。</p></div>
-  <a class="toc" id="openLibrary" href="#" role="button"><span class="h">全部场次</span><span class="lead"></span><span class="v"><b id="sessionCount">—</b> 场 →</span></a>
-  <p class="brief hidden" id="queueBrief" role="status" aria-live="polite"></p>
-</section>
-<section class="sec s3" id="insightSection">
-  <a class="toc" id="openInsight" href="#" role="button"><span class="h">洞察</span><span class="lead"></span><span class="v"><b id="insightCount">—</b> 个 →</span></a>
-  <p class="brief" id="insightBrief"></p>
-  <p class="prompt hidden" id="livePrompt">边玩边说出你此刻的想法。</p>
-</section>
+<div class="col">
+  <nav class="games" id="gameTabs" aria-label="游戏"></nav>
+  <div class="status-slot hidden" id="statusSlot" role="alert"><ol class="blockers" id="blockers"></ol><div class="alert-actions" id="alertActions"><button class="btn solid" id="alertRecheck" type="button">重新检查</button><button class="btn" id="alertSettings" type="button">去设置</button><button class="quiet hidden" id="alertMore" type="button"></button></div></div>
+  <div class="live-body hidden" id="livePrompt"><h2 class="live-title">边玩边说出<br>你此刻的想法</h2><p class="note">说出困惑、卡住的地方、觉得麻烦或不满意的时刻；不必完整，事后会整理。</p><p class="note" id="liveSummary"></p></div>
+  <section class="last-section" id="lastSection" aria-label="上一场"><div id="lastSession"><p class="empty">正在读取场次…</p></div></section>
+  <div class="cards" id="insightSection"><a class="card" id="openLibrary" href="#" role="button"><b id="sessionCount">—</b><span class="note">全部场次<span id="libraryBrief"></span></span><span class="note queue hidden" id="queueBrief" role="status" aria-live="polite"></span></a><a class="card" id="openInsight" href="#" role="button"><b id="insightCount">—</b><span class="note" id="insightBrief"></span></a></div>
+  <footer class="foot"><button class="quiet" id="methodButton" type="button">记录方法</button><button class="quiet" id="settingsButton" type="button">设置</button></footer>
+</div>
 </main>
 
 <section class="sheet hidden" id="sheet" aria-labelledby="sheetTitle" role="dialog" aria-modal="false">
-  <header class="top app-drag"><nav class="games"><h2 class="g on" id="sheetTitle" tabindex="-1">设置</h2></nav><div class="win"><button data-win="min" aria-label="最小化">&#xE921;</button><button data-win="max" aria-label="最大化">&#xE922;</button><button data-win="close" class="close" aria-label="关闭">&#xE8BB;</button></div></header>
-  <nav class="h-tabs" id="sheetTabs"><a href="#" id="tabGame" class="on">游戏</a><a href="#" id="tabGeneral">通用</a></nav>
+  <div class="st-top"><h2 class="st-title" id="sheetTitle" tabindex="-1">设置</h2><nav class="seg" id="sheetTabs"><a href="#" id="tabGame" class="on">游戏</a><a href="#" id="tabGeneral">通用</a></nav></div>
   <nav class="wiz-steps hidden" id="wizardSteps" aria-label="设置步骤"></nav>
   <nav class="sub-tabs" id="gameSubtabs" aria-label="游戏"></nav>
   <div class="sheet-body" id="wizardBody">
@@ -74,8 +61,7 @@
       <div id="cloudControls" class="box hidden" role="tabpanel" aria-labelledby="providerQwen"><div class="inline-between"><strong>Qwen 云端转写</strong><span class="state-label" id="cloudStatus"></span></div><p class="hint">结束录制后，只上传你的麦克风录音，不上传游戏录像或游戏声音。使用你自己的百炼 API Key，可能产生服务费用。</p><div class="inline-between"><label for="cloudKey">API Key</label><a id="bailianConsole" class="link" href="https://bailian.console.aliyun.com/" target="_blank" rel="noopener noreferrer">百炼控制台</a></div><input id="cloudKey" type="password" autocomplete="new-password" spellcheck="false" placeholder="输入新密钥，或留空保留已保存密钥"><div class="inline-between"><p class="hint" id="cloudFeedback">新密钥在保存设置时保存，取消时清空。</p><button class="link" id="verifyCloud" type="button">验证已保存密钥</button></div></div>
       <div class="field" data-in="general-language"><label for="language">转写语言</label><select id="language" data-draft="language"><option value="zh">中文</option><option value="en">英语</option><option value="ja">日语</option><option value="">自动识别</option></select></div>
       <div class="field" data-in="general-vocab"><label>通用词库</label><div><div class="chips" id="hotwordFiles"></div><button class="chip add" id="chooseHotwordFiles" type="button">＋ 添加</button> <a class="link" id="dictionaryDownload" href="https://pinyin.sogou.com/dict/" target="_blank" rel="noopener noreferrer">下载词库</a></div><p class="hint" id="vocabularyCount">尚未选择词库</p><p class="hint hidden" id="vocabularyStorage">内置词库位于软件目录的 vocabularies/uiux-terms.txt。</p><span class="hidden" id="vocabularySummary"></span></div>
-      <h3 class="group settings-only">外观与资料</h3>
-      <div class="field settings-only" data-in="general-theme"><span class="label">外观</span><div class="chips" id="themeChoice"><button type="button" class="chip" data-theme-choice="system">跟随系统</button><button type="button" class="chip" data-theme-choice="light">浅色</button><button type="button" class="chip" data-theme-choice="dark">深色</button></div></div>
+      <h3 class="group settings-only">资料</h3>
       <div class="field settings-only" data-in="general-library"><label for="libraryRoot">资料总库</label><div class="input-row"><input id="libraryRoot" readonly placeholder="尚未设置：新游戏的文件夹会放在这里"><button class="btn" id="chooseLibrary" type="button">选择</button></div><p class="hint">每个游戏一个文件夹，放在资料总库下。</p></div>
       <div class="field settings-only" data-in="general-method"><span class="label">记录方法</span><button class="link" id="methodLink" type="button">查看“边玩边说”的记录方法</button></div>
       <h3 class="group settings-only" id="updateGroup">版本与更新</h3>
@@ -94,5 +80,5 @@
   </div>
   <footer class="sheet-foot"><p id="sheetMessage"></p><div class="button-row"><button class="btn" id="wizardCancel" type="button">取消</button><button class="btn hidden" id="wizardBack" type="button">上一步</button><button class="btn solid" id="wizardNext" type="button">保存</button></div></footer>
 </section>
-</div></div>
+</div>
 <dialog id="actionDialog" class="action-dialog" aria-labelledby="actionTitle"><div id="actionBody" class="action-body"></div><div id="actionFooter" class="action-footer"></div></dialog><div class="toast" id="toast" role="status" aria-live="polite"></div></body></html>

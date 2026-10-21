@@ -12,9 +12,10 @@
  * Optional: TAR_UI_CHANNEL, TAR_UI_OUTPUT (default work/visual-acceptance),
  * TAR_UI_ONLY=<recorder|settings|new|first|device|window|vocabulary|update|desk|review> runs one group.
  *
- * Main window (ui/index.html) follows docs/plans/2026-10-19-redesign.md: a 720×600 page with a rail,
- * a self-drawn title bar, three sections, and one #sheet overlay for settings (游戏 | 通用) and the
- * 'new' / 'first' wizards. Session rows, filters and row actions live in the desk window (ui/desk.html).
+ * Main window (ui/index.html) follows docs/plans/2026-10-19-redesign.md: a 720×520 page with a self-drawn
+ * title bar, a full-height record block on the left and a right column (games, alert, last session, library
+ * and insight cards), and one #sheet overlay for settings (游戏 | 通用) and the 'new' / 'first' wizards.
+ * Session rows, filters and row actions live in the desk window (ui/desk.html). Light appearance only.
  */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -29,7 +30,7 @@ const read = name => fs.readFileSync(path.join(root, name), 'utf8');
 const clone = value => JSON.parse(JSON.stringify(value));
 const bundledWords = read('vocabularies/uiux-terms.txt').split(/\r?\n/).map(word=>word.trim()).filter(word=>word&&!word.startsWith('#'));
 const bundledVocabulary = {id:'bundled-uiux-browser-fixture',name:'uiux-terms.txt',words:bundledWords};
-const MAIN = { width: 720, height: 600 }; // initial = minimum main window size (app.py)
+const MAIN = { width: 720, height: 520 }; // initial = minimum main window size (app.py)
 const words = [
   '这是合成测试：这个入口很显眼，但我没找到返回的地方。',
   '这是合成测试：我猜这个标记表示任务还没完成。',
@@ -165,13 +166,6 @@ async function assertInsideViewport(page, selector) {
 async function textLines(page, selector) {
   return page.locator(selector).evaluate(node => { const range = document.createRange(); range.selectNodeContents(node); return new Set([...range.getClientRects()].filter(r => r.width > 0).map(r => Math.round(r.top))).size; });
 }
-// The review page still has its own theme button; the main window's appearance lives in 设置 → 通用
-// ([data-theme-choice] chips call setTheme, shared through localStorage 'recorder-theme').
-async function theme(page, requested) {
-  if (await page.locator('#recordButton').count()) await page.evaluate(choice => setTheme(choice), requested);
-  else if (await page.locator('html').getAttribute('data-theme') !== requested) await page.locator('#themeButton').click();
-  assert.equal(await page.locator('html').getAttribute('data-theme'), requested);
-}
 async function patchSnapshot(page, patch) {
   await page.evaluate(value => { Object.assign(window.__syntheticFixture.snapshot, value); }, patch);
 }
@@ -202,14 +196,13 @@ async function pageCheck(page, name, task) {
   await check(name, async () => { try { return await task(); } finally { await page.evaluate(() => { const dialog = document.querySelector('#actionDialog'); if (dialog?.open) dialog.close(); if (typeof sheetOpen === 'function' && sheetOpen()) closeSheet(); }).catch(() => {}); } });
 }
 async function stepLabels(page) { return page.locator('#wizardSteps span').evaluateAll(nodes => nodes.map(n => ({ text: n.textContent.replace(/^\d+/, ''), on: n.classList.contains('on') }))); }
-async function bridge(page, state = snapshot(), requestedTheme = 'light') {
-  await page.addInitScript(({ state, imported, requestedTheme }) => {
-    localStorage.setItem('recorder-theme', requestedTheme);
+async function bridge(page, state = snapshot()) {
+  await page.addInitScript(({ state, imported }) => {
     window.__syntheticFixture = { snapshot: state, imported, calls: [], layout: null, polls: 0, refreshSequence: 0, refreshSnapshot: null, saveFailure: '', directory: 'D:\\synthetic-only\\chosen-folder' };
     window.pywebview = { api: new Proxy({}, { get: (_, method) => async (...args) => {
       const fixture = window.__syntheticFixture;
       if (method === 'get_state') { fixture.polls++; return { ok: true, data: JSON.parse(JSON.stringify(fixture.snapshot)) }; }
-      // Frame colour follows the theme on every load; it is window chrome, not a user action.
+      // Frame colour is set on every load; it is window chrome, not a user action.
       if (method === 'win_set_frame_color') return { ok: true };
       if (method === 'get_microphone_state') return { ok: true, data: { session_id: fixture.snapshot.activity?.active_id || null, state: 'signal', level: .5, quiet_seconds: 0 } };
       fixture.calls.push({ method, args });
@@ -266,10 +259,10 @@ async function bridge(page, state = snapshot(), requestedTheme = 'light') {
         'open_desk', 'open_review', 'process_session', 'stop_recording', 'win_minimize', 'win_toggle_maximize', 'win_close'].includes(method)) return { ok: true };
       throw new Error(`Synthetic harness did not authorize native action: ${String(method)}`);
     } }) };
-  }, { state, imported: importedFiles, requestedTheme });
+  }, { state, imported: importedFiles });
 }
-async function mainPage(context, origin, state = snapshot(), requestedTheme = 'light', viewport = MAIN) {
-  const page = await context.newPage(); await page.setViewportSize(viewport); await bridge(page, state, requestedTheme);
+async function mainPage(context, origin, state = snapshot(), viewport = MAIN) {
+  const page = await context.newPage(); await page.setViewportSize(viewport); await bridge(page, state);
   await page.goto(origin + '/ui/index.html'); await page.waitForFunction(() => window.__syntheticFixture.polls > 0 && store.connected);
   return page;
 }
@@ -308,52 +301,58 @@ async function makeSyntheticVideo(browser, origin) {
 }
 
 // ---------------------------------------------------------------- main window (idle, alert, recording)
+// Every visible line of an element: a clamped reason may hold at most this many lines.
+async function lineBoxes(page, selector) {
+  return page.locator(selector).evaluateAll(nodes => nodes.map(node => Math.round(node.getBoundingClientRect().height / parseFloat(getComputedStyle(node).lineHeight))));
+}
 async function homeChecks(context, origin) {
   const page = await mainPage(context, origin);
-  await page.locator('#lastSession .last').waitFor();
+  await page.locator('#lastSession .last-name').waitFor();
   await pageCheck(page, 'home ready while a synthetic background transcription is running', async () => {
     assert.equal(await page.locator('#recordButton').isEnabled(), true);
-    assert.equal(await page.locator('#homeStatus').innerText(), '已就绪');
+    const status = (await page.locator('#homeStatus').innerText()).split('\n');
+    assert.equal(status[0], '已就绪');
+    assert.deepEqual(status.slice(1), ['游戏窗口 · 示例游戏窗口（合成测试）', '麦克风'], 'ready lists what will be recorded');
     assert.equal(await page.locator('#homeStatus').evaluate(n => n.classList.contains('ready')), true);
-    assert.equal(await page.locator('#blockers').isVisible(), false);
-    assert.equal(await page.locator('#alertActions').isVisible(), false);
+    assert.equal(await page.locator('#statusSlot').isVisible(), false);
     // The running background job is shown where the last session sits, not as a blocker.
     assert.deepEqual(await page.locator('#lastSession .steps li').allInnerTexts(), ['已保存', '转写中', '待整理']);
-    assert.equal(await page.locator('#lastSession .steps li.now').innerText(), '转写中');
+    assert.equal(await page.locator('#lastSession .steps li.now').first().innerText(), '转写中');
     assert.equal(await page.locator('#queueBrief').innerText(), '1 段转写中', 'background work is summarised under 全部场次');
     assert.equal((await calls(page, 'start_recording')).length, 0);
   });
-  await pageCheck(page, '720×600 main window shows the title, all three sections and the window buttons without overflow', async () => {
-    for (const mode of ['light', 'dark']) {
-      await theme(page, mode); await screen(page, `home-${mode}-720x600`);
-      await noHorizontalOverflow(page);
-      assert.equal(await page.locator('#home').evaluate(n => n.scrollTop), 0);
-      assert.equal(await page.getByText('原话选中', { exact: true }).count(), 0); assert.equal(await page.getByText('窗口未打开', { exact: true }).count(), 0);
-      for (const selector of ['#gameTabs .g.on', '#recordButton', '#lastSession', '#openLibrary', '#openInsight', '#insightBrief', '#winMin', '#winMax', '#winClose', '#methodButton', '#settingsButton']) await assertInsideViewport(page, selector);
-      const [title, min, max, close] = await Promise.all(['#gameTabs .g.on', '#winMin', '#winMax', '#winClose'].map(selector => box(page, selector)));
-      assert.ok(min.x < max.x && max.x < close.x, 'minimize, maximize, close from left to right');
-      closeEnough(close.x + close.width, MAIN.width, 'close button sits at the right edge');
-      closeEnough(min.y, 0, 'window buttons sit at the top edge');
-      assert.ok(title.x + title.width <= min.x, 'game title does not run under the window buttons');
-      const order = await Promise.all(['#capturePanel', '#lastSection', '#insightSection'].map(selector => box(page, selector)));
-      assert.ok(order[0].y + order[0].height <= order[1].y + 1 && order[1].y + order[1].height <= order[2].y + 1, 'three sections stack in order');
-    }
-    await theme(page, 'light');
+  await pageCheck(page, '720×520 main window: full-height record block, the right column and the window buttons without overflow', async () => {
+    await screen(page, 'home-720x520');
+    await noHorizontalOverflow(page);
+    assert.equal(await page.locator('#home').evaluate(n => n.scrollHeight <= n.clientHeight + 1), true, 'the home page does not scroll');
+    assert.equal(await page.getByText('原话选中', { exact: true }).count(), 0); assert.equal(await page.getByText('窗口未打开', { exact: true }).count(), 0);
+    for (const selector of ['#gameTabs .g.on', '#recordButton', '#lastSession', '#openLibrary', '#openInsight', '#insightBrief', '#winMin', '#winMax', '#winClose', '#methodButton', '#settingsButton']) await assertInsideViewport(page, selector);
+    const [bar, min, max, close] = await Promise.all(['.tb', '#winMin', '#winMax', '#winClose'].map(selector => box(page, selector)));
+    assert.ok(min.x < max.x && max.x < close.x, 'minimize, maximize, close from left to right');
+    closeEnough(close.x + close.width, MAIN.width, 'close button sits at the right edge');
+    closeEnough(min.y, 0, 'window buttons sit at the top edge');
+    const [tile, column, tabs, last, cards, foot] = await Promise.all(['#capturePanel', '.col', '#gameTabs', '#lastSection', '#insightSection', '.foot'].map(selector => box(page, selector)));
+    assert.ok(tabs.y >= bar.y + bar.height, 'game tabs sit below the title bar');
+    assert.ok(tile.x + tile.width <= column.x, 'the record block sits left of the column');
+    closeEnough(tile.y, column.y, 'record block and column share a top edge');
+    closeEnough(tile.y + tile.height, column.y + column.height, 'the record block runs the full height');
+    assert.ok(tabs.y + tabs.height <= last.y && last.y + last.height <= cards.y && cards.y + cards.height <= foot.y + 1, 'games, last session, cards and footer stack in order');
     await page.locator('#winMin').click(); await page.locator('#winMax').click(); await page.locator('#winClose').click();
     assert.deepEqual((await page.evaluate(() => window.__syntheticFixture.calls.map(call => call.method))).filter(name => name.startsWith('win_')), ['win_minimize', 'win_toggle_maximize', 'win_close']);
   });
-  await pageCheck(page, 'equal section headings; record button and ready status never wrap', async () => {
-    const headings = await page.locator('#lastHeading,#openLibrary .h,#openInsight .h').evaluateAll(nodes => nodes.map(node => ({ size: getComputedStyle(node).fontSize, weight: getComputedStyle(node).fontWeight, family: getComputedStyle(node).fontFamily })));
-    assert.equal(headings.length, 3); assert.deepEqual(headings[1], headings[0]); assert.deepEqual(headings[2], headings[0]);
-    assert.equal(await textLines(page, '#recordButtonText'), 1); assert.equal(await textLines(page, '#homeStatus'), 1);
-    const button = await box(page, '#recordButton'), status = await box(page, '#homeStatus');
-    assert.ok(status.x >= button.x + button.width, 'ready status sits beside the record button');
-    closeEnough(status.y + status.height / 2, button.y + button.height / 2, 'ready status is vertically centred on the record button');
-    return headings;
+  await pageCheck(page, 'the two library numbers share one style; record title and each ready line never wrap', async () => {
+    const numbers = await page.locator('#sessionCount,#insightCount').evaluateAll(nodes => nodes.map(node => { const s = getComputedStyle(node); return [s.fontSize, s.fontWeight, s.fontFamily].join('|'); }));
+    assert.equal(numbers.length, 2); assert.equal(numbers[0], numbers[1]);
+    assert.equal(await textLines(page, '#recordButtonText'), 1);
+    assert.deepEqual(await lineBoxes(page, '#homeStatus span'), [1, 1, 1], '已就绪 and two lines, each cut rather than wrapped');
+    const button = await box(page, '#recordButton'), status = await box(page, '#homeStatus'), tile = await box(page, '#capturePanel');
+    assert.ok(status.y >= button.y + button.height - 1 && status.y + status.height <= tile.y + tile.height + 1, 'ready status sits under the record button, inside the block');
+    return numbers;
   });
-  await pageCheck(page, 'game tabs: the current game is the page title, others switch through select_preset, ＋ opens a new game', async () => {
+  await pageCheck(page, 'game tabs: the current game is marked, others switch through select_preset, ＋ opens a new game', async () => {
     assert.deepEqual(await page.locator('#gameTabs [data-game]').evaluateAll(nodes => nodes.map(n => [n.dataset.game, n.classList.contains('on'), n.getAttribute('aria-current')])), [['synthetic-one', true, 'page'], ['synthetic-two', false, null]]);
     assert.equal(await page.locator('#gameTabs .g.on').innerText(), snapshot().config.game);
+    assert.equal(await page.locator('#recordGame').innerText(), snapshot().config.game, 'the record block names the game it records');
     const order = await page.locator('#gameTabs [data-game]').evaluateAll(nodes => nodes.map(n => n.dataset.game));
     await clickGame(page, '[data-game="synthetic-two"]');
     await page.waitForFunction(() => document.querySelector('#gameTabs .g.on')?.dataset.game === 'synthetic-two');
@@ -367,18 +366,17 @@ async function homeChecks(context, origin) {
     await closeSheet(page); assert.equal((await calls(page, 'save_preset')).length, 0);
     await page.locator('#gameTabs').evaluate(nav => { nav.scrollLeft = 0; }); // Playwright scrolled the clipped ＋ into view
   });
-  await pageCheck(page, 'game tabs that do not fit beside the title fold into 更多 instead of being cut off', async () => {
-    // Design: other games follow the title in small type; when they do not fit they fold into 更多.
+  await pageCheck(page, 'game tabs that do not fit the column fold into 更多 instead of being cut off', async () => {
     const clipped = await page.locator('#gameTabs').evaluate(nav => { nav.scrollLeft = 0; const area = nav.getBoundingClientRect(); return [...nav.querySelectorAll('a,button')].filter(el => { const r = el.getBoundingClientRect(); return r.right > area.right + 1 || r.left < area.left - 1; }).map(el => el.dataset.game || (el.hasAttribute('data-game-add') ? '＋' : el.textContent)); });
     const more = await page.locator('#gameTabs').getByText('更多').count();
-    assert.ok(!clipped.length || more > 0, `game tabs cut off by the title area without 更多: ${JSON.stringify(clipped)} (nav ${JSON.stringify(await box(page, '#gameTabs'))})`);
+    assert.ok(!clipped.length || more > 0, `game tabs cut off by the column without 更多: ${JSON.stringify(clipped)} (nav ${JSON.stringify(await box(page, '#gameTabs'))})`);
   });
   await check('with many long game names at 720 wide, nothing is cut off and the folded games and ＋ are reachable in 更多', async () => {
     const names = ['燕云十六声 · 开放世界主线', '逆水寒 · 手游版副本', '永劫无间 · 新手引导', '鸣潮 · 声骸系统'];
     const p = await mainPage(context, origin, snapshot({ presets: names.map((name, i) => ({ id: 'long-' + i, name, vault: 'D:\\synthetic-only\\long-' + i })), active_preset_id: 'long-0' }));
     try {
       const clipped = await p.locator('#gameTabs').evaluate(nav => { const area = nav.getBoundingClientRect(); return [...nav.querySelectorAll(':scope > a, :scope > .more > button')].filter(el => { const r = el.getBoundingClientRect(); return r.right > area.right + 1; }).map(el => el.textContent); });
-      assert.deepEqual(clipped, [], 'every visible tab lies inside the title area');
+      assert.deepEqual(clipped, [], 'every visible tab lies inside the column');
       assert.equal(await p.locator('#gamesMoreButton').isVisible(), true);
       await p.locator('#gamesMoreButton').click();
       assert.equal(await p.locator('#gamesMoreMenu').isVisible(), true);
@@ -387,8 +385,8 @@ async function homeChecks(context, origin) {
       const visible = await p.locator('#gameTabs > a[data-game]').allInnerTexts();
       assert.deepEqual([...visible, ...folded.filter(text => !text.startsWith('＋'))], names, 'with the first game current, the tabs and then 更多 keep the game order');
       assert.ok((await p.locator('#gameTabs [data-game-add]').count()) === 1, '＋ stays reachable, as a tab or in the menu');
-      await screen(p, 'home-games-more-light-720x600');
-      // Resizing unfolds and refolds the same nodes: the order holds and the title is never re-created.
+      await screen(p, 'home-games-more-720x520');
+      // Resizing unfolds and refolds the same nodes: the order holds and the current game is never re-created.
       await p.evaluate(() => { window.__title = document.querySelector('#gameTabs .g.on'); });
       await p.setViewportSize({ width: 1900, height: 600 });
       await p.waitForFunction(() => document.querySelector('#gamesMore').classList.contains('hidden'));
@@ -402,25 +400,27 @@ async function homeChecks(context, origin) {
       assert.equal(await p.locator('#gamesMoreMenu').isVisible(), false, 'choosing a game closes the menu');
     } finally { await p.close(); }
   });
-  await pageCheck(page, 'alert replaces the ready text beside the disabled record button, with recheck and settings actions', async () => {
-    const readyButton = await box(page, '#recordButton'), readyPanel = await box(page, '#capturePanel'), readyLast = await box(page, '#lastSection');
+  const shownReasons = () => [...document.querySelectorAll('#blockers li span')].map(node => node.textContent);
+  await pageCheck(page, 'alert: the record block greys out and counts the failed checks; the reasons and actions take the right column', async () => {
+    const readyButton = await box(page, '#recordButton'), readyPanel = await box(page, '#capturePanel');
     try { for (const reason of ['未找到游戏窗口，请先打开游戏。', '云端密钥缺失，请重新配置。']) {
       await patchSnapshot(page, { readiness: { ready: false, checking: false, errors: [{ message: reason, step: 1 }] } });
-      await page.waitForFunction(text => document.querySelector('#blockers').textContent === text, reason);
-      await screen(page, 'home-alert-720x600');
+      await page.waitForFunction(`(${shownReasons})().join('|') === ${JSON.stringify(reason)}`);
+      await screen(page, 'home-alert-720x520');
       assert.equal(await page.locator('#recordButton').isEnabled(), false);
-      assert.equal(await page.locator('#homeStatus').isVisible(), false);
-      assert.equal(await page.locator('#blockers').isVisible(), true);
+      assert.equal(await page.locator('#recordButtonText').innerText(), '暂不能录制');
+      assert.equal(await page.locator('#homeStatus').innerText(), '1 项检查未通过\n处理右侧事项后重新检查');
+      assert.equal(await page.locator('#statusSlot').isVisible(), true);
       assert.equal(await page.locator('#statusSlot #blockers').count(), 1);
-      assert.equal(await page.locator('#statusSlot #homeStatus').count(), 1);
-      assert.equal(await page.locator('#capturePanel').evaluate(n => n.classList.contains('alerting')), true);
-      assert.equal(await page.locator('#alertActions').isVisible(), true);
+      assert.deepEqual(await page.locator('#capturePanel').evaluate(n => [n.classList.contains('alerting'), n.classList.contains('off')]), [true, true]);
       assert.equal(await page.locator('#alertRecheck').isVisible(), true); assert.equal(await page.locator('#alertSettings').isVisible(), true);
-      const reasonBox = await box(page, '#statusSlot'), button = await box(page, '#recordButton');
-      assert.ok(reasonBox.x >= button.x + button.width, 'the alert sits beside the disabled record button');
+      assert.equal(await page.locator('#insightSection').isVisible(), false, 'the library cards step aside for the reasons');
+      const reasonBox = await box(page, '#statusSlot'), panel = await box(page, '#capturePanel');
+      assert.ok(reasonBox.x >= panel.x + panel.width, 'the alert sits beside the record block');
+      const button = await box(page, '#recordButton');
       for (const key of ['x', 'y', 'width', 'height']) closeEnough(button[key], readyButton[key], `record button ${key} stays put`);
-      closeEnough((await box(page, '#capturePanel')).height, readyPanel.height, 'first section keeps its height for a single reason');
-      closeEnough((await box(page, '#lastSection')).y, readyLast.y, 'second section does not move for a single reason');
+      for (const key of ['x', 'y', 'width', 'height']) closeEnough(panel[key], readyPanel[key], `record block ${key} stays put`);
+      for (const selector of ['#alertRecheck', '#lastSession', '#settingsButton']) await assertInsideViewport(page, selector);
     }
     await page.locator('#alertRecheck').click(); assert.equal((await calls(page, 'refresh_devices')).length, 1);
     } finally {
@@ -432,7 +432,7 @@ async function homeChecks(context, origin) {
     try {
       for (const [code, tab] of [['MICROPHONE_MISSING', '#tabGeneral'], ['WINDOW_MISSING', '#tabGame']]) {
         await patchSnapshot(page, { readiness: { ready: false, checking: false, errors: [{ code, message: '合成阻碍：' + code, step: 1 }] } });
-        await page.waitForFunction(text => document.querySelector('#blockers').textContent === text && !document.querySelector('#alertSettings').classList.contains('hidden'), '合成阻碍：' + code);
+        await page.waitForFunction(`(${shownReasons})().join('|') === ${JSON.stringify('合成阻碍：' + code)} && !document.querySelector('#alertSettings').classList.contains('hidden')`);
         await page.locator('#alertSettings').click(); await sheet(page).waitFor({ state: 'visible' });
         assert.equal(await page.locator(tab).evaluate(n => n.classList.contains('on')), true, code);
         await closeSheet(page);
@@ -440,75 +440,79 @@ async function homeChecks(context, origin) {
     } finally { await patchSnapshot(page, { readiness: snapshot().readiness }); await page.waitForFunction(() => !document.querySelector('#recordButton').disabled); }
   });
   for (const viewport of [MAIN, { width: 920, height: 1040 }]) {
-    for (const requestedTheme of ['light', 'dark']) {
-      await pageCheck(page, `stable home geometry across wrapped error and checking states (${requestedTheme} ${viewport.width})`, async () => {
-        await page.setViewportSize(viewport); await theme(page, requestedTheme);
-        const selectors = ['#recordButton', '#settingsButton', '#gameTabs .g.on', '#capturePanel', '#lastSection'];
-        const baseline = Object.fromEntries(await Promise.all(selectors.map(async selector => [selector, await box(page, selector)])));
-        const states = [
-          { name: 'ready', readiness: snapshot().readiness },
-          { name: 'one-line', readiness: { ready: false, checking: false, errors: [{ message: '麦克风未连接。' }] } },
-          { name: 'two-lines', readiness: { ready: false, checking: false, errors: [{ message: '已选云端转写，但尚未保存本机 API Key。' }, { message: '保存位置当前不可写，请检查目录。' }] } },
-          { name: 'many-lines', readiness: { ready: false, checking: false, errors: ['设置的游戏窗口尚未打开。', '所选麦克风未连接，请检查连接。', '尚未保存本机 API Key。', '保存位置当前不可写，请检查目录。', '这些内容全部来自合成测试。'].map(message => ({ message })) } },
-          { name: 'one-long', readiness: { ready: false, checking: false, errors: [{ message: '录制引擎文件缺失，请恢复完整应用文件夹；这一条合成原因故意写得很长，用来确认放不下两行时会收起并提供查看全文，而不是在提示块里滚动或把下面的内容挤下去。' }] } },
-          { name: 'checking', readiness: { ready: false, checking: true, errors: [] } },
-          { name: 'ready-again', readiness: snapshot().readiness },
-        ];
-        const measured = [];
-        try {
-          for (const state of states) {
-            await patchSnapshot(page, { readiness: state.readiness });
-            await page.waitForFunction(state => {
-              const expected = state.readiness.errors[0]?.message || '';
-              return document.querySelector('#blockers').textContent === expected &&
-                document.querySelector('#recordButton').disabled === !state.readiness.ready &&
-                (!state.readiness.checking || document.querySelector('#homeStatus').textContent === '正在检查录制条件');
-            }, state);
-            const current = Object.fromEntries(await Promise.all(selectors.map(async selector => [selector, await box(page, selector)])));
-            measured.push({ state: state.name, bounds: current });
-            if (state.name === 'many-lines') await screen(page, `home-errors-${requestedTheme}-${viewport.width}x${viewport.height}`);
-            // Design (第三轮): the alert sits beside the greyed button and the first section keeps its height.
-            for (const selector of selectors) for (const key of ['x', 'y', 'width', 'height']) closeEnough(current[selector][key], baseline[selector][key], `${state.name} ${selector}.${key}`);
-            if (state.readiness.errors.length > 1 || state.name === 'one-long') {
-              // The alert never scrolls: one reason in at most two lines, the rest behind one click.
-              assert.ok(await page.locator('#statusSlot').evaluate(node => node.scrollHeight <= node.clientHeight + 1 && getComputedStyle(node).overflowY !== 'auto'), 'the alert does not scroll');
-              assert.ok(await page.locator('#blockers').evaluate(node => node.getBoundingClientRect().height <= 41), 'one reason in at most two lines');
-              const errors = state.readiness.errors.map(item => item.message);
-              assert.equal(await page.locator('#alertMore').innerText(), errors.length > 1 ? `全部 ${errors.length} 项` : '查看全文');
-              await page.locator('#alertMore').click(); await page.locator('#actionDialog[open]').waitFor();
-              assert.deepEqual(await page.locator('#actionBody .alert-list li').allInnerTexts(), errors, 'every reason is listed in full');
-              await page.locator('#actionFooter button').first().click();
-            } else assert.equal(await page.locator('#alertMore').isVisible(), false, `${state.name}: nothing more to show`);
+    await pageCheck(page, `stable home geometry across wrapped error and checking states (${viewport.width})`, async () => {
+      await page.setViewportSize(viewport);
+      const selectors = ['#recordButton', '#settingsButton', '#gameTabs .g.on', '#capturePanel'];
+      const baseline = Object.fromEntries(await Promise.all(selectors.map(async selector => [selector, await box(page, selector)])));
+      const states = [
+        { name: 'ready', readiness: snapshot().readiness },
+        { name: 'one-line', readiness: { ready: false, checking: false, errors: [{ message: '麦克风未连接。' }] } },
+        { name: 'two-lines', readiness: { ready: false, checking: false, errors: [{ message: '已选云端转写，但尚未保存本机 API Key。' }, { message: '保存位置当前不可写，请检查目录。' }] } },
+        { name: 'many-lines', readiness: { ready: false, checking: false, errors: ['设置的游戏窗口尚未打开。', '所选麦克风未连接，请检查连接。', '尚未保存本机 API Key。', '保存位置当前不可写，请检查目录。', '这些内容全部来自合成测试。'].map(message => ({ message })) } },
+        { name: 'one-long', readiness: { ready: false, checking: false, errors: [{ message: '录制引擎文件缺失，请恢复完整应用文件夹；这一条合成原因故意写得很长，用来确认放不下两行时会收起并提供查看全文，而不是在提示块里滚动或把下面的内容挤下去。为了在较宽的窗口里也放不下两行，这里再补一句同样来自合成测试的说明。' }] } },
+        { name: 'checking', readiness: { ready: false, checking: true, errors: [] } },
+        { name: 'ready-again', readiness: snapshot().readiness },
+      ];
+      const measured = [];
+      try {
+        for (const state of states) {
+          await patchSnapshot(page, { readiness: state.readiness });
+          const expected = state.readiness.errors.slice(0, 2).map(item => item.message).join('|');
+          await page.waitForFunction(`(${shownReasons})().join('|') === ${JSON.stringify(expected)} && document.querySelector('#recordButton').disabled === ${!state.readiness.ready}` +
+            (state.readiness.checking ? ` && document.querySelector('#homeStatus').textContent === '正在检查录制条件'` : ''));
+          const current = Object.fromEntries(await Promise.all(selectors.map(async selector => [selector, await box(page, selector)])));
+          measured.push({ state: state.name, bounds: current });
+          if (state.name === 'many-lines') await screen(page, `home-errors-${viewport.width}x${viewport.height}`);
+          // The record block, its button, the current game and 设置 never move with the reasons.
+          for (const selector of selectors) for (const key of ['x', 'y', 'width', 'height']) closeEnough(current[selector][key], baseline[selector][key], `${state.name} ${selector}.${key}`);
+          await assertInsideViewport(page, '#settingsButton');
+          if (state.readiness.errors.length) {
+            // The alert never scrolls: at most two reasons of at most two lines each, the rest behind one click.
+            assert.ok(await page.locator('#statusSlot').evaluate(node => node.scrollHeight <= node.clientHeight + 1 && getComputedStyle(node).overflowY !== 'auto'), 'the alert does not scroll');
+            assert.ok((await lineBoxes(page, '#blockers li span')).every(lines => lines <= 2), 'each reason in at most two lines');
+            assert.ok(await page.locator('#blockers li').count() <= 2, 'at most two reasons at once');
+            await assertInsideViewport(page, '#alertRecheck');
           }
-          return measured;
-        } catch (error) { error.message += `\nmeasured: ${JSON.stringify(measured.map(m => ({ state: m.state, capturePanel: m.bounds['#capturePanel'], lastSection: m.bounds['#lastSection'] })))}`; throw error; }
-        finally {
-          await patchSnapshot(page, { readiness: snapshot().readiness });
-          await page.waitForFunction(() => !document.querySelector('#recordButton').disabled);
+          if (state.readiness.errors.length > 2 || state.name === 'one-long') {
+            const errors = state.readiness.errors.map(item => item.message);
+            assert.equal(await page.locator('#alertMore').innerText(), errors.length > 2 ? `全部 ${errors.length} 项` : '查看全文');
+            await page.locator('#alertMore').click(); await page.locator('#actionDialog[open]').waitFor();
+            assert.deepEqual(await page.locator('#actionBody .alert-list li').allInnerTexts(), errors, 'every reason is listed in full');
+            await page.locator('#actionFooter button').first().click();
+          } else assert.equal(await page.locator('#alertMore').isVisible(), false, `${state.name}: nothing more to show`);
         }
-      });
-    }
+        return measured;
+      } catch (error) { error.message += `\nmeasured: ${JSON.stringify(measured.map(m => ({ state: m.state, capturePanel: m.bounds['#capturePanel'] })))}`; throw error; }
+      finally {
+        await patchSnapshot(page, { readiness: snapshot().readiness });
+        await page.waitForFunction(() => !document.querySelector('#recordButton').disabled);
+      }
+    });
   }
-  await page.setViewportSize(MAIN); await theme(page, 'light');
-  await pageCheck(page, 'finished last session shows problems and a quote; the quote steps aside while alerting', async () => {
+  await page.setViewportSize(MAIN);
+  await pageCheck(page, 'finished last session shows its four problem types and a quote; the quote steps aside while alerting', async () => {
     const sessions = [completeSession(), ...snapshot().sessions];
     try {
-      await patchSnapshot(page, { sessions }); await page.waitForFunction(() => document.querySelector('#lastSession blockquote'));
-      assert.match(await page.locator('#lastSession h3').innerText(), /^清河探索与初次止戈/);
-      assert.match(await page.locator('#lastSession .meta').innerText(), /^6 个问题/, 'problems count only the four problem kinds');
-      assert.match(await page.locator('#lastSession blockquote').innerText(), /这个入口很显眼但我没找到返回[\s\S]*00:12:34 · 阻碍/);
-      assert.equal(await page.locator('#lastSession .day').innerText(), '23');
+      await patchSnapshot(page, { sessions }); await page.waitForFunction(() => document.querySelector('#lastSession .quote'));
+      assert.match(await page.locator('#lastSession .last-name').innerText(), /^清河探索与初次止戈/);
+      const created = new Date(completeSession().created);
+      assert.equal(await page.locator('#lastSession > .note').innerText(), `上一场 · 9月23日 周${'日一二三四五六'[created.getDay()]} 20:05 · 01:02:05`);
+      // Only the four problem types are counted and drawn; 建议 is not a problem.
+      assert.deepEqual(await page.locator('#lastSession .kleg span').allInnerTexts(), ['3 困惑', '2 阻碍', '1 操作成本']);
+      assert.deepEqual(await page.locator('#lastSession .fp i').evaluateAll(nodes => nodes.map(n => [n.className, n.style.flex.split(' ')[0]])), [['k-confusion', '3'], ['k-obstacle', '2'], ['k-cost', '1']]);
+      assert.match(await page.locator('#lastSession .quote').innerText(), /00:12:34 · 阻碍[\s\S]*这个入口很显眼但我没找到返回/);
       assert.equal(await page.locator('#sessionCount').innerText(), String(sessions.length));
       assert.equal(await page.locator('#insightCount').innerText(), '6');
-      assert.match(await page.locator('#insightBrief').innerText(), /^最新报告 \d+ 月 \d+ 日$/);
-      await screen(page, 'home-last-complete-720x600');
-      for (const selector of ['#lastSession blockquote', '[data-last-review]', '#openLibrary', '#openInsight', '#insightBrief']) await assertInsideViewport(page, selector);
+      assert.match(await page.locator('#insightBrief').innerText(), /^洞察 · 最新报告 \d+月\d+日$/);
+      await screen(page, 'home-last-complete-720x520');
+      for (const selector of ['#lastSession .quote', '[data-last-review]', '#openLibrary', '#openInsight', '#insightBrief']) await assertInsideViewport(page, selector);
       await page.locator('[data-last-review]').click(); assert.deepEqual((await calls(page, 'open_review')).at(-1).args, ['synthetic-complete']);
       await patchSnapshot(page, { readiness: { ready: false, checking: false, errors: [{ message: '麦克风未连接。' }] } });
-      await page.waitForFunction(() => !document.querySelector('#lastSession blockquote'));
-      assert.match(await page.locator('#lastSession .meta').innerText(), /6 个问题/, 'facts stay; only the quote steps aside');
-      await patchSnapshot(page, { readiness: snapshot().readiness }); await page.waitForFunction(() => document.querySelector('#lastSession blockquote'));
-    } finally { await patchSnapshot(page, { sessions: snapshot().sessions, readiness: snapshot().readiness }); await page.waitForFunction(() => !document.querySelector('#lastSession blockquote')); }
+      await page.waitForFunction(() => !document.querySelector('#lastSession .quote'));
+      assert.equal(await page.locator('#lastSession .kleg').isVisible(), true, 'facts stay; only the quote steps aside');
+      await screen(page, 'home-alert-last-complete-720x520');
+      await patchSnapshot(page, { readiness: snapshot().readiness }); await page.waitForFunction(() => document.querySelector('#lastSession .quote'));
+    } finally { await patchSnapshot(page, { sessions: snapshot().sessions, readiness: snapshot().readiness }); await page.waitForFunction(() => !document.querySelector('#lastSession .quote')); }
   });
   await pageCheck(page, 'untranscribed last session asks before transcribing; an unorganized one copies the hand-off', async () => {
     const base = snapshot().sessions;
@@ -531,21 +535,22 @@ async function homeChecks(context, origin) {
       assert.match(copied, /场次文件夹：D:\\synthetic-only\\think-aloud-database\\synthetic-session-0/);
       assert.match(copied, /只整理这一场/);
       assert.equal(await page.locator('[data-last-review]').isEnabled(), true);
-      await screen(page, 'home-last-handoff-720x600');
+      for (const selector of ['[data-copy-handoff]', '#openLibrary', '#settingsButton']) await assertInsideViewport(page, selector);
+      await screen(page, 'home-last-handoff-720x520');
     } finally { await patchSnapshot(page, { sessions: base, background_jobs: snapshot().background_jobs }); }
   });
-  await pageCheck(page, 'all-sessions and insight rows open the desk window on the matching tab', async () => {
+  await pageCheck(page, 'all-sessions and insight cards open the desk window on the matching tab', async () => {
     await page.locator('#openLibrary').click(); await page.locator('#openInsight').click();
     assert.deepEqual((await calls(page, 'open_desk')).map(call => call.args), [['sessions'], ['insight']]);
     assert.equal(await page.locator('#sessionCount').innerText(), '14');
   });
-  await pageCheck(page, 'an empty library invites the first recording and hides the session and insight rows', async () => {
+  await pageCheck(page, 'an empty library invites the first recording and hides the library and insight cards', async () => {
     try {
       await patchSnapshot(page, { sessions: [], background_jobs: [] });
       await page.waitForFunction(() => document.querySelector('#lastSession .empty')?.textContent.startsWith('还没有记录'));
       assert.equal(await page.locator('#lastSession').innerText(), '还没有记录。点开始录制，边玩边说出你此刻的想法。');
       assert.equal(await page.locator('#openLibrary').isVisible(), false); assert.equal(await page.locator('#openInsight').isVisible(), false);
-      await screen(page, 'home-empty-720x600');
+      await screen(page, 'home-empty-720x520');
     } finally { await patchSnapshot(page, { sessions: snapshot().sessions, background_jobs: snapshot().background_jobs }); await page.locator('#openLibrary').waitFor(); }
   });
   await pageCheck(page, 'recording keeps only the clock, the microphone gauge and a prompt; settings and game switching lock', async () => {
@@ -554,8 +559,9 @@ async function homeChecks(context, origin) {
       await page.waitForFunction(() => document.querySelector('#capturePanel').classList.contains('recording'));
       assert.equal(await page.locator('#liveClock').isVisible(), true); assert.equal(await page.locator('#recordingTime').innerText(), '00:01:24');
       assert.equal(await page.locator('#liveGauges').isVisible(), true); assert.equal(await page.locator('#livePrompt').isVisible(), true);
-      for (const hidden of ['#lastSession', '#openLibrary', '#openInsight', '#insightBrief', '#blockers', '#alertActions']) assert.equal(await page.locator(hidden).isVisible(), false, hidden);
-      assert.equal(await page.locator('#lastHeading').innerText(), '收音与操作');
+      for (const hidden of ['#lastSection', '#openLibrary', '#openInsight', '#insightBrief', '#statusSlot']) assert.equal(await page.locator(hidden).isVisible(), false, hidden);
+      assert.match(await page.locator('#livePrompt .live-title').innerText(), /^边玩边说出\s*你此刻的想法$/);
+      assert.match(await page.locator('#liveSummary').innerText(), /只录游戏窗口/);
       assert.equal(await page.locator('#gameTabs [data-game],#gameTabs [data-game-add]').count(), 0, 'no game switching while recording');
       assert.equal(await page.locator('#gameTabs .g.on').innerText(), snapshot().config.game);
       assert.match(await page.locator('#gameTabs .lock').innerText(), /录制中不能切换/);
@@ -565,7 +571,7 @@ async function homeChecks(context, origin) {
       await page.evaluate(() => openSheet('settings')); assert.equal(await sheet(page).isVisible(), false, 'settings cannot open while recording');
       await noHorizontalOverflow(page);
       for (const selector of ['#recordButton', '#liveClock', '#microphoneMonitor', '#livePrompt']) await assertInsideViewport(page, selector);
-      await screen(page, 'home-recording-720x600');
+      await screen(page, 'home-recording-720x520');
       await page.locator('#recordButton').click(); assert.equal((await calls(page, 'stop_recording')).length, 1);
       assert.equal((await calls(page, 'start_recording')).length, 0);
     } finally {
@@ -574,8 +580,8 @@ async function homeChecks(context, origin) {
     }
     assert.equal(await page.locator('#lastSession').isVisible(), true); assert.equal(await page.locator('#liveGauges').isVisible(), false);
   });
-  await pageCheck(page, 'quiet rail help; library folder access lives in game settings', async () => {
-    assert.equal(await page.locator('.rail #methodButton').count(), 1); assert.equal(await page.locator('.rail #settingsButton').count(), 1);
+  await pageCheck(page, 'quiet footer help; library folder access lives in game settings', async () => {
+    assert.equal(await page.locator('.foot #methodButton').count(), 1); assert.equal(await page.locator('.foot #settingsButton').count(), 1);
     assert.equal(await page.locator('#openVault').isVisible(), false);
     await page.locator('#methodButton').click(); await page.locator('#actionDialog[open]').waitFor();
     assert.equal(await page.locator('#actionBody .method-card').count(), 4);
@@ -593,7 +599,7 @@ async function homeChecks(context, origin) {
       await patchSnapshot(page, { config: { ...snapshot().config, vault: longPath } }); await pollNow(page);
       assert.deepEqual(await box(page, '#capturePanel'), before); assert.deepEqual(await box(page, '#lastSection'), last);
       assert.equal(await page.getByText(longPath).count(), 0, 'the library path is not printed on the home page');
-      await screen(page, 'home-light-920x1040'); await theme(page, 'dark'); await screen(page, 'home-dark-920x1040'); await theme(page, 'light');
+      await screen(page, 'home-920x1040');
       await page.setViewportSize(MAIN);
       await openSettings(page, 'game');
       assert.equal(await page.locator('#vault').inputValue(), longPath);
@@ -601,7 +607,7 @@ async function homeChecks(context, origin) {
       await page.locator('#vault').scrollIntoViewIfNeeded(); await assertInsideViewport(page, '#vault'); await assertInsideViewport(page, '#openVault');
       await assertInsideViewport(page, '#wizardCancel'); await noHorizontalOverflow(page);
       assert.ok(await page.locator('#wizardBody').evaluate(n => n.scrollWidth <= n.clientWidth + 1), 'settings body has no horizontal scroll');
-      await screen(page, 'settings-long-path-720x600');
+      await screen(page, 'settings-long-path-720x520');
       await closeSheet(page);
     } finally { await patchSnapshot(page, { config: snapshot().config }); await page.setViewportSize(MAIN); }
   });
@@ -622,12 +628,12 @@ async function settingsChecks(context, origin) {
     assert.equal(await page.locator('#wizardCancel').innerText(), '关闭'); assert.equal(await page.locator('#wizardNext').isVisible(), false);
     assert.equal(await page.locator('#sheetMessage').innerText(), '');
     assert.equal(await page.locator('#settingsButton').evaluate(n => n.classList.contains('on')), true);
-    await screen(page, 'settings-game-light-720x600');
+    await screen(page, 'settings-game-720x520');
     await page.locator('#tabGeneral').click();
     assert.equal(await page.locator('#panelGeneral').isVisible(), true); assert.equal(await page.locator('#gameSubtabs').isVisible(), false);
-    for (const id of ['#mic', '#source', '#preset', '#recordInputs', '#providerTabs', '#language', '#hotwordFiles', '#themeChoice', '#libraryRoot', '#methodLink', '#updateGroup']) assert.equal(await page.locator(id).count(), 1, id);
+    for (const id of ['#mic', '#source', '#preset', '#recordInputs', '#providerTabs', '#language', '#hotwordFiles', '#libraryRoot', '#methodLink', '#updateGroup']) assert.equal(await page.locator(id).count(), 1, id);
     assert.equal(await page.locator('#updateGroup').isVisible(), true);
-    await screen(page, 'settings-general-light-720x600');
+    await screen(page, 'settings-general-720x520');
     await closeSheet(page);
     assert.equal(await page.locator('#settingsButton').evaluate(n => n.classList.contains('on')), false);
   });
@@ -644,7 +650,7 @@ async function settingsChecks(context, origin) {
     assert.match(await page.locator('#wizardError').innerText(), /请先保存或取消当前修改，再切换游戏/);
     assert.equal((await calls(page, 'select_preset')).length, 0, 'switching game with unsaved edits never reaches the bridge');
     await page.locator('#gameSubtabs [data-sub-add]').click(); assert.equal(await page.locator('#sheetTitle').innerText(), '设置');
-    await screen(page, 'settings-dirty-light-720x600');
+    await screen(page, 'settings-dirty-720x520');
     await page.keyboard.press('Escape'); await sheet(page).waitFor({ state: 'hidden' });
     await openSettings(page, 'game');
     assert.equal(await page.locator('#game').inputValue(), snapshot().config.game, 'cancel discards the draft');
@@ -691,7 +697,7 @@ async function settingsChecks(context, origin) {
     assert.equal(await page.locator('#hotwordFiles .chip').count(), 3, 'reimport does not duplicate selected files');
     assert.equal((await calls(page, 'choose_hotword_files')).length, 2);
     await page.locator('#dictionaryDownload').click(); assert.equal((await calls(page, 'open_dictionary_site')).length, 1);
-    await screen(page, 'settings-vocabulary-light-720x600');
+    await screen(page, 'settings-vocabulary-720x520');
     await page.locator('#hotwordFiles [data-remove-vocabulary="synthetic-game"]').click();
     assert.equal(await page.locator('#hotwordFiles .chip').count(), 2);
     assert.equal((await calls(page, 'save_general')).length, 0, 'vocabulary changes stay in the draft');
@@ -727,52 +733,33 @@ async function settingsChecks(context, origin) {
     assert.equal(await page.evaluate(() => document.activeElement.id), 'providerQwen');
     await page.locator('#providerQwen').press('Home');
     assert.equal(await page.evaluate(() => document.activeElement.id), 'providerLocal');
-    await screen(page, 'settings-local-tab-light-720x600');
+    await screen(page, 'settings-local-tab-720x520');
     await page.locator('#providerQwen').click();
     assert.equal((await calls(page, 'save_general')).length, 0, 'changing tabs only changes the draft');
     await closeSheet(page);
   });
-  await pageCheck(page, 'settings selects share one style in both themes and keep native keyboard selection', async () => {
+  await pageCheck(page, 'settings selects share one style and keep native keyboard selection', async () => {
     await openSettings(page, 'general');
-    for (const mode of ['light', 'dark']) {
-      await theme(page, mode);
-      const styles = await page.locator('#mic,#source,#preset,#language,#updateChannel').evaluateAll(nodes => nodes.map(node => { const s = getComputedStyle(node); return [s.paddingLeft, s.paddingRight, s.height, s.borderRadius, s.appearance, s.backgroundColor, s.color].join('|'); }));
-      assert.equal(new Set(styles).size, 1, JSON.stringify(styles));
-    }
-    await theme(page, 'light');
+    const styles = await page.locator('#mic,#source,#preset,#language,#updateChannel').evaluateAll(nodes => nodes.map(node => { const s = getComputedStyle(node); return [s.paddingLeft, s.paddingRight, s.height, s.borderRadius, s.appearance, s.backgroundColor, s.color].join('|'); }));
+    assert.equal(new Set(styles).size, 1, JSON.stringify(styles));
     await page.locator('#language').focus(); await page.keyboard.press('ArrowDown');
     assert.equal(await page.locator('#language').inputValue(), 'en');
     assert.equal(await page.locator('#sheetMessage').innerText(), '有未保存的修改');
     await closeSheet(page);
   });
-  await pageCheck(page, 'appearance choice in settings applies at once and is shared through localStorage', async () => {
+  await pageCheck(page, 'settings body scrolls independently; footer stays visible at minimum size', async () => {
     await openSettings(page, 'general');
-    for (const [choice, applied] of [['dark', 'dark'], ['light', 'light'], ['system', null]]) {
-      await page.locator(`[data-theme-choice="${choice}"]`).click();
-      assert.equal(await page.evaluate(() => localStorage.getItem('recorder-theme')), choice);
-      assert.equal(await page.locator(`[data-theme-choice="${choice}"]`).evaluate(n => n.classList.contains('on')), true);
-      if (applied) assert.equal(await page.locator('html').getAttribute('data-theme'), applied);
-    }
-    await page.locator('[data-theme-choice="light"]').click();
-    assert.equal(await page.locator('#sheetMessage').innerText(), '', 'appearance applies immediately and is not a pending edit');
+    await unchangedBounds(page, '.sheet-foot', async () => {
+      const metrics = await page.locator('#wizardBody').evaluate(node => { node.scrollTop = node.scrollHeight; return { scroll: node.scrollTop, height: node.clientHeight }; });
+      assert.ok(metrics.scroll > 0 && metrics.height > 60, 'settings body must scroll');
+    });
+    await assertInsideViewport(page, '.sheet-foot'); await assertInsideViewport(page, '#wizardCancel');
+    await page.locator('#language').selectOption('ja');
+    await assertInsideViewport(page, '#wizardNext');
+    await noHorizontalOverflow(page);
+    assert.ok(await page.locator('#sheet').evaluate(n => n.scrollWidth <= n.clientWidth + 1));
+    await screen(page, 'settings-general-scrolled-720x520');
     await closeSheet(page);
-  });
-  await pageCheck(page, 'settings body scrolls independently; footer stays visible at minimum size in both themes', async () => {
-    for (const mode of ['light', 'dark']) {
-      await theme(page, mode); await openSettings(page, 'general');
-      await unchangedBounds(page, '.sheet-foot', async () => {
-        const metrics = await page.locator('#wizardBody').evaluate(node => { node.scrollTop = node.scrollHeight; return { scroll: node.scrollTop, height: node.clientHeight }; });
-        assert.ok(metrics.scroll > 0 && metrics.height > 60, 'settings body must scroll');
-      });
-      await assertInsideViewport(page, '.sheet-foot'); await assertInsideViewport(page, '#wizardCancel');
-      await page.locator('#language').selectOption('ja');
-      await assertInsideViewport(page, '#wizardNext');
-      await noHorizontalOverflow(page);
-      assert.ok(await page.locator('#sheet').evaluate(n => n.scrollWidth <= n.clientWidth + 1));
-      await screen(page, `settings-general-scrolled-${mode}-720x600`);
-      await closeSheet(page);
-    }
-    await theme(page, 'light');
   });
   await pageCheck(page, 'saving the game tab sends only game fields; saving the general tab sends only shared fields; the key follows a successful save', async () => {
     await openSettings(page, 'game');
@@ -823,7 +810,7 @@ async function settingsChecks(context, origin) {
       assert.equal(await button.innerText(), '删除游戏和资料'); assert.equal(await button.isDisabled(), true, 'the name must be repeated first');
       await p.locator('#deleteConfirmName').fill('示例游戏'); assert.equal(await button.isDisabled(), true);
       await p.locator('#deleteConfirmName').fill('示例游戏 · 合成测试'); assert.equal(await button.isEnabled(), true);
-      await screen(p, 'settings-delete-game-light-720x600');
+      await screen(p, 'settings-delete-game-720x520');
       await p.locator('#deleteData').uncheck(); assert.equal(await button.innerText(), '删除游戏');
       await button.dblclick();
       await p.waitForFunction(() => !document.querySelector('#actionDialog').open);
@@ -884,7 +871,7 @@ async function newGameChecks(context, origin) {
     const laterPolls = await page.evaluate(() => window.__syntheticFixture.polls);
     await page.waitForFunction(before => window.__syntheticFixture.polls > before, laterPolls);
     assert.equal(await page.evaluate(() => document.activeElement.id), 'target', 'polling does not steal focus back to the name field');
-    await screen(page, 'new-game-light-720x600');
+    await screen(page, 'new-game-720x520');
     await page.locator('#wizardNext').click();
     assert.equal(await page.locator('#wizardError').innerText(), '请选择游戏窗口。'); assert.equal((await stepLabels(page))[0].on, true);
     await page.locator('#target').selectOption('synthetic-window');
@@ -893,7 +880,7 @@ async function newGameChecks(context, origin) {
     for (const field of ['game-name', 'game-window', 'game-vocab', 'game-manual']) assert.equal(await page.locator(`[data-in="${field}"]`).isVisible(), false, field);
     assert.equal(await page.locator('#vault').inputValue(), 'D:\\synthetic-only\\未保存的合成预设', 'the default location is 总库\\游戏名');
     assert.equal(await page.locator('#wizardNext').innerText(), '创建游戏'); assert.equal(await page.locator('#wizardBack').isVisible(), true);
-    await screen(page, 'new-game-location-light-720x600');
+    await screen(page, 'new-game-location-720x520');
     await page.locator('#wizardBack').click(); assert.equal(await page.locator('#game').inputValue(), '未保存的合成预设');
     await page.locator('#wizardCancel').click(); await sheet(page).waitFor({ state: 'hidden' });
     assert.equal((await calls(page, 'save_preset')).length, 0);
@@ -932,20 +919,20 @@ async function firstUseChecks(context, origin) {
     assert.equal(await page.locator('.method-card:visible').count(), 4);
     assert.ok((await box(page, '#methodContent .method-lead')).y < (await box(page, '#methodContent .method-grid')).y, 'core method precedes all examples and supporting copy');
     assert.equal(await page.locator('#wizardNext').innerText(), '开始设置'); assert.equal(await page.locator('#wizardBack').isVisible(), false);
-    await screen(page, 'first-method-light-720x600');
+    await screen(page, 'first-method-720x520');
   });
   await check('device and transcription step: shared settings only, validated before moving on', async () => {
     await page.locator('#wizardNext').click();
     assert.equal((await stepLabels(page))[1].on, true);
     assert.equal(await page.locator('#panelGeneral').isVisible(), true); assert.equal(await page.locator('#panelGame').isVisible(), false);
-    for (const id of ['#themeChoice', '#libraryRoot', '#updateGroup', '#methodLink']) assert.equal(await page.locator(id).isVisible(), false, `${id} belongs to 设置 only`);
+    for (const id of ['#libraryRoot', '#updateGroup', '#methodLink']) assert.equal(await page.locator(id).isVisible(), false, `${id} belongs to 设置 only`);
     assert.equal(await page.locator('#mic').isVisible(), true);
     await page.locator('#wizardNext').click();
     assert.equal(await page.locator('#wizardError').innerText(), '请选择麦克风。'); assert.equal((await stepLabels(page))[1].on, true);
     await page.locator('#mic').selectOption('synthetic-mic');
     assert.equal(await page.locator('#providerLocal').getAttribute('aria-selected'), 'true', 'local transcription is the default; nothing is uploaded unless chosen');
     await page.locator('#providerQwen').click(); await page.locator('#cloudKey').fill('synthetic-first-key');
-    await screen(page, 'first-devices-light-720x600');
+    await screen(page, 'first-devices-720x520');
     await page.locator('#wizardNext').click();
     assert.equal((await stepLabels(page))[2].on, true);
   });
@@ -958,7 +945,7 @@ async function firstUseChecks(context, origin) {
     assert.match(await page.locator('#actionBody').innerText(), /心智模型/);
     assert.equal(await page.locator('#actionBody input,#actionBody textarea,#actionBody [contenteditable]').count(), 0, 'preview is read-only');
     assert.equal((await calls(page, 'save_preset')).length, 0);
-    await screen(page, 'first-vocabulary-preview-light-720x600');
+    await screen(page, 'first-vocabulary-preview-720x520');
     await page.locator('#actionFooter button').first().click();
     assert.equal(await sheet(page).isVisible(), true, 'closing the preview returns to the setup');
   });
@@ -980,7 +967,7 @@ async function firstUseChecks(context, origin) {
     assert.equal(await page.locator('#reuseVaultNotice').isVisible(), true);
     assert.match(await page.locator('#reuseVaultMessage').innerText(), /发现已有同名资料库/);
     assert.equal(await page.locator('#wizardNext').isDisabled(), true, 'an existing library is never reused silently');
-    await screen(page, 'first-location-light-720x600');
+    await screen(page, 'first-location-720x520');
     await page.locator('#reuseVault').click();
     assert.equal(await page.locator('#wizardNext').isEnabled(), true);
     assert.match(await page.locator('#reuseVaultMessage').innerText(), /将使用已有资料库/);
@@ -1041,10 +1028,10 @@ async function deviceSetupChecks(context, origin) {
     },
     device_defaults: { monitor: 'synthetic-primary-display', mic: 'default' },
   };
-  for (const scenario of [{ theme: 'light' }, { theme: 'dark' }]) {
-    const page = await mainPage(context, origin, firstSnapshot(clone(detected)), scenario.theme);
+  {
+    const page = await mainPage(context, origin, firstSnapshot(clone(detected)));
     await sheet(page).waitFor({ state: 'visible' });
-    await check(`explicit device refresh changes only the draft and keeps manual choices (${scenario.theme})`, async () => {
+    await check('explicit device refresh changes only the draft and keeps manual choices', async () => {
       const original = await page.evaluate(() => JSON.stringify(window.__syntheticFixture.snapshot.config));
       await page.evaluate(value => { window.__syntheticFixture.refreshSnapshot = value; }, detected);
       await page.locator('#wizardNext').click(); // → 设备与转写
@@ -1064,7 +1051,7 @@ async function deviceSetupChecks(context, origin) {
       assert.equal(await page.evaluate(() => JSON.stringify(window.__syntheticFixture.snapshot.config)), original, 'setup changes only the draft');
       assert.equal((await calls(page, 'save_preset')).length, 0);
       assert.equal((await calls(page, 'refresh_devices')).length, 0, 'reading devices never restarts the recording engine');
-      await screen(page, `first-devices-refreshed-${scenario.theme}-720x600`);
+      await screen(page, 'first-devices-refreshed-720x520');
       await page.locator('#wizardCancel').click();
       assert.equal((await calls(page, 'save_preset')).length, 0);
     });
@@ -1078,7 +1065,7 @@ async function deviceSetupChecks(context, origin) {
       assert.equal(await page.locator('#mic').isVisible(), true);
       assert.deepEqual(await page.locator('#mic option').allInnerTexts(), ['请选择麦克风']);
       const visible = { refresh: await page.locator('#refreshDevices').isVisible(), feedback: await page.locator('#deviceFeedback').isVisible() };
-      await screen(page, 'first-devices-empty-light-720x600');
+      await screen(page, 'first-devices-empty-720x520');
       assert.deepEqual(visible, { refresh: true, feedback: true }, 'with no microphone listed, the step that requires one shows why and how to read devices again');
     } finally { await page.close(); }
   });
@@ -1144,9 +1131,9 @@ async function windowSelectionChecks(context, origin) {
 async function vocabularyChecks(context, origin) {
   const state = snapshot();
   Object.assign(state.config, { hotword_files: [clone(bundledVocabulary)], general_hotword_files: [clone(bundledVocabulary)] });
-  for (const mode of ['light', 'dark']) {
-    const page = await mainPage(context, origin, state, mode);
-    await check(`general vocabulary preview scrolls inside the window and returns to the draft (${mode})`, async () => {
+  {
+    const page = await mainPage(context, origin, state);
+    await check('general vocabulary preview scrolls inside the window and returns to the draft', async () => {
       await openSettings(page, 'general');
       assert.equal(await page.locator('#hotwordFiles .chip').count(), 1);
       assert.match(await page.locator('#hotwordFiles .chip').innerText(), new RegExp(`uiux-terms\\.txt\\s*${bundledWords.length}`));
@@ -1155,7 +1142,7 @@ async function vocabularyChecks(context, origin) {
       await page.locator('#actionBody').evaluate(node => node.scrollTop = node.scrollHeight);
       assert.ok(await page.locator('#actionBody').evaluate(node => node.scrollTop > 0));
       await assertInsideViewport(page, '#actionDialog'); await noHorizontalOverflow(page);
-      await screen(page, `vocabulary-preview-${mode}-720x600`);
+      await screen(page, 'vocabulary-preview-720x520');
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('#actionDialog').evaluate(n => n.open), false);
       assert.equal(await sheet(page).isVisible(), true, 'Escape closes only the preview, not the settings');
@@ -1193,10 +1180,9 @@ const deskDetails = {
 const deskOverview = { vault: '合成资料库', reports: [{ name: 'r.md', modified: 1, bytes: 10 }], feedback: [], tag_groups: [], tags: [], instance_tags: {}, session_labels: { d1: '0922' },
   instances: [{ session_id: 'd1', instance_id: 'i1', said_start: 30, refers_start: 28, refers_end: 31, refers_basis: 'same_time', screen: 'bag', catalog_screen: 'bag', elements: [], kind: 'obstacle', statement: '合成陈述', issue_tags: [], issue_links: [], event_id: 'e1', event_title: '清河任务' }],
   issues: [{ id: 'TA-01', title: '目标明确仍有摩擦', description: '合成议题', status: 'confirmed', support: [{ session_id: 'd1', instance_id: 'i1', reason: '合成理由' }], counter: [], children: [] }], bug_unorganized: [] };
-async function deskPage(context, origin, desk = deskState(), requestedTheme = 'light', viewport = { width: 1240, height: 900 }) {
+async function deskPage(context, origin, desk = deskState(), viewport = { width: 1240, height: 900 }) {
   const page = await context.newPage(); await page.setViewportSize(viewport);
-  await page.addInitScript(({ desk, details, overview, requestedTheme }) => {
-    localStorage.setItem('recorder-theme', requestedTheme);
+  await page.addInitScript(({ desk, details, overview }) => {
     const f = window.__deskFixture = { desk, details, overview, calls: [], reads: 0 };
     const copy = value => JSON.parse(JSON.stringify(value)), ok = data => ({ ok: true, data });
     window.pywebview = { api: new Proxy({}, { get: (_, method) => async (...args) => {
@@ -1211,7 +1197,7 @@ async function deskPage(context, origin, desk = deskState(), requestedTheme = 'l
       if (['review_session', 'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task', 'open_review', 'win_minimize', 'win_toggle_maximize', 'win_close'].includes(method)) return ok({});
       throw new Error('Synthetic desk harness did not authorize native action: ' + String(method));
     } }) };
-  }, { desk, details: deskDetails, overview: deskOverview, requestedTheme });
+  }, { desk, details: deskDetails, overview: deskOverview });
   await page.goto(origin + '/ui/desk.html'); await page.locator('#sessionScroll .item').first().waitFor({ state: 'attached' });
   return page;
 }
@@ -1346,16 +1332,15 @@ async function deskChecks(context, origin) {
     assert.deepEqual((await page.evaluate(() => window.__deskFixture.calls.map(call => call.method))).filter(name => name.startsWith('win_')), ['win_minimize', 'win_toggle_maximize', 'win_close']);
   });
   await page.close();
-  await check('desk opens on the requested tab, follows the shared dark theme and fits its 960×600 minimum', async () => {
-    const p = await deskPage(context, origin, deskState({ tab: 'insight' }), 'dark', { width: 960, height: 600 });
+  await check('desk opens on the requested tab and fits its 960×600 minimum', async () => {
+    const p = await deskPage(context, origin, deskState({ tab: 'insight' }), { width: 960, height: 600 });
     try {
       await p.waitForFunction(() => !document.querySelector('#paneInsight').classList.contains('hidden'));
-      assert.equal(await p.locator('html').getAttribute('data-theme'), 'dark');
-      await noHorizontalOverflow(p); await screen(p, 'desk-insight-dark-960x600');
+      await noHorizontalOverflow(p); await screen(p, 'desk-insight-960x600');
       await p.locator('#deskTabSessions').click(); await p.locator('#sessionDetail .kq').first().waitFor();
       await noHorizontalOverflow(p);
       for (const selector of ['#sessionScroll', '#sessionDetail', '.desk-head [data-win="close"]']) await assertInsideViewport(p, selector);
-      await screen(p, 'desk-sessions-dark-960x600');
+      await screen(p, 'desk-sessions-960x600');
     } finally { await p.close(); }
   });
 }
@@ -1427,7 +1412,7 @@ async function reviewChecks(context, origin) {
     assert.ok(after < initial); assert.ok((await calls(page, 'save_layout')).length > 0);
     await page.keyboard.press('Enter'); await noHorizontalOverflow(page);
     assert.equal(await page.evaluate(() => document.scrollingElement.scrollTop), 0);
-    await theme(page, 'dark'); await screen(page, 'review-dark-1240x900');
+    await screen(page, 'review-1240x900');
   });
   await check('compact stacked review keeps video fixed, transcript scrollable and copy menu in bounds', async () => {
     await page.setViewportSize({ width: 560, height: 540 });
@@ -1441,10 +1426,9 @@ async function reviewChecks(context, origin) {
     assert.ok((await box(page, '#lines')).height >= 32, 'transcript retains usable space');
     await noHorizontalOverflow(page); await assertInsideViewport(page, '#copySplit');
     await page.locator('#lines').evaluate(node => { node.scrollTop = 0; });
-    await screen(page, 'review-dark-560x540');
+    await screen(page, 'review-560x540');
     await page.locator('#fileActionsToggle').click(); await assertInsideViewport(page, '#fileActions');
-    await screen(page, 'review-copy-menu-dark-560x540'); await page.keyboard.press('Escape');
-    await theme(page, 'light'); await screen(page, 'review-light-560x540');
+    await screen(page, 'review-copy-menu-560x540'); await page.keyboard.press('Escape');
   });
   await page.close();
 }
@@ -1492,7 +1476,7 @@ async function updateChecks(context,origin){
     const after=await box(page,'#recordButton');assert.deepEqual(after,initial);
     assert.equal(await page.locator('#settingsButton').evaluate(n=>n.classList.contains('badge')),false);
     await updates({});assert.equal(await page.locator('#updateCurrent').textContent(),'v0.6.0-preview.3');
-    assert.deepEqual(await box(page,'#recordButton'),initial);await screen(page,'updates-home-720x600');
+    assert.deepEqual(await box(page,'#recordButton'),initial);await screen(page,'updates-home-720x520');
   });
   await check('startup availability is a badge on the gear, the 通用 tab and the update heading, without a modal or capture interruption',async()=>{
     await updates({state:'available',latest_version:'0.7.0'});
@@ -1611,20 +1595,19 @@ async function updateChecks(context,origin){
     assert.ok((await page.locator('#updateRecoveryHint').textContent()).includes('双击下面的恢复文件'));await screen(page,'updates-recovery-file-light');
     await assertInsideViewport(page,'#sheet');
     assert.equal(await page.locator('#sheet').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);assert.equal(await page.locator('#wizardBody').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
-    await page.locator('#updateRecoveryValue').scrollIntoViewIfNeeded();await assertInsideViewport(page,'#updateRecoveryValue');await screen(page,'updates-recovery-file-720x600');
+    await page.locator('#updateRecoveryValue').scrollIntoViewIfNeeded();await assertInsideViewport(page,'#updateRecoveryValue');await screen(page,'updates-recovery-file-720x520');
   });
-  await check('dark update panel scrolls inside the 720×600 window with a reachable footer and no overflow',async()=>{
-    await page.locator('#wizardCancel').click();await sheet(page).waitFor({state:'hidden'});await theme(page,'dark');
+  await check('update panel scrolls inside the 720×520 window with a reachable footer and no overflow',async()=>{
+    await page.locator('#wizardCancel').click();await sheet(page).waitFor({state:'hidden'});
     await updates({state:'ready',latest_version:'0.7.0',current_version:'0.6.0-preview.3',can_install:false,review_count:3,install_blockers:['还有场次正在整理或排队，请等待完成。'],notes:Array.from({length:25},(_,i)=>(i+1)+'. 合成测试更新说明：保留原有资料库与录制设置。').join('\n')});
-    await noHorizontalOverflow(page);await screen(page,'updates-home-dark-720x600');await openSettings(page,'general');
+    await noHorizontalOverflow(page);await screen(page,'updates-home-long-notes-720x520');await openSettings(page,'general');
     await assertInsideViewport(page,'#sheet');await assertInsideViewport(page,'.sheet-foot');
     assert.equal(await page.locator('#sheet').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
     await page.locator('#wizardBody').hover();await page.mouse.wheel(0,1200);await page.waitForFunction(()=>document.querySelector('#wizardBody').scrollTop>0);
     await page.locator('#updateInstall').scrollIntoViewIfNeeded();await assertInsideViewport(page,'#updateInstall');
     assert.ok((await box(page,'#updateInstall')).y+(await box(page,'#updateInstall')).height<=(await box(page,'.sheet-foot')).y+1,'install button is not under the footer');
-    await screen(page,'updates-dark-720x600');
+    await screen(page,'updates-long-notes-720x520');
     await page.keyboard.press('Escape');await sheet(page).waitFor({state:'hidden'});
-    await theme(page,'light');
   });
   await page.close();
 }

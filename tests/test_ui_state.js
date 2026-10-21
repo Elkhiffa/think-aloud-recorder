@@ -116,7 +116,7 @@ test('latest session: external preprocessing labels never change recording state
     assert.equal(findTag(last,'data-last-process'),null,'a finished transcription is not offered again');
     assert.doesNotMatch(last.innerHTML,/<整理>/);
     if(['failed','stale'].includes(s.preprocessing.state))assert.match(last.innerHTML,/<li class="fail">外部 &lt;整理&gt;<\/li>/);
-    titles.add(/<h3>(.*?)<\/h3>/.exec(last.innerHTML)[1]);
+    titles.add(/<span class="last-name">(.*?)<\/span><button/.exec(last.innerHTML)[1]);
   }
   assert.equal(titles.size,1,'the external label never replaces the session title');assert.doesNotMatch([...titles][0],/外部/);
 });
@@ -348,9 +348,7 @@ test('session dates use local minute precision and preserve readable invalid val
   const f=await fixture(snapshot({sessions:[{id:'dated',game:'Dated session',created:timestamp,duration:10,state:'待整理'}]}));
   assert.equal(f.run(`formatDate(${JSON.stringify(timestamp)})`),expected);
   const local=new Date(timestamp),pad=n=>String(n).padStart(2,'0'),rendered=f.elements.get('lastSession').innerHTML;
-  assert.ok(rendered.includes(`<span class="day">${local.getDate()}</span>`));
-  assert.ok(rendered.includes(`${local.getMonth()+1} 月 · 周${'日一二三四五六'[local.getDay()]}`));
-  assert.ok(rendered.includes(`${pad(local.getHours())}:${pad(local.getMinutes())} 开始`));
+  assert.ok(rendered.includes(`上一场 · ${local.getMonth()+1}月${local.getDate()}日 周${'日一二三四五六'[local.getDay()]} ${pad(local.getHours())}:${pad(local.getMinutes())} · 00:00:10`));
   assert.ok(!rendered.includes(timestamp));assert.ok(!rendered.includes(`${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}`));
   assert.equal(f.run("formatDate('2026-01-02T03:04:59')"),'2026-01-02 03:04');
   assert.equal(f.run("formatDate('未记录时间')"),'未记录时间');
@@ -379,7 +377,7 @@ test('background transcription leaves Start and game switching available; captur
   f.data.snapshot.activity={busy:true,kind:'saving',status:'正在保存录像',detail:''};await f.run('poll()');
   assert.equal(f.elements.get('recordButton').disabled,true);assert.equal(f.elements.get('recordButtonText').textContent,'正在保存…');
   f.data.snapshot.activity={busy:false,kind:'idle'};f.data.snapshot.readiness={ready:false,checking:false,errors:[{message:'游戏窗口未打开'}]};await f.run('poll()');
-  assert.equal(f.elements.get('recordButton').disabled,true);assert.equal(f.elements.get('blockers').textContent,'游戏窗口未打开');
+  assert.equal(f.elements.get('recordButton').disabled,true);assert.deepEqual(plain(f.run('currentBlockers')),['游戏窗口未打开']);assert.match(f.elements.get('blockers').innerHTML,/游戏窗口未打开/);
 });
 
 test('background progress and failures stay on their session without replacing current timer or Stop',async()=>{
@@ -389,11 +387,11 @@ test('background progress and failures stay on their session without replacing c
   const f=await fixture(initial);
   assert.equal(f.elements.get('recordButton').disabled,false);assert.equal(f.elements.get('recordButtonText').textContent,'结束录制');
   assert.equal(f.elements.get('recordingTime').textContent,'00:00:18');assert.equal(f.elements.get('jobDetail').textContent,'');
-  assert.equal(f.elements.get('lastSession').classList.contains('hidden'),true);assert.equal(f.elements.get('liveGauges').classList.contains('hidden'),false);
+  assert.equal(f.elements.get('lastSection').classList.contains('hidden'),true);assert.equal(f.elements.get('liveGauges').classList.contains('hidden'),false);
   f.data.snapshot.background_jobs[0].detail='<Waiting for cloud>';await f.run('poll()');
-  assert.equal(f.elements.get('jobDetail').textContent,'');assert.doesNotMatch(f.elements.get('homeStatus').textContent+f.elements.get('blockers').textContent,/Waiting/);
+  assert.equal(f.elements.get('jobDetail').textContent,'');assert.doesNotMatch(f.elements.get('homeStatus').textContent+f.elements.get('blockers').innerHTML,/Waiting/);
   f.data.snapshot.background_jobs=[];f.data.snapshot.sessions[0]={id:'a',game:'A',state:'失败',error:'Cloud failure'};await f.run('poll()');
-  assert.equal(f.elements.get('blockers').textContent,'');assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
+  assert.deepEqual(plain(f.run('currentBlockers')),[]);assert.equal(f.elements.get('statusSlot').classList.contains('hidden'),true);
   assert.equal(f.elements.get('recordButton').disabled,false);
   assert.equal(f.elements.get('recordingTime').textContent,'00:00:18');assert.equal(f.elements.get('jobDetail').textContent,'');
   f.elements.get('recordButton').onclick();await settle();assert.ok(f.calls.some(call=>call.name==='stop_recording'));
@@ -486,30 +484,30 @@ test('editing a preset excludes the guide and Back cannot enter it; only first u
 
 test('readiness and specific blockers replace each other in the same live status slot',async()=>{
   const f=await fixture();
-  assert.equal(f.elements.get('homeStatus').textContent,'已就绪');
-  assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
+  assert.match(f.elements.get('homeStatus').innerHTML,/^<span>已就绪<\/span><span>游戏窗口 · [^<]+<\/span><span>麦克风<\/span>$/);
+  assert.equal(f.elements.get('statusSlot').classList.contains('hidden'),true);
   f.data.snapshot.readiness={ready:false,checking:false,errors:[
     {message:'未找到游戏窗口，请先打开游戏。',step:1},
     {message:'云端密钥缺失，请重新配置。',step:2},
+    {message:'麦克风不可用。',step:3},
   ]};
   await f.run('poll()');
   assert.equal(f.elements.get('recordButton').disabled,true);
-  assert.equal(f.elements.get('homeStatus').classList.contains('hidden'),true);
-  assert.equal(f.elements.get('homeStatus').textContent,'');
-  assert.equal(f.elements.get('blockers').classList.contains('hidden'),false);
-  // One reason at a time in the alert; the full list is one click away and never scrolls inside the alert.
-  assert.equal(f.elements.get('blockers').textContent,'未找到游戏窗口，请先打开游戏。');
+  assert.equal(f.elements.get('homeStatus').textContent,'3 项检查未通过\n处理右侧事项后重新检查');
+  assert.equal(f.elements.get('statusSlot').classList.contains('hidden'),false);
+  // At most two reasons in the alert; the full list is one click away and never scrolls inside the alert.
+  assert.equal(f.elements.get('blockers').innerHTML,'<li><span>未找到游戏窗口，请先打开游戏。</span></li><li><span>云端密钥缺失，请重新配置。</span></li>');
   assert.equal(f.elements.get('alertMore').classList.contains('hidden'),false);
-  assert.equal(f.elements.get('alertMore').textContent,'全部 2 项');
+  assert.equal(f.elements.get('alertMore').textContent,'全部 3 项');
   f.elements.get('alertMore').onclick();
-  assert.match(f.elements.get('actionBody').innerHTML,/未找到游戏窗口，请先打开游戏。<\/li><li>云端密钥缺失，请重新配置。/);
+  assert.match(f.elements.get('actionBody').innerHTML,/未找到游戏窗口，请先打开游戏。<\/li><li>云端密钥缺失，请重新配置。<\/li><li>麦克风不可用。/);
   assert.equal(f.elements.get('capturePanel').classList.contains('alerting'),true);
   f.data.snapshot.readiness={ready:true,checking:false,errors:[]};await f.run('poll()');
   assert.equal(f.elements.get('recordButton').disabled,false);
-  assert.equal(f.elements.get('homeStatus').textContent,'已就绪');
+  assert.match(f.elements.get('homeStatus').innerHTML,/^<span>已就绪<\/span><span>游戏窗口 · [^<]+<\/span><span>麦克风<\/span>$/);
   assert.equal(f.elements.get('homeStatus').classList.contains('hidden'),false);
-  assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
-  assert.equal(f.elements.get('blockers').textContent,'');
+  assert.equal(f.elements.get('statusSlot').classList.contains('hidden'),true);
+  assert.deepEqual(plain(f.run('currentBlockers')),[]);
   assert.equal(f.elements.get('capturePanel').classList.contains('alerting'),false);
 });
 
@@ -525,15 +523,15 @@ test('pending requests and device refresh never advertise ready above a disabled
   f.data.snapshot.activity={busy:false,kind:'idle'};f.data.snapshot.closing=true;await f.run('poll()');
   assert.equal(f.elements.get('recordButton').disabled,true);
   assert.equal(f.elements.get('homeStatus').textContent,'正在安全关闭');
-  assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
+  assert.equal(f.elements.get('statusSlot').classList.contains('hidden'),true);
 });
 
 test('a historical operation error cannot replace fresh ready status after recovery',async()=>{
   const f=await fixture(snapshot({activity:{busy:false,kind:'idle',status:'操作未完成',detail:'旧的密钥验证失败'}}));
   assert.equal(f.elements.get('recordButton').disabled,false);
-  assert.equal(f.elements.get('homeStatus').textContent,'已就绪');
-  assert.equal(f.elements.get('blockers').classList.contains('hidden'),true);
-  assert.equal(f.elements.get('blockers').textContent,'');
+  assert.match(f.elements.get('homeStatus').innerHTML,/^<span>已就绪<\/span><span>游戏窗口 · [^<]+<\/span><span>麦克风<\/span>$/);
+  assert.equal(f.elements.get('statusSlot').classList.contains('hidden'),true);
+  assert.deepEqual(plain(f.run('currentBlockers')),[]);
   assert.ok(f.elements.get('toast').textContent.includes('旧的密钥验证失败'));
 });
 

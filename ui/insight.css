@@ -1,6 +1,5 @@
 /* Insight window: same paper palette as the review window. */
 :root{color-scheme:light;--bg:#ede7db;--surface:#fcfaf5;--soft:#f4efe6;--fill1:#efe8dc;--fill2:#f4efe6;--fill3:#f8f4ed;--desc:#857f75;--tint:#f2e8dc;--ink:#292722;--heading:#292722;--muted:#716c63;--line:#dcd5c9;--strong-line:#c7bfb1;--accent:#b64b37;--counter:#38715a;--counter-bg:#e5ede6;--mark:#fbe7c6}
-:root[data-theme=dark]{color-scheme:dark;--bg:#302b25;--surface:#26231f;--soft:#2d2924;--fill1:#37312a;--fill2:#312c26;--fill3:#2c2823;--desc:#a59c90;--tint:#41352b;--ink:#eae4da;--heading:#f6f0e6;--muted:#c0b6a8;--line:#4d453b;--strong-line:#716455;--accent:#eeaa90;--counter:#add0ba;--counter-bg:#2e3b32;--mark:#5a4627}
 *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--strong-line) transparent}
 html,body{width:100%;height:100%;margin:0;overflow:hidden}
 body{font:15px/1.65 "Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif;color:var(--ink);background:var(--surface);display:flex;flex-direction:column}
@@ -153,9 +152,6 @@ select,input{border:1px solid var(--line);border-radius:4px;padding:4px 8px;back
 :root{--b-paper:#f3ede1;--b-sheet:#f8f4ec;--b-ink:#211b14;--b-muted:#6e6252;--b-faint:#a3967f;--b-rule:#d9cdb8;--b-hair:#e6dccb;--b-margin:#c5402a;
   --bg:var(--b-hair);--surface:var(--b-paper);--soft:var(--b-sheet);--tint:#efe3d3;--ink:var(--b-ink);--heading:var(--b-ink);--muted:var(--b-muted);
   --line:var(--b-rule);--strong-line:#b9aa92;--accent:var(--b-margin);--inverse:#fff8f0;--error:#b3301c;--fill1:#ece4d6;--fill2:var(--b-sheet);--fill3:#faf7f1;--desc:var(--b-muted);--counter:#5b7a48;--counter-bg:#e5ebdc;--mark:#f6e2b8}
-:root[data-theme=dark]{--b-paper:#1b1814;--b-sheet:#221e19;--b-ink:#efe5d3;--b-muted:#ab9d87;--b-faint:#776b5b;--b-rule:#3a3229;--b-hair:#2c2620;--b-margin:#a8432f;
-  --bg:var(--b-hair);--surface:var(--b-paper);--soft:var(--b-sheet);--tint:#2f2821;--ink:var(--b-ink);--heading:var(--b-ink);--muted:var(--b-muted);
-  --line:var(--b-rule);--strong-line:#5a4f41;--accent:#e2593f;--inverse:#1b1814;--error:#ef7a5f;--fill1:#2a241e;--fill2:var(--b-sheet);--fill3:#1f1b17;--desc:var(--b-muted);--counter:#93b07a;--counter-bg:#26301f;--mark:#4a3a1f}
 body{font-family:"Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
 /* 长段正文（报告、议题说明）：16 号、墨色。 */
 .report{font-size:16px;line-height:1.8}
@@ -163,7 +159,6 @@ body{font-family:"Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-seri
 h1,h2{font-family:"Noto Serif SC","Source Han Serif SC","DengXian","Microsoft YaHei UI",serif}
 
 /* 深色跟随共用的外观设置（主窗口设置 → 通用 → 外观）。 */
-:root[data-theme=dark]{color-scheme:dark}
 /* ---- 线规则 B（2026-10-20）：大段落分界只留一条淡发丝线；逐行的线去掉；可交互的面板和卡片只留底色。 ---- */
 .topbar{border-bottom-color:var(--rule)}
 .left-col{border-right:0}

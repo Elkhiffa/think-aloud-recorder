@@ -130,7 +130,6 @@ async function control(page, code, extra = false) {
       // comparable. This is computed CSS paint evidence, not pixel sampling.
       composite: color.slice(0, 3).map((value, i) => value * alpha + surface[i] * (1 - alpha)),
       time: document.querySelector('video').currentTime, paused: document.querySelector('video').paused,
-      theme: document.documentElement.dataset.theme,
       rect: el.getBoundingClientRect().toJSON(), display: style.display, visibility: style.visibility };
   });
 }
@@ -280,11 +279,10 @@ async function main() {
     await screenshot(page, 'real-playback-after-primary-expiry'); return { first, expired, independent };
   });
 
-  await check('device-switching-auto-selection-and-both-themes-preserve-video-state', async page => {
+await check('device-switching-auto-selection-preserves-video-state', async page => {
     const measurements = [];
-    for (const theme of ['light', 'dark']) {
-      if (await page.locator('html').getAttribute('data-theme') !== theme) await page.locator('#themeButton').click();
-      for (const group of groups) {
+    for (const theme of ['light']) {
+for (const group of groups) {
         await select(page, group.device); await seek(page, 1.5);
         const active = {}, recent = {};
         for (const [code, extra = false] of group.targets) {

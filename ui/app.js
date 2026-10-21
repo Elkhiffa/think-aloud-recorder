@@ -16,17 +16,11 @@ const setText=(id,value)=>{const n=document.getElementById(id);const text=String
 const show=(id,value)=>document.getElementById(id).classList.toggle('hidden',!value);
 function notify(message){clearTimeout(toastTimer);setText('toast',message);$('#toast').classList.add('show');toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),6000);}
 function wizardError(message=''){setText('wizardError',message);show('wizardError',!!message);}
-// Appearance: system / light / dark, shared with the review and desk windows through localStorage.
-const THEME_KEY='recorder-theme';
-function themeChoice(){try{const value=localStorage.getItem(THEME_KEY);return ['light','dark','system'].includes(value)?value:'system';}catch(_){return 'system';}}
-function applyTheme(){const choice=themeChoice(),dark=choice==='dark'||choice==='system'&&matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.dataset.theme=dark?'dark':'light';$$('[data-theme-choice]').forEach(button=>button.classList.toggle('on',button.dataset.themeChoice===choice));const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{window.pywebview?.api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
-function setTheme(choice){try{localStorage.setItem(THEME_KEY,choice);}catch(_){}applyTheme();}
-applyTheme();matchMedia('(prefers-color-scheme: dark)').addEventListener('change',applyTheme);
-$$('[data-theme-choice]').forEach(button=>button.onclick=()=>setTheme(button.dataset.themeChoice));
+// Light only: the native frame strip takes the paper color.
+function applyFrameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{window.pywebview?.api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
 // Self-drawn title bar: the buttons hand back to Windows (window_chrome.py); dragging is the CSS app-region.
 function windowCommand(name){try{window.pywebview?.api?.['win_'+name]?.()?.catch?.(()=>{});}catch(_){}}
 $('#winMin').onclick=()=>windowCommand('minimize');$('#winMax').onclick=()=>windowCommand('toggle_maximize');$('#winClose').onclick=()=>windowCommand('close');
-$$('[data-win]').forEach(button=>button.onclick=()=>windowCommand({min:'minimize',max:'toggle_maximize',close:'close'}[button.dataset.win]));
 function sheetOpen(){return !$('#sheet').classList.contains('hidden');}
 async function api(method,...args){if(!window.pywebview?.api?.[method])throw new Error('尚未连接记录器，请稍后重试。');const response=await window.pywebview.api[method](...args);if(!response||response.ok!==true){const error=new Error(response?.error||'操作未完成，请检查后重试。');error.code=response?.code;throw error;}return response.data;}
 function poll(){if(pollTask)return pollTask;pollTask=(async()=>{try{const snapshot=await api('get_state');store.accept(snapshot);connectionMessage='';render();return true;}catch(error){store.disconnect();connectionMessage=error.message||'连接中断，请稍后重试。';renderHome();renderControls();return false;}finally{pollTask=null;}})();return pollTask;}
@@ -106,8 +100,11 @@ $('#updateChannel').onchange=()=>{updateChannelDirty=true;updateError='';renderU
 $('#updateCheck').onclick=()=>updateAction('check');$('#updateDownload').onclick=()=>updateAction('download');$('#updateCancel').onclick=()=>updateAction('cancel');$('#updateInstall').onclick=()=>updateAction('install');$('#updateRelease').onclick=()=>updateAction('open_release');
 function render(){renderHome();renderGames();renderLast();renderInsight();if(store.draft){completeDeviceSetup();renderDeviceOptions();renderResources();renderVaultChoice();renderVocabulary();}renderControls();const a=store.activity;const signature=JSON.stringify([a.kind,a.status,a.detail]);if(signature!==lastActivitySignature){lastActivitySignature=signature;if(sheetOpen()&&a.status==='操作未完成'&&a.detail)wizardError(a.detail);else if(!sheetOpen()&&store.readiness.ready&&a.status==='操作未完成'&&a.detail)notify('上次操作未完成：'+a.detail);if(sheetOpen()&&actionContext==='verify'&&a.kind==='idle'&&a.detail)setText('cloudFeedback',a.detail);}
  if(!firstSetupHandled&&store.snapshot){firstSetupHandled=true;if(!store.presets.length&&!store.recording)openSheet('first');}}
+// What the ready record block lists under 已就绪: the target and the microphone (with input capture when on).
+function readyLines(){const c=store.saved;return [c.source==='整个显示器'?'整个显示器 · '+deviceLabel('monitor',c.monitor):'游戏窗口 · '+deviceLabel('window',c.window),'麦克风'+(c.record_inputs?' · 操作记录':'')];}
+function liveSummary(){const c=store.saved;return [c.source==='整个显示器'?'录整个显示器':'只录游戏窗口',String(c.preset||'').split(' ').pop(),c.record_inputs?'操作记录中':'',providerNames[c.transcription_provider]||''].filter(Boolean).join('　');}
 function renderHome(){
- const a=store.activity,r=store.readiness,recording=store.recording,sessions=store.snapshot?.sessions||[];
+ const a=store.activity,r=store.readiness,recording=store.recording;
  syncMicrophoneVisibility();
  const closing=!!store.snapshot?.closing;
  const foreground=!!a.busy&&!['devices','idle'].includes(a.kind);
@@ -134,38 +131,38 @@ function renderHome(){
   blockers=errors.map(e=>e.message).filter(Boolean);
   if(!r.ready&&!sheetOpen()&&a.status==='操作未完成'&&a.detail&&!blockers.includes(a.detail))blockers.push(a.detail);
  }
- // Normal state: one quiet line. Any blocker hides it and becomes the one prominent message beside the button.
+ // Blocked: the record block says it cannot record; the reasons are listed on the right, never scrolled.
  const alerting=blockers.length>0&&!recording;
- $('#capturePanel').classList.toggle('recording',recording);$('#capturePanel').classList.toggle('alerting',alerting);
+ const ready=!recording&&!alerting&&!closing&&!checking&&!foreground&&!store.requestPending&&r.ready===true&&store.connected;
+ if(alerting)button='暂不能录制';
+ const panel=$('#capturePanel');panel.classList.toggle('recording',recording);panel.classList.toggle('alerting',alerting);panel.classList.toggle('off',!recording&&!ready);
  setText('recordingTime',recording?formatTime(a.elapsed_seconds):'00:00:00');show('liveClock',recording);
- setText('homeStatus',blockers.length?'':label);
- $('#homeStatus').className='capture-label'+(recording?' recording':!closing&&!checking&&!store.requestPending&&r.ready&&store.connected?' ready':'');
- $('#homeStatus').classList.toggle('microphone-warning',recording&&microphoneWarning);
- // One reason at a time, two lines at most; every reason stays one click away.
- currentBlockers=blockers;setText('blockers',blockers[0]||'');show('homeStatus',!blockers.length&&!!label);show('blockers',!!blockers.length);
- show('alertActions',alerting&&store.connected);show('alertSettings',alerting&&store.connected);
- show('statusSlot',!!label||!!blockers.length);
- const clipped=$('#blockers').scrollHeight>$('#blockers').clientHeight+1;
- setText('alertMore',blockers.length>1?`全部 ${blockers.length} 项`:'查看全文');show('alertMore',alerting&&(blockers.length>1||clipped));
- setText('recordButtonText',button);$('#recordButton').classList.toggle('stopping',recording);
+ setText('recordButtonText',button);setText('recordGame',recording?'':store.presets.find(p=>p.id===store.activeId)?.name||'');
+ $('#recordButton').classList.toggle('stopping',recording);
+ const status=alerting?`${blockers.length} 项检查未通过\n处理右侧事项后重新检查`:ready?[label,...readyLines()].join('\n'):label;
+ // Ready: one line per item, cut with an ellipsis rather than wrapped, so the record button keeps its size.
+ if(ready){$('#homeStatus').innerHTML=status.split('\n').map(line=>'<span>'+escapeHTML(line)+'</span>').join('');$('#homeStatus').title=readyLines().join('\n');}else{setText('homeStatus',status);$('#homeStatus').title='';}
+ $('#homeStatus').className='checks'+(ready?' ready':'')+(recording&&microphoneWarning?' microphone-warning':'');show('homeStatus',!!status);
+ currentBlockers=blockers;
+ $('#blockers').innerHTML=blockers.slice(0,2).map(message=>'<li><span>'+escapeHTML(message)+'</span></li>').join('');
+ show('statusSlot',alerting);show('alertRecheck',alerting&&store.connected);show('alertSettings',alerting&&store.connected);
+ const clipped=$$('#blockers li span').some(el=>el.scrollHeight>el.clientHeight+1);
+ setText('alertMore',blockers.length>2?`全部 ${blockers.length} 项`:'查看全文');show('alertMore',alerting&&(blockers.length>2||clipped));
  show('jobDetail',cancelPending||closing||foreground&&!!a.detail);
  setText('jobDetail',cancelPending?'更新助手尚未确认取消，请在设置的“版本与更新”里重试取消。':closing?'正在保存并等待现有整理完成，完成后此窗口会自动关闭。':foreground?a.detail:'');
- // While recording the page holds only what is glanced at from a second monitor.
- setText('lastHeading',recording?'收音与操作':'上一场');
- show('liveGauges',recording);show('livePrompt',recording);show('lastSession',!recording);
- show('openLibrary',!recording&&sessions.length>0);show('openInsight',!recording&&sessions.length>0);show('insightBrief',!recording&&sessions.length>0);
- show('insightSection',recording||sessions.length>0);
+ // Recording: only what is glanced at from a second monitor.
+ show('livePrompt',recording);setText('liveSummary',recording?liveSummary():'');
+ show('lastSection',!recording);show('insightSection',!recording&&!alerting&&!!store.snapshot?.sessions?.length);
 }
 function renderGames(){
  const signature=JSON.stringify([store.presets.map(p=>[p.id,p.name]),store.activeId,store.recording]);if(signature===gamesSignature)return;gamesSignature=signature;
  if(store.recording){const active=store.presets.find(p=>p.id===store.activeId);$('#gameTabs').innerHTML=`<span class="g on">${escapeHTML(active?.name||'')}</span><span class="g lock">录制中不能切换游戏</span>`;return;}
- $('#gameTabs').innerHTML=store.presets.map(p=>`<a href="#" class="g${p.id===store.activeId?' on':''}" data-game="${escapeHTML(p.id)}"${p.id===store.activeId?' aria-current="page"':''}>${escapeHTML(p.name)}</a>`).join('')+'<span class="more hidden" id="gamesMore"><button type="button" class="g more-toggle" id="gamesMoreButton" aria-haspopup="menu" aria-expanded="false" aria-controls="gamesMoreMenu">更多</button><span class="more-menu hidden" id="gamesMoreMenu" role="menu" aria-label="其他游戏"></span></span><a href="#" class="g add" data-game-add title="新游戏" aria-label="新游戏">＋</a>';
+ $('#gameTabs').innerHTML=store.presets.map(p=>`<a href="#" class="g${p.id===store.activeId?' on':''}" data-game="${escapeHTML(p.id)}"${p.id===store.activeId?' aria-current="page"':''}>${escapeHTML(p.name)}</a>`).join('')+'<span class="more hidden" id="gamesMore"><button type="button" class="g more-toggle" id="gamesMoreButton" aria-haspopup="menu" aria-expanded="false" aria-controls="gamesMoreMenu">更多</button><span class="more-menu hidden" id="gamesMoreMenu" role="menu" aria-label="其他游戏"></span></span><a href="#" class="g add" data-game-add title="新游戏" aria-label="新游戏">＋ 新增</a>';
  fitGames();
 }
-// Other games that do not fit beside the title move, last first, into 更多; ＋ goes last.
+// Games that do not fit move, last first, into 更多; ＋ goes last. The current game keeps its width.
 function fitGames(){
  const nav=$('#gameTabs'),more=$('#gamesMore'),menu=$('#gamesMoreMenu');if(!more||!menu)return;
- // Measured with the title at full width; it is shortened only when it alone does not fit.
  nav.classList.add('fitting');try{fold(nav,more,menu);}finally{nav.classList.remove('fitting');}
 }
 function fold(nav,more,menu){
@@ -176,11 +173,12 @@ function fold(nav,more,menu){
 }
 function toggleGamesMenu(open){const menu=$('#gamesMoreMenu'),button=$('#gamesMoreButton');if(!menu||!button)return;open=open??menu.classList.contains('hidden');if(open){const r=button.getBoundingClientRect();menu.style.left=Math.round(r.left)+'px';menu.style.top=Math.round(r.bottom+4)+'px';}menu.classList.toggle('hidden',!open);button.setAttribute('aria-expanded',String(open));}
 document.addEventListener('click',event=>{if(!event.target?.closest?.('#gamesMore'))toggleGamesMenu(false);});
-// On resize the same nodes are put back and folded again, so focus and the current tab survive.
-function unfoldGames(){const more=$('#gamesMore'),menu=$('#gamesMoreMenu');if(!more||!menu)return;toggleGamesMenu(false);for(const item of [...menu.children]){const add=item.hasAttribute('data-game-add');item.className=add?'g add':'g';item.removeAttribute('role');if(add){item.textContent='＋';more.after(item);}else{const at=id=>store.presets.findIndex(p=>p.id===id),next=[...$('#gameTabs').querySelectorAll(':scope > [data-game]')].find(tab=>at(tab.dataset.game)>at(item.dataset.game));(next||more).before(item);}}more.classList.add('hidden');}
+// On resize the same nodes are put back and folded again, so focus and the current game survive.
+function unfoldGames(){const more=$('#gamesMore'),menu=$('#gamesMoreMenu');if(!more||!menu)return;toggleGamesMenu(false);for(const item of [...menu.children]){const add=item.hasAttribute('data-game-add');item.className=add?'g add':'g';item.removeAttribute('role');if(add){item.textContent='＋ 新增';more.after(item);}else{const at=id=>store.presets.findIndex(p=>p.id===id),next=[...$('#gameTabs').querySelectorAll(':scope > [data-game]')].find(tab=>at(tab.dataset.game)>at(item.dataset.game));(next||more).before(item);}}more.classList.add('hidden');}
 let gamesFrame=0;window.addEventListener?.('resize',()=>{cancelAnimationFrame(gamesFrame);gamesFrame=requestAnimationFrame(()=>{unfoldGames();fitGames();});});
 $('#gameTabs').addEventListener('click',async event=>{if(event.target.closest('#gamesMoreButton')){toggleGamesMenu();return;}const target=event.target.closest('[data-game],[data-game-add]');if(!target)return;event.preventDefault();toggleGamesMenu(false);if(target.hasAttribute('data-game-add')){openSheet('new');return;}const id=target.dataset.game;if(id===store.activeId)return;const result=await action('select_preset',[id]);if(!result.ok){gamesSignature='';renderGames();}else{lastSignature='';renderLast();}});
-const KIND_NAMES={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面'};
+// The four problem types; a session's 问题数 counts only these.
+const KIND_NAMES={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
 const WEEKDAYS='日一二三四五六';
 function pad2(n){return String(n).padStart(2,'0');}
 function sessionDisplayTitle(s){const named=s.session_name||(s.title&&s.title!==s.game?s.title:'');if(named)return {named:true,text:named};const titles=(s.preprocessing?.event_titles||[]).filter(Boolean);return {named:false,text:titles.length?titles.join('、'):(()=>{const d=new Date(s.created);return Number.isNaN(d.getTime())?'未命名的记录':pad2(d.getHours())+':'+pad2(d.getMinutes())+' 开始的记录';})()};}
@@ -194,27 +192,30 @@ function pipeline(s,job,kind,p){
  const retry=kind==='failed'||kind==='pending'&&!job?`<div class="handoff"><button class="btn" data-last-process="${escapeHTML(s.id)}">${kind==='failed'?'重试转写':'开始转写'}</button>${s.error?`<p>${escapeHTML(s.error)}</p>`:''}</div>`:'';
  return list+handoff+retry;
 }
+function shortDate(d){return `${d.getMonth()+1}月${d.getDate()}日`;}
 function renderLast(){
  const sessions=store.snapshot?.sessions||[],s=sessions[0],alerting=$('#capturePanel').classList.contains('alerting');
  const signature=JSON.stringify([s,store.backgroundJobs,sessions.length,alerting]);if(signature===lastSignature)return;lastSignature=signature;
  setText('sessionCount',sessions.length);
+ const latest=s?new Date(s.created):null;setText('libraryBrief',latest&&!Number.isNaN(latest.getTime())?' · 最近 '+shortDate(latest):'');
  const jobs=store.backgroundJobs,running=jobs.filter(job=>job.state==='running').length,queued=jobs.filter(job=>job.state==='queued').length;
  setText('queueBrief',[running?running+' 段转写中':'',queued?queued+' 段排队':''].filter(Boolean).join(' · '));show('queueBrief',(running||queued)>0);
  if(!s){$('#lastSession').innerHTML='<p class="empty">还没有记录。点开始录制，边玩边说出你此刻的想法。</p>';return;}
  const d=new Date(s.created),valid=!Number.isNaN(d.getTime()),p=s.preprocessing||{},title=sessionDisplayTitle(s);
- const date=valid?`<div class="date"><span class="day">${d.getDate()}</span><span class="dm">${d.getMonth()+1} 月 · 周${WEEKDAYS[d.getDay()]}</span></div>`:'<div class="date"></div>';
- const when=(valid?`${pad2(d.getHours())}:${pad2(d.getMinutes())} 开始 · `:'')+'时长 '+formatTime(s.duration);
+ const when=(valid?`${shortDate(d)} 周${WEEKDAYS[d.getDay()]} ${pad2(d.getHours())}:${pad2(d.getMinutes())} · `:'')+formatTime(s.duration);
  let body='';
  if(p.state==='complete'){
-  const kinds=p.kinds||{},problems=Object.keys(KIND_NAMES).reduce((n,k)=>n+(kinds[k]||0),0);
-  const split=Object.entries(KIND_NAMES).filter(([k])=>kinds[k]).map(([k,n])=>`${n} ${kinds[k]}`).join(' · ');
-  // On alert the quote steps aside so the whole page still fits the window.
-  const quote=p.quote&&!alerting?`<blockquote>“${escapeHTML(p.quote.text)}”<cite>${escapeHTML(formatTime(p.quote.at))} · ${KIND_NAMES[p.quote.kind]||''}</cite></blockquote>`:'';
-  body=`<p class="meta"><b>${problems}</b> 个问题${split?`<span>${escapeHTML(split)}</span>`:''}<span>${escapeHTML(when)}</span></p>${quote}`;
- }else body=`<p class="meta"><span>${escapeHTML(when)}</span></p>${pipeline(s,store.sessionJob(s.id),sessionKind(s),p)}`;
- $('#lastSession').innerHTML=`<article class="last">${date}<div><h3>${title.named?'':'<span class="unnamed">未命名</span>'}${escapeHTML(title.text)}${s.test?'<span class="test-tag">合成测试</span>':''}</h3>${body}<button class="go" data-last-review="${escapeHTML(s.id)}"${canReview(s)?'':' disabled'}>回看这一场 →</button></div></article>`;
+  const kinds=p.kinds||{},present=Object.keys(KIND_NAMES).filter(k=>kinds[k]);
+  const bar=present.length?`<div class="fp">${present.map(k=>`<i class="k-${k}" data-flex="${kinds[k]}"></i>`).join('')}</div>`:'';
+  const legend=`<p class="kleg">${present.map(k=>`<span class="k-${k}"><b>${kinds[k]}</b> ${KIND_NAMES[k]}</span>`).join('')||'<span>没有问题类型的判断</span>'}</p>`;
+  // Blocked: the quote steps aside so the reasons and the session both fit.
+  const quote=p.quote&&!alerting?`<div class="quote"><p class="note">${escapeHTML(formatTime(p.quote.at))}${KIND_NAMES[p.quote.kind]?' · '+KIND_NAMES[p.quote.kind]:''}</p><p>“${escapeHTML(p.quote.text)}”</p></div>`:'';
+  body=bar+legend+quote;
+ }else body=pipeline(s,store.sessionJob(s.id),sessionKind(s),p);
+ $('#lastSession').innerHTML=`<p class="note">上一场 · ${escapeHTML(when)}</p><div class="last-top"><span class="last-name">${title.named?'':'<span class="unnamed">未命名</span>'}${escapeHTML(title.text)}${s.test?'<span class="test-tag">合成测试</span>':''}</span><button class="btn sm" data-last-review="${escapeHTML(s.id)}"${canReview(s)?'':' disabled'}>回看</button></div>${body}`;
+ $$('#lastSession [data-flex]').forEach(el=>{el.style.flex=el.dataset.flex;});
 }
-function renderInsight(){const insight=store.snapshot?.insight||{},latest=insight.latest;setText('insightCount',insight.insights??'—');let brief='还没有洞察报告';if(latest){const d=new Date(latest.modified*1000);brief='最新报告 '+(Number.isNaN(d.getTime())?latest.name:`${d.getMonth()+1} 月 ${d.getDate()} 日`);}setText('insightBrief',brief);}
+function renderInsight(){const insight=store.snapshot?.insight||{},latest=insight.latest;setText('insightCount',insight.insights??'—');let brief='洞察 · 还没有报告';if(latest){const d=new Date(latest.modified*1000);brief='洞察 · 最新报告 '+(Number.isNaN(d.getTime())?latest.name:shortDate(d));}setText('insightBrief',brief);}
 async function copyHandoff(s){if(!s)return;const text=['请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。','场次文件夹：'+s.path,'资料库：'+store.saved.vault,'只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。'].join('\n');try{await navigator.clipboard.writeText(text);}catch(_){const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();}notify('整理指令已复制，粘贴给 Codex 或 Claude 即可。');}
 $('#lastSession').addEventListener('click',event=>{const review=event.target.closest('[data-last-review]');if(review){action('open_review',[review.dataset.lastReview]);return;}const copy=event.target.closest('[data-copy-handoff]');if(copy){copyHandoff(findSession(copy.dataset.copyHandoff));return;}const process=event.target.closest('[data-last-process]');if(process){const s=findSession(process.dataset.lastProcess);if(s)processSession(s);}});
 function openDesk(tab){const api=window.pywebview?.api;return api?.open_desk?action('open_desk',[tab]):action('open_insight');}
@@ -556,4 +557,4 @@ function begin(){if(booted)return;booted=true;poll();setInterval(poll,1000);setI
 
 // A fixed external destination, opened by the native bridge without any key.
 $('#bailianConsole').onclick=async event=>{event.preventDefault();if(store.requestPending||saving)return;await action('open_bailian_console');};
-window.addEventListener('pywebviewready',applyTheme);
+applyFrameColor();window.addEventListener('pywebviewready',applyFrameColor);

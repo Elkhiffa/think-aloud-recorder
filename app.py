@@ -56,9 +56,9 @@ def _prepare_chrome(chrome, client_size):
 
 
 def main_window_options(webview):
-    """A compact recorder page (720x600 of page; the sizing border is added outside it),
+    """A compact recorder page (720x520 of page; the sizing border is added outside it),
     bounded by the actual monitor work area."""
-    options = dict(width=720, height=600, min_size=(720, 600))
+    options = dict(width=720, height=520, min_size=(720, 520))
     try:
         screen = list(webview.screens)[0]
         width, height = screen.width, screen.height
@@ -72,8 +72,8 @@ def main_window_options(webview):
                     height = value
         if type(width) is int and type(height) is int and width >= 360 and height >= 400:
             available_width, available_height = width - 32, height - 48
-            options.update(width=min(720, available_width), height=min(600, available_height),
-                           min_size=(min(720, available_width), min(600, available_height)), screen=screen)
+            options.update(width=min(720, available_width), height=min(520, available_height),
+                           min_size=(min(720, available_width), min(520, available_height)), screen=screen)
     except Exception:
         pass
     return options

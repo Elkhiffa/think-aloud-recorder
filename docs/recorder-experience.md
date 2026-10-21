@@ -121,13 +121,13 @@ Preserve export, retry, raw files and cloud task recovery without permanent clut
 Acceptance: first-run setup -> save -> minimal home; cancel/reopen retains saved
 configuration; disappearing source/token disables Start with the actual reason;
 restored conditions allow Start after verified refresh; setup data is not lost on
-polling; long sessions stay inside scroll area; keyboard navigation, narrow window
-and dark theme remain usable. No real device capture during agent validation.
+polling; long sessions stay inside scroll area; keyboard navigation and narrow window
+remain usable. No real device capture during agent validation.
 Concurrency acceptance: while A's processing is deliberately blocked, start and
 stop B; B queues without another processor, A's progress/failure cannot change B's
 capture activity, and each task retains its admitted preset and output directory.
 
-The method guide is also available from the home header without opening a configuration draft. Editing an existing preset starts at devices and Back cannot enter the guide; a new preset includes the guide. The four speaking prompts are labelled excerpts, not a required sequence. Number only the actual setup steps. Use warm paper surfaces, a restrained brick-red accent, 15–16 px body/action text and 13–14 px supporting text. In review, align timestamps with their original words; very narrow transcript panes can put the timestamp above the words. Reduce spacing rather than text size on small windows. Main and review surfaces offer light and dark themes.
+The method guide is also available from the home header without opening a configuration draft. Editing an existing preset starts at devices and Back cannot enter the guide; a new preset includes the guide. The four speaking prompts are labelled excerpts, not a required sequence. Number only the actual setup steps. Use warm paper surfaces, a restrained brick-red accent, 15–16 px body/action text and 13–14 px supporting text. In review, align timestamps with their original words; very narrow transcript panes can put the timestamp above the words. Reduce spacing rather than text size on small windows. Light appearance only for now (see docs/plans/2026-10-19-redesign.md, 第四轮).
 
 Visual identity: warm white `#FCFAF5`, parchment recording band `#EDE7DB`, ink
 `#292722`, brick-red actions `#B64B37`, thin warm-gray borders and 5–6 px control

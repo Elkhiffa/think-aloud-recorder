@@ -52,7 +52,7 @@ class DesktopShellTests(unittest.TestCase):
             acknowledge.assert_called_once_with(root)
         kwargs = webview.create_window.call_args.kwargs
         self.assertTrue(kwargs['url'].startswith('file:///'))
-        self.assertEqual(kwargs['min_size'], (720, 600))
+        self.assertEqual(kwargs['min_size'], (720, 520))
         # The page draws its own title bar; Windows still owns moving and sizing (window_chrome).
         self.assertTrue(kwargs['frameless'])
         self.assertFalse(kwargs['easy_drag'])
@@ -62,8 +62,8 @@ class DesktopShellTests(unittest.TestCase):
 
     def test_initial_window_fits_monitor_work_area(self):
         for size, work_area, expected in [
-            ((3440, 1440), (3440, 1392), (720, 600)),
-            ((1366, 768), (1366, 728), (720, 600)),
+            ((3440, 1440), (3440, 1392), (720, 520)),
+            ((1366, 768), (1366, 728), (720, 520)),
             ((800, 600), (800, 552), (720, 504)),
         ]:
             with self.subTest(size=size):
@@ -79,7 +79,7 @@ class DesktopShellTests(unittest.TestCase):
             def screens(self):
                 raise RuntimeError('monitor lookup unavailable')
         self.assertEqual(app.main_window_options(UnavailableScreens()),
-                         dict(width=720, height=600, min_size=(720, 600)))
+                         dict(width=720, height=520, min_size=(720, 520)))
 
 
 if __name__ == '__main__':

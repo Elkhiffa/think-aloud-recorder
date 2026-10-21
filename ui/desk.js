@@ -11,8 +11,8 @@
   let api=null,toastTimer=null;
 
   // ---- appearance and window ----
-  function applyTheme(){let choice='system';try{choice=localStorage.getItem('recorder-theme')||'system';}catch(_){}const dark=choice==='dark'||choice!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.dataset.theme=dark?'dark':'light';const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
-  applyTheme();matchMedia('(prefers-color-scheme: dark)').addEventListener('change',applyTheme);window.addEventListener('storage',applyTheme);
+  function applyFrameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
+  applyFrameColor();
   document.querySelectorAll('[data-win]').forEach(button=>button.onclick=()=>{const name={min:'win_minimize',max:'win_toggle_maximize',close:'win_close'}[button.dataset.win];try{api?.[name]?.()?.catch?.(()=>{});}catch(_){}});
   function toast(message){clearTimeout(toastTimer);$('deskToast').textContent=message;$('deskToast').classList.add('show');toastTimer=setTimeout(()=>$('deskToast').classList.remove('show'),5000);}
   async function call(method,...args){const response=await api[method](...args);if(!response||response.ok!==true)throw new Error(response?.error||'操作未完成，请重试。');return response.data;}
@@ -143,7 +143,7 @@
     return data;
   }
   async function start(){
-    if(api)return;api=window.pywebview.api;applyTheme();
+    if(api)return;api=window.pywebview.api;applyFrameColor();
     try{const data=await refresh();deskShow(data.tab==='insight'?'insight':'sessions');if(state.sessions[0]&&!state.selected)select(state.sessions[0].id);}
     catch(error){$('sessionScroll').innerHTML=`<p class="empty">${escape(error.message)}</p>`;}
     setInterval(()=>{if(!document.hidden)refresh().catch(()=>{});},3000);

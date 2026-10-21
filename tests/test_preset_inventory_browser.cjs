@@ -81,7 +81,7 @@ async function main(){
   fs.mkdirSync(output,{recursive:true});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin='http://127.0.0.1:'+server.address().port;
   const browser=await chromium.launch({headless:true,channel:'msedge'});
   try{
-    context=await browser.newContext({viewport:{width:720,height:600}});context.setDefaultTimeout(5000);
+    context=await browser.newContext({viewport:{width:720,height:520}});context.setDefaultTimeout(5000);
     await context.route('**/*',route=>{if(route.request().url().startsWith(origin+'/'))return route.continue();report.errors.push('Blocked external request: '+route.request().url());return route.abort();});
     context.on('page',page=>page.on('pageerror',error=>report.errors.push(error.message)));
     const page=await makePage();await page.locator('#settingsButton').click();
@@ -181,15 +181,15 @@ async function main(){
       assert.equal(await p.locator('#source').inputValue(),'游戏窗口');assert.equal(await p.locator('#mic').inputValue(),'');assert.equal(await p.evaluate(()=>store.draft.monitor),'');
       await p.close();
     });
-    await check('RPC rejection is retryable; compact dark layout keeps both device and engine actions usable',async()=>{
-      const p=await makePage(snapshot(),'reject');await p.setViewportSize({width:720,height:600});await p.evaluate(()=>setTheme('dark'));assert.equal(await p.locator('html').getAttribute('data-theme'),'dark');await p.locator('#settingsButton').click();
+    await check('RPC rejection is retryable; the compact layout keeps both device and engine actions usable',async()=>{
+      const p=await makePage(snapshot(),'reject');await p.setViewportSize({width:720,height:520});await p.locator('#settingsButton').click();
       await p.waitForFunction(()=>document.querySelector('#deviceFeedback').textContent.includes('合成读取请求失败'));
       assert.equal(await p.locator('#refreshDevices').isEnabled(),true);assert.equal(await p.locator('#wizardCancel').isEnabled(),true);
       await p.locator('#reconnectEngine').scrollIntoViewIfNeeded();
       assert.equal(await p.locator('#sheet').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
       assert.equal(await p.locator('#wizardBody').evaluate(n=>n.scrollWidth<=n.clientWidth+1),true);
-      const box=await p.locator('#reconnectEngine').boundingBox();assert.ok(box.x>=0&&box.x+box.width<=720&&box.y>=0&&box.y+box.height<=600);
-      await screenshot(p,'compact-dark-read-failed');
+      const box=await p.locator('#reconnectEngine').boundingBox();assert.ok(box.x>=0&&box.x+box.width<=720&&box.y>=0&&box.y+box.height<=520);
+      await screenshot(p,'compact-read-failed');
       await complete(p,{device_inventory:{id:'new-evidence-after-rejection',state:'succeeded',window_selection:match}});
       assert.equal(await p.locator('#target').inputValue(),live);assert.doesNotMatch(await p.locator('#deviceFeedback').innerText(),/合成读取请求失败/);
       await p.evaluate(()=>{window.syntheticInventory.mode='hold';});await p.locator('#refreshDevices').click();await complete(p);

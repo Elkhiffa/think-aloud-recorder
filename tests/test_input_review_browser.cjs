@@ -56,7 +56,7 @@ async function main(){
  });
  await check('copy library control belongs to header metadata without video overlap; native call uses vault',async()=>{const {video,copy,header}=await page.evaluate(async()=>{for(let i=0;i<3;i++)await new Promise(requestAnimationFrame);return {video:document.querySelector('.video-slot').getBoundingClientRect().toJSON(),copy:document.querySelector('#copySplit').getBoundingClientRect().toJSON(),header:document.querySelector('.review-header').getBoundingClientRect().toJSON()};});assert.ok(copy.y>=header.y&&copy.bottom<=header.bottom&&copy.right<=header.right);assert.ok(copy.bottom<=video.y);assert.equal(await page.locator('.session-meta-row #copySplit').count(),1);await page.locator('#copyPath').click();assert.deepEqual(await page.evaluate(()=>window.__calls.find(item=>item[0]==='copy')),['copy','vault']);await page.locator('#fileActionsToggle').click();await page.locator('[data-copy=video]').click();assert.equal(await page.locator('#fileActions').isHidden(),true);});
  await page.locator('[data-input-mode=keys]').click();await seek(4.8);await settleVideo();await page.screenshot({path:path.join(out,'keyboard-1280.png')});
- await check('no page overflow at a small desktop size and theme remains readable',async()=>{await page.setViewportSize({width:980,height:720});await page.waitForTimeout(150);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);const g=await playback();assert.ok(g.rect.width>200&&g.rect.height>100);await page.locator('#themeButton').click();await settleVideo();await page.screenshot({path:path.join(out,'keyboard-dark-980.png')});});
+await check('no page overflow at a small desktop size',async()=>{await page.setViewportSize({width:980,height:720});await page.waitForTimeout(150);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);const g=await playback();assert.ok(g.rect.width>200&&g.rect.height>100);await settleVideo();await page.screenshot({path:path.join(out,'keyboard-980.png')});});
  await check('old, disabled, failed and missing input states are distinct',async()=>{for(const [inputs,text] of [[null,'此场次没有操作记录'],[{state:'disabled'},'此场次未启用操作记录'],[{state:'failed',error:'合成采集异常'},'操作记录采集失败'],[{state:'unavailable'},'操作记录文件不可用']]){await page.evaluate(inputs=>window.__snapshot.inputs=inputs,inputs);await page.waitForFunction(text=>document.querySelector('#timelineState').textContent===text,text);}});
  await check('missing transcript is visibly failed while video remains playable',async()=>{
    await page.locator('#transcriptTab').click();await seek(4.8);const before=await playback();
@@ -93,7 +93,7 @@ async function main(){
  const visualRows=()=>page.evaluate(()=>[...document.querySelectorAll('#timelineInputs .key-bar')].map(el=>({id:el.dataset.inputId,start:+el.dataset.start,end:+el.dataset.end,lane:+el.dataset.lane,channel:el.dataset.channel,rect:el.getBoundingClientRect().toJSON(),font:getComputedStyle(el.firstElementChild).fontSize,text:el.firstElementChild.textContent,duration:el.querySelector('.bar-duration').getBoundingClientRect().height})));
  const assertCollisions=rows=>{for(let i=0;i<rows.length;i++)for(let j=i+1;j<rows.length;j++){const a=rows[i].rect,b=rows[j].rect;if(rows[i].channel===rows[j].channel)assert.ok(Math.min(a.right,b.right)-Math.max(a.left,b.left)<.1||Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)<.1,`${rows[i].id} overlaps ${rows[j].id}`);}};
  await check('continuous analog samples form activity bands while current input stays raw',async()=>{
-   if(await page.locator('#quotePopover').isVisible())await page.locator('#quoteClose').click();await page.setViewportSize({width:1280,height:800});await page.locator('#themeButton').click();
+   if(await page.locator('#quotePopover').isVisible())await page.locator('#quoteClose').click();await page.setViewportSize({width:1280,height:800});
    await page.evaluate(inputs=>{window.__snapshot.inputs=inputs;window.__snapshot.revision='dense-v1';},denseInputs);
    await page.waitForFunction(()=>document.querySelector('[data-input-id="dense-axis-0"]'));await seek(2.73);
    assert.equal(await page.locator('[data-input-id^="dense-axis-"]').count(),1);assert.equal(await page.locator('[data-input-id^="dense-mouse-"]').count(),1);
@@ -263,9 +263,8 @@ async function main(){
    assert.equal(await page.locator('[data-input-id="dpad-tap"]').evaluate(el=>el.classList.contains('long-press')),false);
    assert.equal(await page.locator('[data-input-id="dpad-tap"] .held-section').count(),1);
    assert.equal(await page.locator('[data-held-id="dpad-hold"]').count(),1);
-   for(const theme of ['light','dark']){
-     if(await page.locator('html').getAttribute('data-theme')!==theme)await page.locator('#themeButton').click();
-     await page.waitForTimeout(160);const colors=await page.evaluate(()=>{const css=id=>getComputedStyle(document.querySelector(`[data-input-id="${id}"]`));return {held:css('held').backgroundColor,tap:css('tap').backgroundColor,rail:css('held').boxShadow,burst:css('dpad-tap').borderStyle};});
+   for(const theme of ['light']){
+await page.waitForTimeout(160);const colors=await page.evaluate(()=>{const css=id=>getComputedStyle(document.querySelector(`[data-input-id="${id}"]`));return {held:css('held').backgroundColor,tap:css('tap').backgroundColor,rail:css('held').boxShadow,burst:css('dpad-tap').borderStyle};});
      assert.notEqual(colors.held,colors.tap);assert.notEqual(colors.rail,'none');assert.equal(colors.burst,'dashed');
      await page.screenshot({path:path.join(out,`holds-${theme}.png`)});
    }

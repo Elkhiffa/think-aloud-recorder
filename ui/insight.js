@@ -608,8 +608,6 @@
   $('tabReport').onclick=()=>selectLeft('report');
   $('tabLibrary').onclick=()=>selectLeft('library');
 
-  // The standalone insight window follows the shared appearance setting too (the desk sets it itself).
-  if(!document.documentElement.dataset.theme){let choice='system';try{choice=localStorage.getItem('recorder-theme')||'system';}catch(_){}document.documentElement.dataset.theme=choice==='dark'||choice!=='light'&&matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}
   function start(){
     if(api)return;
     api=window.pywebview.api;

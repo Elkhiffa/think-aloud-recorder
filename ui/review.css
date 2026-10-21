@@ -1,7 +1,6 @@
 /* Keep the paper palette local: exported reviews inline this entire stylesheet. */
 /* Review spacing scale: 4, 8, 16, 24, 32, 40 px; zero removes space. */
 :root{color-scheme:light;--bg:#ede7db;--surface:#fcfaf5;--soft:#ede7db;--tint:#f2e8dc;--ink:#292722;--heading:#292722;--muted:#716c63;--line:#dcd5c9;--strong-line:#c7bfb1;--accent:#b64b37;--inverse:#fffcf7;--error:#ab3528;--follow-bg:#e5ede6;--follow-ink:#38715a;--plyr-color-main:#b64b37;--plyr-font-family:inherit;--plyr-control-radius:5px}
-[data-theme=dark]{color-scheme:dark;--bg:#302b25;--surface:#26231f;--soft:#373128;--tint:#41352b;--ink:#eae4da;--heading:#f6f0e6;--muted:#c0b6a8;--line:#4d453b;--strong-line:#716455;--accent:#eeaa90;--inverse:#29211c;--error:#f2aa9d;--follow-bg:#2e3b32;--follow-ink:#add0ba;--plyr-color-main:#c66c54}
 *{box-sizing:border-box;scrollbar-width:thin;scrollbar-color:var(--strong-line) transparent}
 html,body{width:100%;height:100%;margin:0;overflow:hidden}
 body{font:15px/1.65 "Microsoft YaHei UI","Microsoft YaHei","Segoe UI",sans-serif;color:var(--ink);background:var(--surface);display:flex;flex-direction:column}
@@ -51,8 +50,6 @@ h1{margin:0;font-size:22px;font-weight:600;color:var(--heading);white-space:nowr
 .review-session .session-content:empty{display:none}
 .session-info .preprocessing-count{display:inline-block;margin-left:8px;white-space:nowrap}
 #testLabel{font-size:13px;white-space:nowrap;color:var(--muted)}
-.theme-button{width:36px;height:36px;display:grid;place-items:center;border:0;background:transparent;flex:none;color:var(--muted);padding:8px}
-.theme-button svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 .review-layout{flex:1;min-height:0;display:grid;--splitter-size:24px;grid-template-columns:minmax(0,var(--video-share,1.45fr)) var(--splitter-size) minmax(0,var(--text-share,1fr));gap:0;padding:16px 24px}
 .video-column{display:flex;flex-direction:column;min-width:0;min-height:0;gap:8px}
 .video-slot{flex:1;min-height:0;overflow:hidden;background:#1e1c19;border-radius:4px;display:flex;align-items:center;justify-content:center;container-type:inline-size}
@@ -166,7 +163,6 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 @media(max-width:760px){.input-panel.is-empty{flex-basis:43px}}
 /* Operation review shares one grid between headings, bars and the time ruler. */
 :root{--key:#302d29;--key-ink:#fffaf1;--active-key:#b64b37;--speech:#587a70;--speech-bg:#e3ece5;--speech-line:#b1c6bb;--gap-bg:#eee8dd;--gap-ink:#796647}
-[data-theme=dark]{--key:#4b443c;--key-ink:#f5eee5;--active-key:#af5944;--speech:#b7cfc0;--speech-bg:#34443a;--speech-line:#607c69;--gap-bg:#373025;--gap-ink:#dbc49a}
 .session-title-row{display:flex;align-items:center;gap:8px;min-width:0}.rename-session{flex:none;width:28px;height:28px;padding:4px;border:0;background:transparent;color:var(--muted)}.rename-session svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.5}.rename-form{display:flex;gap:4px;align-items:center}.rename-form input{width:240px;max-width:35vw;border:1px solid var(--accent);border-radius:4px;background:var(--surface);color:var(--ink);padding:4px 8px}.rename-form button{font-size:12px;padding:4px 8px}
 .file-actions{z-index:40}.file-card{min-height:0}.file-card #status{margin:0}.file-card:has(#status:empty){display:none}
 .input-panel{flex:0 0 212px;min-height:0;border:1px solid var(--line);border-radius:4px;background:var(--surface);overflow:hidden;display:flex;flex-direction:column}.input-heading{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 8px;background:var(--soft);border-bottom:1px solid var(--line);min-height:45px;flex:none}.input-heading h2{font-size:15px;white-space:nowrap}.input-modes{display:flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:4px;background:var(--surface)}.input-modes button{font-size:11px;white-space:nowrap;border:0;padding:4px 8px;background:transparent;color:var(--muted)}.input-modes button[aria-pressed=true]{background:var(--accent);color:var(--inverse)}.input-body{padding:8px 16px 8px;display:flex;flex-direction:column;min-height:0;flex:1;overflow:auto}.input-meta{font-size:11px;color:var(--muted);display:flex;align-items:center;justify-content:space-between;min-height:22px;flex:none}.input-meta select{border:0;background:transparent;color:var(--muted);font:inherit;max-width:120px}.current-keys{display:flex;align-items:center;justify-content:center;gap:16px;flex:1;min-height:66px;flex-wrap:wrap;padding:8px 0}.current-item{display:flex;align-items:center;flex-direction:column;gap:4px;font-size:10px;color:var(--muted);text-align:center}.keycap{background:var(--key);color:var(--key-ink);display:inline-flex;align-items:center;justify-content:center;border-radius:4px;min-width:43px;height:42px;padding:4px 8px;font:500 18px/1 "Segoe UI","Microsoft YaHei UI",sans-serif;box-shadow:inset 0 -2px 0 #0002}.keycap.active{background:var(--active-key);color:#fffaf5}.keycap svg{width:20px;height:25px;fill:none;stroke:currentColor;stroke-width:1.5}.mouse-arrow{margin-left:4px;font-size:.8em}.axis-glyph{display:inline-flex;gap:4px;align-items:center}.axis-glyph>span{font-size:1.2em}.input-state{font-size:11px;color:var(--muted);text-align:center;margin:auto 0 0;line-height:1.5}.input-state.is-gap{color:var(--gap-ink);background:var(--gap-bg);padding:8px;border:1px dashed var(--strong-line);border-radius:4px}.input-panel.is-collapsed{background:transparent;border-color:transparent}.input-panel.is-collapsed .input-heading{background:transparent;border-bottom:0}
@@ -248,7 +244,6 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 .input-timeline:focus{outline:none}.input-timeline:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 /* Real holds use a solid warm rail; grouped navigation remains dashed. */
 :root{--hold-bg:#efdeca;--hold-ink:#604324;--hold-line:#946e40}
-:root[data-theme=dark]{--hold-bg:#59442e;--hold-ink:#f8e3c5;--hold-line:#d7ad76}
 .key-bar.long-press,.key-bar.long-press:hover{opacity:1;color:var(--hold-ink);background:var(--hold-bg);box-shadow:inset 0 0 0 1px var(--hold-line)}
 .key-bar.long-press .bar-duration{width:4px;opacity:1;background:var(--hold-line)}
 .key-bar.long-press.active{box-shadow:inset 0 0 0 2px var(--accent)}
@@ -278,7 +273,6 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 /* Window ownership is independent of capture gaps. Keep its wash below
    controls, with labels confined to the ruler so they cannot cover evidence. */
 :root{--background-area:#e9e3da;--background-edge:#a3937f;--background-label:#6c5d4c;--unknown-area:#eeedf0;--unknown-edge:#b7b3bd;--unknown-label:#706c76}
-:root[data-theme=dark]{--background-area:#312c25;--background-edge:#a49276;--background-label:#d2bfa3;--unknown-area:#2b2b31;--unknown-edge:#797783;--unknown-label:#c3bfcc}
 .timeline-window-states,.timeline-window-labels{position:absolute;left:0;right:0;top:0;will-change:transform;pointer-events:none}
 .timeline-window-states{z-index:0}.timeline-ticks{z-index:1}.timeline-inputs,.timeline-speech{z-index:2}.timeline-gaps{z-index:1}
 .timeline-window-band{position:absolute;right:0;border-top:1px solid var(--background-edge);border-bottom:1px solid var(--background-edge);background:var(--background-area);opacity:.55;box-sizing:border-box}
@@ -386,7 +380,6 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 /* The two-tone rail remains legible on both the paper and the key label.
    Its height is the physical press duration, not the padded label height. */
 :root{--duration-fill:#f0c679;--duration-edge:#604324}
-:root[data-theme=dark]{--duration-fill:#d7ad76;--duration-edge:#33281a}
 .key-bar:not(.instant):not(.activity-band)>.bar-duration,.held-section::before{width:4px;background:var(--duration-fill);box-shadow:inset 1px 0 var(--duration-edge),inset -1px 0 var(--duration-edge);opacity:1;z-index:3}
 .held-section::before{content:"";position:absolute;left:0;top:0;bottom:0;pointer-events:none}
 .experience-events{padding:0 8px 16px 0}
@@ -421,9 +414,6 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 :root{--b-paper:#f3ede1;--b-sheet:#f8f4ec;--b-ink:#211b14;--b-muted:#6e6252;--b-faint:#a3967f;--b-rule:#d9cdb8;--b-hair:#e6dccb;--b-margin:#c5402a;
   --bg:var(--b-hair);--surface:var(--b-paper);--soft:var(--b-sheet);--tint:#efe3d3;--ink:var(--b-ink);--heading:var(--b-ink);--muted:var(--b-muted);
   --line:var(--b-rule);--strong-line:#b9aa92;--accent:var(--b-margin);--inverse:#fff8f0;--error:#b3301c;--plyr-color-main:var(--b-margin);--plyr-control-radius:4px}
-:root[data-theme=dark]{--b-paper:#1b1814;--b-sheet:#221e19;--b-ink:#efe5d3;--b-muted:#ab9d87;--b-faint:#776b5b;--b-rule:#3a3229;--b-hair:#2c2620;--b-margin:#a8432f;
-  --bg:var(--b-hair);--surface:var(--b-paper);--soft:var(--b-sheet);--tint:#2f2821;--ink:var(--b-ink);--heading:var(--b-ink);--muted:var(--b-muted);
-  --line:var(--b-rule);--strong-line:#5a4f41;--accent:#e2593f;--inverse:#1b1814;--error:#ef7a5f;--plyr-color-main:#e2593f}
 body{font-family:"Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
 h1,h2{font-family:"Noto Serif SC","Source Han Serif SC","DengXian","Microsoft YaHei UI",serif}
 

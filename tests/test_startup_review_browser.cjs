@@ -54,7 +54,7 @@ const position=page=>page.locator('video').evaluate(v=>({time:v.currentTime,paus
   const time=(await position(page)).time;assert.ok(time>=.74&&time<1.5,`unexpected time ${time}`);await page.close();
  });
  await check('early interaction without a seek preserves zero rather than jumping afterward',async()=>{
-  const {page,release}=await pageFor('normal',true);await page.locator('#themeButton').click();release();await loaded(page);
+  const {page,release}=await pageFor('normal',true);await page.locator('#title').click();release();await loaded(page);
   assert.deepEqual(await position(page),{time:0,paused:true});await page.close();
  });
  await check('no browser errors',()=>assert.deepEqual(errors,[]));

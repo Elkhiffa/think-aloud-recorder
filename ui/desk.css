@@ -10,11 +10,6 @@
   --ok:#5b7a48;--alert:#b3301c;
   --k-confusion:#c08a2e;--k-obstacle:#b3301c;--k-cost:#3d5d78;--k-negative:#6c4a75;--k-other:#d6cab4;
 }
-:root[data-theme=dark]{
-  --paper:#1b1814;--sheet:#221e19;--ink:#efe5d3;--muted:#ab9d87;--faint:#776b5b;--rule:#3a3229;--hair:#2c2620;--margin:#a8432f;
-  --ok:#93b07a;--alert:#ef7a5f;
-  --k-confusion:#d9a650;--k-obstacle:#e0583f;--k-cost:#7fa1c0;--k-negative:#a888b5;--k-other:#3d352c;
-}
 .k-confusion{--kc:var(--k-confusion)}.k-obstacle{--kc:var(--k-obstacle)}.k-cost{--kc:var(--k-cost)}.k-negative{--kc:var(--k-negative)}.k-other{--kc:var(--k-other)}
 body{background:var(--paper);color:var(--ink);font:var(--t2)/24px var(--sans)}
 .hidden{display:none!important}

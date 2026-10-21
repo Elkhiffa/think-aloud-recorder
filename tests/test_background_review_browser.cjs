@@ -48,10 +48,10 @@ async function main(){
    const layers=await page.evaluate(()=>Object.fromEntries(['.timeline-window-states','.timeline-ticks','.timeline-inputs','.timeline-playhead'].map(s=>[s,+getComputedStyle(document.querySelector(s)).zIndex])));
    assert.ok(layers['.timeline-window-states']<layers['.timeline-ticks']);assert.ok(layers['.timeline-ticks']<layers['.timeline-inputs']);assert.ok(layers['.timeline-inputs']<layers['.timeline-playhead']);
  });
- for(const theme of ['light','dark'])await check(`${theme} theme readable labels outside input and speech columns`,async()=>{
-   if(await page.locator('html').getAttribute('data-theme')!==theme)await page.locator('#themeButton').click();await settle();
-   const geometry=await page.evaluate(()=>({label:document.querySelector('.timeline-window-label').getBoundingClientRect().toJSON(),speech:document.querySelector('.quote-bar').getBoundingClientRect().toJSON(),playhead:document.querySelector('#timelinePlayhead').getBoundingClientRect().toJSON()}));
-   assert.ok(geometry.label.right<=geometry.speech.left);await page.screenshot({path:path.join(out,`background-${theme}.png`)});
+ await check('readable labels outside input and speech columns',async()=>{
+    await settle();
+const geometry=await page.evaluate(()=>({label:document.querySelector('.timeline-window-label').getBoundingClientRect().toJSON(),speech:document.querySelector('.quote-bar').getBoundingClientRect().toJSON(),playhead:document.querySelector('#timelinePlayhead').getBoundingClientRect().toJSON()}));
+   assert.ok(geometry.label.right<=geometry.speech.left);await page.screenshot({path:path.join(out,'background.png')});
  });
  await check('hover still describes original hold and background status; quote pin is unobstructed',async()=>{
    const item=page.locator('[data-input-id="through"]'),box=await item.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+(4.5-1)*32);await settle();
