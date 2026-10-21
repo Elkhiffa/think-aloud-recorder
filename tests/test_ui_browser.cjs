@@ -1161,9 +1161,9 @@ async function vocabularyChecks(context, origin) {
 }
 
 // ---------------------------------------------------------------- desk window (场次库 / 洞察)
-// A detail action: the rare ones (导出, 原始录像, 恢复云端任务) sit in 更多.
+// A detail action: the rare ones (打开资料文件夹, 重新整理, 导出, 原始录像, 恢复云端任务) sit in 更多.
 async function deskAct(page, act) {
-  if (['export', 'raw', 'recover'].includes(act)) await page.locator('#sessionDetail [data-act="more"]').click();
+  if (['folder', 'process', 'export', 'raw', 'recover'].includes(act)) await page.locator('#sessionDetail [data-act="more"]').click();
   await page.locator(`#sessionDetail [data-act="${act}"]`).click();
 }
 const deskEnabled = page => page.locator('#sessionDetail [data-act]').evaluateAll(nodes => Object.fromEntries(nodes.map(n => [n.dataset.act, !n.disabled])));
@@ -1283,27 +1283,52 @@ async function deskChecks(context, origin) {
     assert.equal(await page.locator('[data-act="handoff"]').count(), 0, 'organized sessions need no hand-off');
     await page.locator('#sessionDetail [data-at="30"]').click();
     assert.deepEqual((await deskCalls(page, 'open_review')).at(-1), ['d1', 30]);
+    assert.equal(await page.locator('#sessionDetail .unnamed').count(), 0);
     await screen(page, 'desk-detail-1240x900');
+  });
+  await check('a problem type with more than three quotes expands from its header and collapses again', async () => {
+    const quotes = ['第一条合成原话很普通', '第二条合成原话也普通', '第三条合成原话还普通', '第四条合成原话被收起', '第五条合成原话被收起'];
+    await page.evaluate(rows => { window.__deskFixture.details.d1.quotes.confusion = rows.map((text, i) => ({ text, at: 40 + i })); }, quotes);
+    await page.locator('#sessionScroll [data-session="d4"]').click(); await page.locator('#sessionScroll [data-session="d1"]').click();
+    const block = page.locator('#sessionDetail .kq.k-confusion');
+    await block.locator('[data-fold]').waitFor();
+    assert.match(await block.evaluate(n => getComputedStyle(n).boxShadow), /inset/, 'a strong strip on the left');
+    assert.notEqual(await block.evaluate(n => getComputedStyle(n).backgroundColor), await page.locator('#sessionDetail').evaluate(n => getComputedStyle(n).backgroundColor), 'a weak fill of the same hue');
+    assert.equal(await block.locator('.ln').count(), 3); assert.equal(await block.locator('.fold').innerText(), '展开');
+    await block.locator('[data-fold]').click(); assert.equal(await block.locator('.ln').count(), 5); assert.equal(await block.locator('.fold').innerText(), '收起');
+    assert.equal(await block.locator('[data-fold]').getAttribute('aria-expanded'), 'true');
+    await block.locator('[data-fold]').click(); assert.equal(await block.locator('.ln').count(), 3);
+    assert.equal(await page.locator('#sessionDetail .kq.k-obstacle [data-fold]').count(), 0, 'three or fewer quotes need no fold');
+    await page.evaluate(() => { window.__deskFixture.details.d1.quotes.confusion = [{ text: '这个标记是什么意思我没看懂', at: 12.5 }]; });
+    await page.locator('#sessionScroll [data-session="d4"]').click(); await page.locator('#sessionScroll [data-session="d1"]').click();
+    await page.locator('#sessionDetail .kq').first().waitFor();
   });
   await check('detail actions call the matching bridge methods; rename, process and recover confirm first', async () => {
     assert.equal(await page.locator('#moreMenu').isVisible(), false);
+    await page.locator('#sessionDetail [data-act="copy"]').click();
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), 'D:\\synthetic-only\\think-aloud-database\\d1');
+    assert.equal(await page.locator('#copyPath').innerText(), '已复制');
     for (const [act, method] of [['review', 'review_session'], ['folder', 'open_folder'], ['raw', 'open_raw'], ['export', 'package_session']]) {
       await deskAct(page, act);
       assert.equal(await page.locator('#moreMenu').isVisible(), false, `${act}: 更多 closes after a choice`);
       await page.waitForFunction(name => window.__deskFixture.calls.some(call => call.method === name), method);
       assert.deepEqual((await deskCalls(page, method)).at(-1), ['d1'], act);
     }
-    await page.locator('[data-act="process"]').click(); await page.locator('#deskDialog[open]').waitFor();
+    await deskAct(page, 'process'); await page.locator('#deskDialog[open]').waitFor();
     assert.match(await page.locator('#deskDialogBody').innerText(), /会上传这一场的麦克风录音/);
     assert.equal((await deskCalls(page, 'process_session')).length, 0, 'nothing starts before confirmation');
     await page.locator('#deskDialogFoot .btn.solid').click(); await page.waitForFunction(() => !document.querySelector('#deskDialog').open);
     assert.deepEqual(await deskCalls(page, 'process_session'), [['d1']]);
-    await page.locator('[data-act="rename"]').click(); await page.locator('#deskDialog[open]').waitFor();
+    // Rename in place: the pencil turns the title into a field; Esc keeps the name, Enter saves it.
+    await page.locator('#detailTitle [data-act="rename"]').click();
     assert.equal(await page.locator('#renameInput').inputValue(), '清河探索与初次止戈');
-    await page.locator('#deskDialogFoot .btn', { hasText: '取消' }).click(); assert.equal((await deskCalls(page, 'rename_session')).length, 0);
-    await page.locator('[data-act="rename"]').click(); await page.locator('#renameInput').fill('合成新名称');
-    await page.locator('#deskDialogFoot .btn.solid').click(); await page.waitForFunction(() => !document.querySelector('#deskDialog').open);
+    assert.equal(await page.evaluate(() => document.activeElement.id), 'renameInput');
+    await page.keyboard.press('Escape'); assert.equal(await page.locator('#renameInput').count(), 0);
+    assert.equal((await deskCalls(page, 'rename_session')).length, 0);
+    await page.locator('#detailTitle [data-act="rename"]').click(); await page.locator('#renameInput').fill('合成新名称'); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__deskFixture.calls.some(call => call.method === 'rename_session'));
     assert.deepEqual(await deskCalls(page, 'rename_session'), [['d1', '合成新名称']]);
+    await page.waitForFunction(() => document.querySelector('#detailTitle .tt')?.textContent === '合成新名称');
     await page.waitForFunction(() => document.querySelector('#sessionScroll [data-session="d1"] .nm').textContent.includes('合成新名称'));
     await deskAct(page, 'recover'); await page.locator('#deskDialog[open]').waitFor();
     await page.locator('#deskDialogFoot .btn.solid').click();
@@ -1316,9 +1341,9 @@ async function deskChecks(context, origin) {
   await check('an unorganized session offers the hand-off; while it is processing, only safe actions stay enabled', async () => {
     await page.locator('#sessionScroll [data-session="d2"]').click(); await page.locator('#sessionDetail [data-act="handoff"]').waitFor();
     assert.deepEqual((await deskCalls(page, 'session_detail')).at(-1), ['d2']);
-    assert.match(await page.locator('#sessionDetail h1').innerText(), /^未命名09:05 开始的记录/);
+    assert.equal(await page.locator('#sessionDetail h1').innerText(), '09:05 开始的记录', 'no 未命名 prefix');
     assert.match(await page.locator('#sessionDetail').innerText(), /合成测试：后台转写中。/);
-    assert.deepEqual(await deskEnabled(page), { review: true, handoff: true, rename: true, process: false, folder: true, more: true, export: false, raw: true, recover: false });
+    assert.deepEqual(await deskEnabled(page), { review: true, handoff: true, rename: true, copy: true, more: true, folder: true, process: false, export: false, raw: true, recover: false });
     await page.locator('[data-act="handoff"]').click(); await page.waitForFunction(() => document.querySelector('#deskToast').classList.contains('show'));
     const copied = await page.evaluate(() => navigator.clipboard.readText());
     assert.match(copied, /场次文件夹：D:\\synthetic-only\\think-aloud-database\\d2/); assert.match(copied, /只整理这一场/);
@@ -1327,14 +1352,14 @@ async function deskChecks(context, origin) {
   await check('a failed session without a playable recording cannot be reviewed; its other actions stay available', async () => {
     await page.locator('#sessionScroll [data-session="d3"]').click(); await page.waitForFunction(() => document.querySelector('#sessionDetail h1')?.textContent.includes('21:00'));
     assert.match(await page.locator('#sessionDetail').innerText(), /合成测试：转写失败。/);
-    assert.deepEqual(await deskEnabled(page), { review: false, handoff: true, rename: true, process: true, folder: true, more: true, export: true, raw: true, recover: true });
+    assert.deepEqual(await deskEnabled(page), { review: false, handoff: true, rename: true, copy: true, more: true, folder: true, process: true, export: true, raw: true, recover: true });
     await screen(page, 'desk-failed-1240x900');
   });
   await check('while recording, processing, export and cloud recovery lock on every session', async () => {
     await page.locator('#sessionScroll [data-session="d1"]').click(); await page.locator('#sessionDetail .kq').first().waitFor();
     await page.evaluate(() => { window.__deskFixture.desk.busy = true; window.__deskFixture.desk.recording = true; });
     await page.waitForFunction(() => document.querySelector('#sessionDetail [data-act="process"]')?.disabled === true, null, { timeout: 8000 });
-    assert.deepEqual(await deskEnabled(page), { review: true, rename: true, process: false, folder: true, more: true, export: false, raw: true, recover: false });
+    assert.deepEqual(await deskEnabled(page), { review: true, rename: true, copy: true, more: true, folder: true, process: false, export: false, raw: true, recover: false });
     await page.evaluate(() => { window.__deskFixture.desk.busy = false; window.__deskFixture.desk.recording = false; });
     await page.waitForFunction(() => document.querySelector('#sessionDetail [data-act="process"]')?.disabled === false, null, { timeout: 8000 });
   });

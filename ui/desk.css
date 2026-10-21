@@ -98,19 +98,34 @@ button:disabled{cursor:default;opacity:.5}
 /* 详情：元信息 → 标题 → 操作 → 四类比例 → 按类型的原话 → 关联洞察 → 体验事件 */
 .detail{overflow-y:auto;padding:var(--s5)}
 .d-meta{font-size:var(--t1);color:var(--muted);font-variant-numeric:tabular-nums}
-.detail h1{font:700 var(--t3)/1.35 var(--serif);margin:var(--s1) 0 var(--s3)}
-.unnamed{font:400 var(--t1)/1 var(--sans);color:var(--muted);margin-right:var(--s2);vertical-align:3px}
+.d-head{display:grid;gap:var(--s1)}
+.detail h1{display:flex;align-items:center;gap:var(--s1);min-height:36px;font:700 var(--t3)/1.35 var(--serif);margin-bottom:var(--s2)}
+.detail h1 .tt{min-width:0}
+.edit{flex:none;display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:var(--r-sm);background:none;color:var(--faint)}
+.edit:hover{background:var(--fill);color:var(--ink)}
+.edit svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linejoin:round}
+#renameInput{flex:1;min-width:0;height:36px;border:0;border-radius:var(--r);background:var(--fill);color:var(--ink);padding:0 var(--s2);font:inherit;outline:2px solid var(--ink)}
 .d-acts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
-.d-note{margin-top:var(--s3);font-size:var(--t1);color:var(--muted)}
+.d-note{margin-top:var(--s2);font-size:var(--t1);color:var(--muted)}
 .d-note.warn{color:var(--warn)}
 .d-sum{margin-top:var(--s5)}
+.d-sum .note{margin-top:var(--s1)}
 .d-sum-row{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3);margin-top:var(--s2);flex-wrap:wrap}
 .d-sum-row .total{font-size:var(--t1);color:var(--muted)}
 .d-sum-row .total b{font-size:var(--t2);color:var(--ink)}
 .kleg{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s4);font-size:var(--t1)}
 .kleg span{color:var(--kc)}
 .kleg b{font-size:var(--t2)}
-.grp{margin-top:var(--s4)}
+.grp{margin-top:var(--s5)}
+/* 问题类型：左侧一条强色竖条加同色相的浅底；标题行点一下展开全部，再点收起 */
+.kqs{display:grid;gap:var(--s4);margin-top:var(--s5)}
+.kq{border-radius:var(--r);background:color-mix(in srgb,var(--kc) 8%,var(--sheet));box-shadow:inset 3px 0 0 var(--kc);padding:var(--s3) var(--s4)}
+.kq .gh{width:100%;margin:0 0 var(--s1);padding:0;border:0;background:none;text-align:left;color:var(--ink)}
+.kq .gh .name{color:var(--kc)}
+.kq .fold{font-size:var(--t1);color:var(--muted)}
+.kq button.gh:hover .fold{color:var(--ink)}
+.kq .lns{margin:0 calc(-1 * var(--s2))}
+.kq .ln:hover{background:rgb(255 255 255 / .6)}
 .gh{display:flex;align-items:center;gap:var(--s2);margin-bottom:var(--s1)}
 .gh .name{font-weight:700}
 .gh small{font-size:var(--t1);color:var(--muted);font-variant-numeric:tabular-nums}
@@ -138,7 +153,5 @@ button:disabled{cursor:default;opacity:.5}
 /* 洞察页签：insight.css 的整页布局放进一个页签里 */
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 
-#paneInsight .topbar{justify-content:flex-start;padding:var(--s1) var(--s4) var(--s3)}
-#paneInsight .topbar .status{flex:1;min-width:0;margin:0;text-align:right}
 
 *{scrollbar-width:thin;scrollbar-color:var(--rule) transparent}

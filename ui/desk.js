@@ -9,9 +9,10 @@
   const WEEK='日一二三四五六';
   const STATES=[['all','全部'],['done','已整理'],['todo','待整理'],['running','转写中'],['failed','失败']];
   const SHOWN=3;
-  const state={sessions:[],jobs:[],busy:false,game:'',filter:'all',kinds:new Set(),sort:'time',search:'',selected:null,detail:null,signature:''};
+  const state={sessions:[],jobs:[],busy:false,game:'',filter:'all',kinds:new Set(),sort:'time',search:'',selected:null,detail:null,signature:'',open:new Set(),editing:false};
   let api=null,toastTimer=null;
   const PLAY='<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg>';
+  const PENCIL='<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.8 2.6a1.3 1.3 0 0 1 1.8 0l.8.8a1.3 1.3 0 0 1 0 1.8L6 12.6l-2.9.6.6-2.9z"/></svg>';
 
   // ---- window ----
   function applyFrameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
@@ -88,7 +89,7 @@
 
   // ---- detail ----
   async function select(id){
-    state.selected=id;renderList();const s=state.sessions.find(row=>row.id===id);if(!s)return;
+    state.selected=id;state.open.clear();state.editing=false;renderList();const s=state.sessions.find(row=>row.id===id);if(!s)return;
     renderDetail(s,null);
     try{const detail=await call('session_detail',id);if(state.selected===id){state.detail=detail;renderDetail(s,detail);}}
     catch(error){if(state.selected===id)$('sessionDetail').insertAdjacentHTML('beforeend',`<p class="d-note">${escape(error.message)}</p>`);}
@@ -100,25 +101,27 @@
     const end=valid?new Date(d.getTime()+(Number(s.duration)||0)*1000):null;
     const meta=[valid?`${d.getMonth()+1}月${d.getDate()}日 周${WEEK[d.getDay()]}`:'',valid?`${pad(d.getHours())}:${pad(d.getMinutes())}–${pad(end.getHours())}:${pad(end.getMinutes())}`:'',clock(s.duration),detail?.events?.length?`${detail.events.length} 个体验事件`:''].filter(Boolean).join(' · ');
     const actions=`<div class="d-acts"><button class="btn solid" data-act="review"${s.can_review===false?' disabled':''}>${PLAY}回看</button>${done?'':`<button class="btn sm" data-act="handoff">复制整理指令</button>`}`
-      +`<button class="btn sm" data-act="rename">重命名</button><button class="btn sm" data-act="process"${locked?' disabled':''}>重新整理</button><button class="btn sm" data-act="folder">资料文件夹</button>`
-      +`<span class="pop"><button class="btn sm" data-act="more" aria-haspopup="true" aria-expanded="false">更多</button><span class="pop-menu right hidden" id="moreMenu"><button data-act="export"${locked?' disabled':''}>导出</button><button data-act="raw">原始录像</button><button data-act="recover"${locked?' disabled':''}>恢复云端任务</button></span></span></div>`;
+      +`<button class="btn sm" data-act="copy" id="copyPath">复制资料库路径</button>`
+      +`<span class="pop"><button class="btn sm" data-act="more" aria-haspopup="true" aria-expanded="false">更多</button><span class="pop-menu right hidden" id="moreMenu"><button data-act="folder">打开资料文件夹</button><button data-act="process"${locked?' disabled':''}>重新整理</button><button data-act="export"${locked?' disabled':''}>导出</button><button data-act="raw">原始录像</button><button data-act="recover"${locked?' disabled':''}>恢复云端任务</button></span></span></div>`;
     let body='';
     if(!detail)body='<p class="d-note">正在读取这一场的整理结果…</p>';
     else if(detail.state!=='complete')body=`<p class="d-note">${escape(detail.label||'这一场还没有整理结果。')} 复制整理指令，粘贴给 Codex 或 Claude 整理后，原话和问题分布会出现在这里。</p>`;
     else{
       const kinds=detail.kinds||{},total=Object.keys(KIND).reduce((n,k)=>n+(kinds[k]||0),0),other=OTHER.reduce((n,k)=>n+(kinds[k]||0),0);
       const legend=Object.entries(KIND).filter(([k])=>kinds[k]).map(([k,label])=>`<span class="k-${k}"><b>${kinds[k]}</b> ${label}</span>`).join('');
-      const groups=Object.entries(KIND).map(([k,label])=>{const rows=detail.quotes[k]||[];if(!rows.length)return '';const fit=rows.filter(q=>q.text.length>=6&&q.text.length<=40);const list=fit.length?fit:rows;
-        return `<section class="grp kq k-${k}"><div class="gh"><i class="dot"></i><span class="name">${label}</span><small>${rows.length}</small><span class="sp"></span>${rows.length>SHOWN?`<button class="link" data-more="${k}">全部</button>`:''}</div><ul class="lns">${list.slice(0,SHOWN).map(q=>quoteLine(k,q)).join('')}</ul></section>`;}).join('');
+      const groups=Object.entries(KIND).map(([k,label])=>{const rows=detail.quotes[k]||[];if(!rows.length)return '';const fit=rows.filter(q=>q.text.length>=6&&q.text.length<=40);
+        const more=rows.length>SHOWN,open=more&&state.open.has(k),list=open?rows:(fit.length?fit:rows).slice(0,SHOWN);
+        const head=`<span class="name">${label}</span><small>${rows.length}</small><span class="sp"></span>${more?`<span class="fold">${open?'收起':'展开'}</span>`:''}`;
+        return `<section class="kq k-${k}">${more?`<button class="gh" data-fold="${k}" aria-expanded="${open}">${head}</button>`:`<div class="gh">${head}</div>`}<ul class="lns">${list.map(q=>quoteLine(k,q)).join('')}</ul></section>`;}).join('');
       const ins=detail.insights.length?`<ul class="lns">${detail.insights.slice(0,8).map(i=>`<li><button class="ln ins" data-issue="${escape(i.id)}"><span class="tx">${escape(i.title)}</span><span class="ct">${i.count}</span></button></li>`).join('')}</ul>`:'<p class="note">这一场的证据还没有挂到洞察下。</p>';
       const evs=detail.events.map(e=>`<li><span class="ln"><span class="at">${short(e.start)}</span><span class="tx">${escape(e.title)}</span></span></li>`).join('');
       body=`<div class="d-sum">${bar(kinds,true)}<div class="d-sum-row"><span class="total"><b>${total}</b> 个问题</span><span class="kleg">${legend}</span></div>${other?`<p class="note">另有 ${other} 条期待、建议、观察和正面评价</p>`:''}</div>`
-        +(groups||'<p class="d-note">这一场没有整理出问题。</p>')
+        +(groups?`<div class="kqs">${groups}</div>`:'<p class="d-note">这一场没有整理出问题。</p>')
         +`<section class="grp"><div class="gh"><span class="name">关联洞察</span></div>${ins}</section>`
         +(evs?`<section class="grp"><div class="gh"><span class="name">体验事件</span><small>${detail.events.length}</small></div><ul class="lns">${evs}</ul></section>`:'');
     }
     const notes=(job?`<p class="d-note">${escape(job.state==='queued'?'等待转写，前面的场次完成后继续。':job.detail||'正在转写，可以继续录制。')}</p>`:'')+(s.error?`<p class="d-note warn">${escape(s.error)}</p>`:'');
-    $('sessionDetail').innerHTML=`<p class="d-meta">${escape(meta)}</p><h1>${t.named?'':'<span class="unnamed">未命名</span>'}${escape(t.text)}</h1>${actions}${notes}${body}`;
+    $('sessionDetail').innerHTML=`<div class="d-head"><p class="d-meta">${escape(meta)}</p><h1 id="detailTitle"><span class="tt">${escape(t.text)}</span><button class="edit" data-act="rename" title="重命名" aria-label="重命名">${PENCIL}</button></h1>${actions}${notes}</div>${body}`;
     sizes($('sessionDetail'));
   }
   function dialog(titleText,html,buttons){
@@ -127,16 +130,29 @@
     for(const [label,run] of buttons){const button=document.createElement('button');button.className='btn solid';button.textContent=label;button.onclick=async()=>{button.disabled=true;try{if(await run()!==false)$('deskDialog').close();}catch(error){toast(error.message);}finally{button.disabled=false;}};$('deskDialogFoot').append(button);}
     $('deskDialog').showModal();
   }
-  async function copyHandoff(s){const text=['请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。','场次文件夹：'+s.path,'只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。'].join('\n');try{await navigator.clipboard.writeText(text);}catch(_){const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();}toast('整理指令已复制，粘贴给 Codex 或 Claude 即可。');}
+  async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();}}
+  async function copyHandoff(s){await copyText(['请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。','场次文件夹：'+s.path,'只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。'].join('\n'));toast('整理指令已复制，粘贴给 Codex 或 Claude 即可。');}
+  function editTitle(s){
+    const h1=$('detailTitle');if(!h1||state.editing)return;state.editing=true;
+    h1.innerHTML='<input id="renameInput" maxlength="4096" autocomplete="off" aria-label="场次名称，留空恢复默认名称" placeholder="留空恢复默认名称">';
+    const input=$('renameInput');input.value=s.session_name||title(s).text;input.focus();input.select();
+    let done=false;
+    const finish=async save=>{if(done)return;done=true;const value=input.value.trim();state.editing=false;
+      if(save&&value!==(s.session_name||'')&&!(value===title(s).text&&!s.session_name)){try{await call('rename_session',s.id,value);toast('名称已保存');state.signature='';await refresh();return;}catch(error){toast(error.message);}}
+      renderDetail(s,state.detail?.id===s.id?state.detail:null);};
+    input.onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();finish(true);}else if(event.key==='Escape'){event.preventDefault();finish(false);}};
+    input.onblur=()=>finish(true);
+  }
   async function act(name,s){
     try{
       if(name==='review'){await call('review_session',s.id);return;}
       if(name==='handoff'){await copyHandoff(s);return;}
       if(name==='folder'){await call('open_folder',s.id);return;}
+      if(name==='copy'){await copyText(s.path);const button=$('copyPath');if(button){button.textContent='已复制';setTimeout(()=>{if(button.isConnected)button.textContent='复制资料库路径';},2000);}return;}
       if(name==='raw'){await call('open_raw',s.id);return;}
       if(name==='export'){await call('package_session',s.id);toast('已开始导出这一场。');return;}
       if(name==='process'){dialog('重新整理这一场','<p>会按当前的转写设置重新转写这一场，旧的逐字稿和整理结果会保留。使用云端转写时会上传这一场的麦克风录音。</p>',[['开始',async()=>{await call('process_session',s.id);toast('已加入整理队列。');}]]);return;}
-      if(name==='rename'){dialog('重命名','<input id="renameInput" maxlength="4096" autocomplete="off"><p class="note">留空恢复默认名称。</p>',[['保存',async()=>{const value=$('renameInput').value.trim();await call('rename_session',s.id,value);await refresh();toast('名称已保存');}]]);$('renameInput').value=s.session_name||'';$('renameInput').focus();return;}
+      if(name==='rename'){editTitle(s);return;}
       if(name==='recover'){dialog('恢复已有云端任务','<p>填写已有任务编号，继续查询原任务，不重新上传录音。</p><input id="recoverInput" autocomplete="off" spellcheck="false" placeholder="已有 task_id">',[['恢复任务',async()=>{const id=$('recoverInput').value.trim();if(!id){toast('请填写任务编号。');return false;}await call('recover_cloud_task',s.id,id);toast('已开始恢复云端任务。');}]]);}
     }catch(error){toast(error.message);}
   }
@@ -161,7 +177,7 @@
     if(button?.dataset.act==='more'){toggleMenu(button,$('moreMenu'));return;}
     if(button){if(button.closest('#moreMenu'))toggleMenu(document.querySelector('[data-act="more"]'),$('moreMenu'),false);act(button.dataset.act,s);return;}
     const at=event.target.closest('[data-at]');if(at){call('open_review',s.id,Number(at.dataset.at)).catch(error=>toast(error.message));return;}
-    const more=event.target.closest('[data-more]');if(more){const box=more.closest('.kq'),k=more.dataset.more,rows=state.detail?.quotes?.[k]||[];box.querySelector('ul').innerHTML=rows.map(q=>quoteLine(k,q)).join('');more.remove();return;}
+    const fold=event.target.closest('[data-fold]');if(fold){const k=fold.dataset.fold;state.open.has(k)?state.open.delete(k):state.open.add(k);renderDetail(s,state.detail);return;}
     const issue=event.target.closest('[data-issue]');if(issue){deskShow('insight');const label=title(s).text;window.insightBridge?.showSession(s.id,label);setTimeout(()=>window.insightBridge?.goToIssue(issue.dataset.issue),60);}
   });
 
@@ -172,7 +188,8 @@
     state.game=data.game;state.busy=data.busy||data.recording;state.jobs=data.background_jobs||[];
     if(signature===state.signature)return data;state.signature=signature;
     state.sessions=data.sessions||[];render();
-    const current=state.sessions.find(row=>row.id===state.selected);if(current)renderDetail(current,state.detail?.id===current.id?state.detail:null);
+    // Never redraw under a title being edited.
+    const current=state.sessions.find(row=>row.id===state.selected);if(current&&!state.editing)renderDetail(current,state.detail?.id===current.id?state.detail:null);
     return data;
   }
   async function start(){

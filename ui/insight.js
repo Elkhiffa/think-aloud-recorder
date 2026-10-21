@@ -434,6 +434,7 @@
     $('menu').querySelector('button:not([disabled])')?.focus();
   }
   function selectTab(name){
+    $('treeActions').hidden=name!=='evidence';
     for(const [tab,pane,id] of [['tabEvidence','evidencePane','evidence'],['tabFeedback','feedbackPane','feedback']]){
       $(tab).setAttribute('aria-selected',String(id===name));$(pane).hidden=id!==name;
     }

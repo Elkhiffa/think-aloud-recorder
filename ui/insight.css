@@ -158,27 +158,32 @@ select,input{border:1px solid var(--line);border-radius:4px;padding:4px 8px;back
   --bg:var(--fill);--surface:var(--paper);--soft:var(--fill);--tint:var(--fill2);--heading:var(--ink);--desc:var(--muted);
   --line:var(--rule);--strong-line:var(--fill2);--accent:var(--ink);--error:var(--warn)}
 body{font:400 14px/1.65 "Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
-button,select,input{border:0;border-radius:var(--r);background:var(--fill);color:var(--ink)}
-button{height:32px;padding:0 var(--s4)}
-button:hover{background:var(--fill2);border-color:transparent}
-select{height:32px;padding:0 var(--s2)}
+/* 洞察自己的普通按钮和下拉。资料台也加载这份样式，所以这里不写给所有按钮定尺寸的规则 */
+button{border:0;border-radius:var(--r);background:none;color:var(--ink)}
+button:hover{background:none}
+#refresh,.form-actions button,.feedback-item button:not(.flag){height:32px;padding:0 var(--s4);background:var(--fill)}
+#refresh:hover,.form-actions button:hover,.feedback-item button:not(.flag):hover{background:var(--fill2)}
+#reportSelect,.split input{height:32px;padding:0 var(--s2);border:0;border-radius:var(--r);background:var(--fill);color:var(--ink)}
 button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible,.pane:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
-/* 顶栏：左栏“报告 | 界面库”、报告选择、刷新、右栏“证据 | 反馈”；两组页签是分段控件 */
-.topbar{border-bottom:0;background:var(--paper);gap:var(--s2) var(--s3);padding:var(--s1) var(--s4) var(--s3)}
-.topbar h1{font:700 22px/1.35 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif}
-.tabs{gap:var(--s1);padding:var(--s1);border-radius:var(--r);background:var(--fill)}
+/* 每栏自己的栏头：左栏“报告 | 界面库”、报告选择、刷新和状态；右栏“证据 | 反馈”靠左、“全部展开 / 全部收起”靠右 */
+.col-head{flex:none;display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);padding:var(--s3) var(--s5) 0}
+.col-sp{flex:1}
+.tree-actions{display:flex;gap:var(--s1)}
+.tree-actions button{height:28px;padding:0 var(--s2);border-radius:var(--r-sm);background:none;color:var(--muted);font-size:12px}
+.tree-actions button:hover{background:var(--fill);color:var(--ink)}
+.tabs{margin-left:0;gap:var(--s1);padding:var(--s1);border-radius:var(--r);background:var(--fill)}
 .tabs button{height:24px;padding:0 var(--s2);border-radius:var(--r-sm);background:none;color:var(--muted)}
 .tabs button:hover{background:none;color:var(--ink)}
 .tabs [aria-selected=true]{background:var(--sheet);color:var(--ink);font-weight:400;box-shadow:0 1px 2px rgb(60 40 20 / .08)}
 .count{color:inherit}
-.status{font-size:12px;color:var(--muted)}
+.status{flex-basis:100%;margin:0;font-size:12px;color:var(--muted)}
 .status.error{color:var(--warn)}
-/* 左边的报告直接在窗口纸色上读；右边的证据、界面库、反馈放在一块纸面上 */
+/* 左栏（报告、界面库）直接在窗口纸色上读；右栏（证据、反馈）连同栏头是一块纸面 */
 .split{gap:var(--s4);padding:0 var(--s4) var(--s4)}
-.left-col{border:0}
+.left-col,.right-col{min-height:0;display:flex;flex-direction:column;border:0}
+.left-col>.pane,.right-col>.pane{flex:1}
+.right-col{border-radius:var(--r-lg);background:var(--sheet);overflow:hidden}
 .pane{padding:var(--s4) var(--s5) 40px}
-.pane.evidence,.pane.feedback{border-radius:var(--r-lg);background:var(--sheet)}
-.pane.library{border-radius:var(--r-lg);background:var(--sheet)}
 .report{font-size:14px;line-height:1.85}
 .report p,.report li{max-width:44em}
 .report h1{font:700 22px/1.35 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif;margin:0 0 var(--s3)}
@@ -195,19 +200,27 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible,.p
 .cite.unresolved:hover{background:var(--warn-bg);color:var(--warn)}
 /* 证据树：议题行是可点的底色块，越深的层级底色越浅；说明和证据卡在纸面上 */
 .evidence-head{top:-16px;margin:-16px -24px var(--s3);background:var(--sheet);border:0}
-.tree-bar{padding:var(--s4) var(--s5) var(--s2);gap:var(--s2)}
-.tree-bar>button{height:28px;padding:0 var(--s3);border-radius:var(--r-sm)}
-.kind-bar{margin-left:var(--s1);gap:var(--s1)}
-.kinds{gap:var(--s1);margin:var(--s1) 0 var(--s2) 18px}
-.kind-chip,.kind-bar .kind-chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 var(--s2);border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--muted);font-size:12px}
+.tree-bar{padding:var(--s4) var(--s5) var(--s3)}
+.kind-bar,.kinds{display:inline-flex;flex-wrap:wrap;gap:var(--s1);margin:0;padding:var(--s1);border-radius:var(--r);background:var(--fill)}
+.kind-chip,.kind-bar .kind-chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 var(--s2);border:0;border-radius:var(--r-sm);background:none;color:var(--muted);font-size:12px}
 .kind-chip::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--kc,var(--k-other))}
-.kind-chip:hover{background:var(--fill2)}
-.kind-chip.active{background:var(--ink);color:var(--sheet)}
+.kind-chip:hover{background:none;color:var(--ink)}
+.kind-chip.active{background:var(--sheet);color:var(--ink);box-shadow:0 1px 2px rgb(60 40 20 / .08)}
 .kind-confusion{--kc:var(--k-confusion)}.kind-obstacle{--kc:var(--k-obstacle)}.kind-cost{--kc:var(--k-cost)}.kind-negative{--kc:var(--k-negative)}
-.row{border-radius:var(--r);padding:var(--s1) var(--s2) var(--s1) var(--s2);margin:2px 0}
-.level-1>.row{background:var(--fill);border-radius:var(--r-md);padding:var(--s2) var(--s3)}
+/* 议题之间 16（组间）；行和展开内容的内边距 8 / 12（组内边距）；内容之间 8、同级子议题之间 4（组内间距） */
+.row{border-radius:var(--r-sm);padding:var(--s1) var(--s3);margin:0}
+.level-1>.row{background:var(--fill);border-radius:var(--r);padding:var(--s2) var(--s3)}
 .level-2>.row{background:var(--paper)}
 .level-3>.row{background:var(--sheet)}
+.issue{padding:0}
+.issue+.issue{margin-top:var(--s4)}
+.issue>div[id$="-body"],.group>div[id$="-body"],.group>ul.hits{display:grid;gap:var(--s2);padding:var(--s2) 0 0 var(--s3)}
+.group>div[id$="-body"]:not([hidden]),.group>ul.hits:not([hidden]){padding-bottom:var(--s2)}
+.kinds{justify-self:start}
+.group{margin:0;padding:0}
+.group+.group{margin-top:calc(var(--s1) - var(--s2))}
+.desc,.cards,.subhead,.hits,.feedback-form{margin:0}
+.subhead{margin-bottom:calc(var(--s1) - var(--s2))}
 .toggle{height:auto;padding:2px 0;border-radius:0}
 .toggle:hover{color:var(--ink)}
 .level-1>.row>.toggle,.next.level-1,.card-title,.lib-toggle{font-size:14px;font-weight:700}
@@ -220,15 +233,17 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible,.p
 .subhead{color:var(--muted)}
 .badge{border:0;background:var(--counter-bg);color:var(--counter);border-radius:var(--r-sm)}
 .cards{gap:var(--s2)}
+.hits[hidden],.cards[hidden]{display:none}
 .card,.card.counter{border:0;border-radius:var(--r-md);background:var(--paper);padding:var(--s3)}
 .card.counter{background:var(--counter-bg)}
 .thumb{height:auto;border-radius:var(--r);background:var(--fill)}
 .kind{background:none;padding:0;color:var(--kc,var(--muted));font-weight:700}
 .kind-positive{color:var(--counter);background:none}
 .kind-observation,.kind-expectation,.kind-suggestion,.kind-self_correction{background:none;color:var(--muted)}
-.jump{height:24px;padding:0 var(--s2);border-radius:var(--r-sm)}
+.jump{height:24px;padding:0 var(--s2);border-radius:var(--r-sm);background:var(--fill)}
+.jump:hover{background:var(--fill2)}
 .filter-chip{height:24px;border-radius:var(--r-sm);background:var(--ink);color:var(--sheet)}
-.filter-clear{height:24px;border-radius:var(--r-sm)}
+.filter-clear{height:24px;padding:0 var(--s2);border-radius:var(--r-sm);background:var(--fill)}
 .next-bar{border-top:1px solid var(--rule);background:var(--sheet)}
 .next{height:auto;border-radius:0}
 .next:hover{color:var(--ink);text-decoration:underline}
@@ -249,4 +264,4 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible,.p
 .menu{border:0;border-radius:var(--r);background:var(--sheet);box-shadow:0 8px 24px rgb(60 40 20 / .16)}
 .menu button{height:32px;border-radius:var(--r-sm)}
 .menu button:hover:not([disabled]),.menu button:focus-visible{background:var(--fill)}
-@media (max-width:900px){.left-col{border:0}}
+@media (max-width:900px){.left-col{border:0}.right-col{min-height:0}}

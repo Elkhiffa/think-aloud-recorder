@@ -27,30 +27,33 @@
 </section>
 
 <section class="desk-pane hidden" id="paneInsight" aria-label="洞察">
-<header class="topbar">
-  <h1 id="title" class="sr-only">洞察</h1>
-  <div class="tabs" role="tablist" aria-label="左栏内容">
-    <button type="button" role="tab" id="tabReport" aria-selected="true" aria-controls="report">报告</button>
-    <button type="button" role="tab" id="tabLibrary" aria-selected="false" aria-controls="library">界面库</button>
-  </div>
-  <label class="report-choice"><span class="sr-only">选择报告</span><select id="reportSelect"></select></label>
-  <button type="button" id="refresh" title="重新读取报告、议题和目录">刷新</button>
-  <div class="tabs" role="tablist" aria-label="右栏内容">
-    <button type="button" role="tab" id="tabEvidence" aria-selected="true" aria-controls="evidencePane">证据</button>
-    <button type="button" role="tab" id="tabFeedback" aria-selected="false" aria-controls="feedbackPane">反馈 <span id="feedbackCount" class="count"></span></button>
-  </div>
-  <p id="status" class="status" role="status" aria-live="polite"></p>
-</header>
+<h1 id="title" class="sr-only">洞察</h1>
 <main class="split">
   <div class="left-col">
+  <div class="col-head">
+    <div class="tabs" role="tablist" aria-label="左栏内容">
+      <button type="button" role="tab" id="tabReport" aria-selected="true" aria-controls="report">报告</button>
+      <button type="button" role="tab" id="tabLibrary" aria-selected="false" aria-controls="library">界面库</button>
+    </div>
+    <label class="report-choice"><span class="sr-only">选择报告</span><select id="reportSelect"></select></label>
+    <button type="button" id="refresh" title="重新读取报告、议题和目录">刷新</button>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </div>
   <article id="report" class="pane report" tabindex="0" aria-label="分析报告"><p class="empty">正在读取…</p></article>
   <section id="library" class="pane library" role="tabpanel" aria-labelledby="tabLibrary" tabindex="0" hidden><div id="libraryList"></div><nav id="libNext" class="next-bar" aria-label="下一个分类" hidden></nav></section>
+  </div>
+  <div class="right-col">
+  <div class="col-head">
+    <div class="tabs" role="tablist" aria-label="右栏内容">
+      <button type="button" role="tab" id="tabEvidence" aria-selected="true" aria-controls="evidencePane">证据</button>
+      <button type="button" role="tab" id="tabFeedback" aria-selected="false" aria-controls="feedbackPane">反馈 <span id="feedbackCount" class="count"></span></button>
+    </div>
+    <span class="col-sp"></span>
+    <span class="tree-actions" id="treeActions"><button type="button" id="expandAll">全部展开</button><button type="button" id="collapseAll">全部收起</button></span>
   </div>
   <section id="evidencePane" class="pane evidence" role="tabpanel" aria-labelledby="tabEvidence" tabindex="0">
     <div class="evidence-head">
     <div class="tree-bar">
-      <button type="button" id="expandAll">全部展开</button>
-      <button type="button" id="collapseAll">全部收起</button>
       <div id="kindBar" class="kind-bar" role="group" aria-label="按判断类型筛选"></div>
     </div>
     <div id="filterBar" class="filter-bar" hidden></div>
@@ -62,6 +65,7 @@
     <p class="hint">agent 整理的议题、归类和界面名默认接受。你在证据页点“有问题”留下的话都在这里，下一轮整理会逐条处理并写明改了什么。</p>
     <div id="feedbackList"></div>
   </section>
+  </div>
 </main>
 </section>
 </div>
