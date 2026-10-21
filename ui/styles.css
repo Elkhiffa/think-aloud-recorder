@@ -89,8 +89,8 @@ button:disabled{cursor:default;opacity:.5}
 
 .col{display:flex;flex-direction:column;gap:var(--s4);min-width:0;min-height:0}
 /* 游戏：小切换按钮 */
-.games{display:flex;align-items:stretch;gap:var(--s5);height:36px;box-shadow:inset 0 -1px 0 var(--rule);min-width:0;overflow:hidden;white-space:nowrap;flex:none}
-.g{display:inline-flex;align-items:center;padding:0;color:var(--muted);flex:0 1000 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.games{display:flex;align-items:baseline;gap:var(--s5);height:36px;box-shadow:inset 0 -1px 0 var(--rule);min-width:0;overflow:hidden;white-space:nowrap;flex:none}
+.g{display:block;padding:var(--s2) 0;line-height:20px;color:var(--muted);flex:0 1000 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .g:hover{color:var(--ink)}
 .g.on{color:var(--ink);font-weight:700;box-shadow:inset 0 -2px 0 var(--ink);flex:0 1 auto}
 .g.add{color:var(--faint);flex:none}

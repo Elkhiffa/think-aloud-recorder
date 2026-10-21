@@ -95,7 +95,7 @@ select,input{border:1px solid var(--line);border-radius:4px;padding:4px 8px;back
 .kind-observation,.kind-expectation,.kind-suggestion,.kind-self_correction{background:var(--soft);color:var(--muted)}
 .statement{margin:6px 0 8px}
 .aside{font-size:12.5px;color:var(--muted);line-height:1.6}
-.meta{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;margin-bottom:2px}
+.meta{display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;margin-bottom:2px}
 .jump{padding:0 6px;font-size:12.5px;border-radius:4px}
 .reason{font-size:13px;color:var(--muted)}
 .hits{margin:8px 0 0 18px;padding:0;list-style:none;display:grid;gap:6px}
@@ -132,7 +132,7 @@ select,input{border:1px solid var(--line);border-radius:4px;padding:4px 8px;back
 .tag-card.none{opacity:.45}
 .tag-card .cover{display:block;width:100%;aspect-ratio:16/9;border-radius:4px;background:var(--bg);overflow:hidden}
 .tag-card .cover img{width:100%;height:100%;object-fit:cover;display:block}
-.tag-meta{display:flex;align-items:center;gap:6px;margin-top:6px;min-width:0}
+.tag-meta{display:flex;align-items:baseline;gap:6px;margin-top:6px;min-width:0}
 .tag-name{flex:1;min-width:0;font-size:14px;font-weight:500;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tag-meta .n{font-size:12.5px;color:var(--muted)}
 .menu{position:fixed;z-index:20;min-width:180px;padding:4px;border:1px solid var(--strong-line);border-radius:4px;background:var(--surface);box-shadow:0 4px 16px rgba(0,0,0,.18);display:grid}
