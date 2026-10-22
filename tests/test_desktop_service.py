@@ -93,6 +93,10 @@ class DesktopServiceTests(unittest.TestCase):
         if background and worker:
             worker.join(5)
             self.assertFalse(worker.is_alive(), 'synthetic background worker did not finish')
+        warmer = self.service._warm_thread
+        if warmer:
+            warmer.join(5)
+            self.assertFalse(warmer.is_alive(), 'synthetic status check did not finish')
 
     def session(self, ident='synthetic-1', **extra):
         path = self.vault / '场次' / (ident + ' fixture')
@@ -103,6 +107,79 @@ class DesktopServiceTests(unittest.TestCase):
         data.update(extra)
         bridge.recorder.write(path / 'session.json', data)
         return bridge.recorder.Session(path)
+
+    def test_session_list_status_does_not_hold_the_service_lock(self):
+        """触发路径：用户 → 主窗口打开时场次列表正在逐场读取整理状态 → 同时查看麦克风音量或点结束录制 → 这些操作不等列表读完 → 不修会被锁挡住直到 45 场读完（实测冷启动约 20 秒）。"""
+        self.session()
+        entered, release = threading.Event(), threading.Event()
+
+        def slow_status(folder, meta, store):
+            entered.set()
+            release.wait(5)
+            return dict(state='none'), False
+
+        with patch('agent_protocol.list_status', side_effect=slow_status):
+            poll = threading.Thread(target=self.service.get_state)
+            poll.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                began = time.monotonic()
+                self.assertTrue(self.service.get_microphone_state()['ok'])
+                with self.service._lock:
+                    pass
+                self.assertLess(time.monotonic() - began, .5)
+            finally:
+                release.set()
+                poll.join(5)
+
+    def test_start_chime_plays_once_only_after_obs_confirms_the_video(self):
+        """触发路径：用户 → 点开始录制后切回游戏 → OBS 确认录像开始 → 播放一声提示音，启动失败时不响 → 不修就必须盯着主窗口等状态变化。"""
+        session = self.session(test=False)
+        def confirmed_start(cfg, *, progress, mark=None, confirmed=None):
+            confirmed('recording')
+            return session
+        with patch.object(self.service, '_play_start_chime') as chime, \
+             patch.object(bridge.recorder.Session, 'start', side_effect=confirmed_start):
+            self.assertTrue(self.service.start_recording({})['ok'])
+            self.wait()
+        chime.assert_called_once_with()
+        self.service._active = None
+        self.service._activity.update(busy=False, kind='idle')
+        with patch.object(self.service, '_play_start_chime') as chime, \
+             patch.object(bridge.recorder.Session, 'start', side_effect=RuntimeError('OBS 录制源未能就绪，已取消开始。')):
+            self.assertTrue(self.service.start_recording({})['ok'])
+            self.wait()
+        chime.assert_not_called()
+
+    def test_start_chime_is_short_and_quiet(self):
+        """触发路径：用户 → 开着游戏声音或戴耳机开始录制 → 提示音不刺耳、不盖过游戏 → 不修会让每次开始都被一声响亮的蜂鸣打断。"""
+        import io
+        import struct
+        import wave
+        with wave.open(io.BytesIO(bridge._start_chime())) as chime:
+            frames = chime.readframes(chime.getnframes())
+            seconds = chime.getnframes() / chime.getframerate()
+        peak = max(abs(value) for (value,) in struct.iter_unpack('<h', frames)) / 32767
+        self.assertLess(seconds, .3)
+        self.assertLess(peak, .2)
+        self.assertGreater(peak, .02)
+
+    def test_readiness_records_stage_durations_without_settings(self):
+        """触发路径：用户 → 切回主窗口触发就绪检查 → 等待“开始录制”可点 → 本机 state/timings.jsonl 记下各阶段耗时供定位 → 不修就无法确认等待花在哪一步。"""
+        self.assertTrue(self.service._request_readiness(invalidate=True))
+        self.wait()
+        lines = (self.root / 'state/timings.jsonl').read_text(encoding='utf-8').splitlines()
+        record = json.loads(lines[-1])
+        self.assertEqual(record['kind'], 'readiness')
+        stages = [name for name, _ in record['stages']]
+        self.assertEqual(stages[0], 'queued')
+        self.assertIn('location', stages)
+        self.assertTrue(all(type(ms) is int and ms >= 0 for _, ms in record['stages']))
+        for private in (str(self.vault), 'window-id', 'mic-id', 'private-obs-password', 'Synthetic'):
+            self.assertNotIn(private, lines[-1])
+        self.assertTrue(self.service._request_readiness())
+        self.wait()
+        self.assertEqual(len((self.root / 'state/timings.jsonl').read_text(encoding='utf-8').splitlines()), len(lines))
 
     def fresh_shared_vault(self):
         self.service.root = self.root / 'recorder-version'
@@ -254,7 +331,7 @@ class DesktopServiceTests(unittest.TestCase):
             stages.append(self.service.get_state()['data']['activity']['status'])
             return {'ready': True}
 
-        def start(cfg, *, progress):
+        def start(cfg, *, progress, mark=None, confirmed=None):
             for stage in ('正在启动录像', '正在准备操作记录'):
                 progress(stage)
                 stages.append(self.service.get_state()['data']['activity']['status'])
@@ -378,7 +455,7 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertFalse(self.service.close_allowed())
 
     def test_start_lost_acknowledgement_preserves_uncertain_ownership(self):
-        def failed_start(cfg, *, progress=None):
+        def failed_start(cfg, *, progress=None, mark=None, confirmed=None):
             self.session('new-start', state='失败', test=False, error='acknowledgement lost')
             raise ConnectionError('lost start acknowledgement')
         with patch.object(bridge.recorder.Session, 'start', side_effect=failed_start):
@@ -639,7 +716,7 @@ class DesktopServiceTests(unittest.TestCase):
         entered, release = threading.Event(), threading.Event()
         self.addCleanup(release.set)
 
-        def finishing_stop():
+        def finishing_stop(mark=None):
             entered.set()
             self.assertTrue(release.wait(5))
 
@@ -1030,7 +1107,7 @@ class DesktopServiceTests(unittest.TestCase):
                 errors.append(error)
 
         thread = threading.Thread(target=finish)
-        with patch.object(session, 'stop', side_effect=lambda: (entered.set(), release.wait(3))) as stop:
+        with patch.object(session, 'stop', side_effect=lambda mark=None: (entered.set(), release.wait(3))) as stop:
             try:
                 thread.start()
                 self.assertTrue(entered.wait(2))

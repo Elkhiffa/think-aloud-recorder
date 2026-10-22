@@ -13,6 +13,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import threading
 import time
 import uuid
@@ -27,6 +28,8 @@ FILES = ('录像.mp4', '口述.flac', '录像.whisper.json',
 MAX_RESULT = 2 * 1024 * 1024
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
+STATUS_CACHE_VERSION = 1
+CHECKING = dict(state='checking', label='核对中', reason='正在核对整理结果，完成后显示事件数。')
 
 
 def _path(folder, name):
@@ -1005,7 +1008,7 @@ def _digest(result):
     return dict(kinds=kinds, quote=quote, event_titles=titles)
 
 
-def _status(folder, meta):
+def _status(folder, meta, validate=True):
     meta, material, revision, complete = _identity(folder, meta)
     try:
         marker = _load(folder, READY)
@@ -1025,6 +1028,9 @@ def _status(folder, meta):
         return dict(state='stale', label='需重新预处理', reason='素材已更新，旧整理结果已保留。')
     if has_result:
         if _revision_matches(folder, raw.get('revision'), meta, material, revision, context):
+            if not validate:
+                # Path 1: the session list never presents an unvalidated result as complete.
+                return dict(CHECKING)
             result = validate_result(folder, raw, meta, material, revision)
             from event_edits import project
             try:
@@ -1052,32 +1058,161 @@ def _status(folder, meta):
     return dict(state='failed', label='预处理未完成', reason=str(job.get('reason') or '外部预处理没有完成。')[:2000])
 
 
+def _unavailable(folder):
+    try:
+        attempted = _path(folder, RESULT).exists() or _path(folder, STATE).exists()
+    except Exception:
+        attempted = False
+    return dict(state='invalid', label='预处理结果不可用', reason='结果格式或证据引用无效；原始录像仍可回看。') if attempted else dict(state='none')
+
+
+def _expiry(value):
+    return value.get('expires_at', value.get('reanalysis', {}).get('expires_at', time.time() + 86400))
+
+
+def _file_stat(path):
+    try:
+        info = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    return [info.st_size, info.st_mtime_ns, stat.S_ISREG(info.st_mode)]
+
+
+def _library_stats(folder, meta):
+    """Vault files a version 2 result is checked against: issues.json and the game catalog."""
+    from game_catalog import catalog_path
+    from issue_registry import FILE
+    vault = Path(folder).parent.parent
+    try:
+        catalog = _file_stat(catalog_path(vault, meta.get('game')))
+    except ValueError:
+        catalog = None
+    return [_file_stat(vault / FILE), catalog]
+
+
 def preprocessing_status(folder, meta=None, include_result=False):
     """Bounded cache: polling never re-reads an unchanged large sidecar."""
     try:
         meta, material, revision, complete = _identity(folder, meta)
         stats = _stats(folder, (READY, STATE, RESULT, 'experience-event-edits.json', ANALYSIS_CONTEXT))
         key = str(Path(folder).resolve())
-        signature = json.dumps([revision, complete, _current_analysis_context(meta), stats], sort_keys=True)
-        with _CACHE_LOCK:
-            cached = _CACHE.get(key)
-            if cached and cached[0] == signature and cached[1] > time.time():
-                value = cached[2]
-            else:
-                value = None
-        if value is None:
-            value = _status(folder, meta)
-            expiry = value.get('expires_at', value.get('reanalysis', {}).get('expires_at', time.time() + 86400))
-            with _CACHE_LOCK:
-                _CACHE[key] = (signature, expiry, value)
-                _CACHE.move_to_end(key)
-                while len(_CACHE) > 64:
-                    _CACHE.popitem(last=False)
-        return deepcopy(value if include_result else {k: v for k, v in value.items() if k != 'result'})
+        # Path 2: editing issues.json or the catalog through the CLI changes which tags and screens are valid.
+        signature = json.dumps([revision, complete, _current_analysis_context(meta), stats,
+                                _library_stats(key, meta)], sort_keys=True)
     except Exception:
         # Malformed optional output cannot suppress any recording from the UI.
+        return _unavailable(folder)
+    with _CACHE_LOCK:
+        cached = _CACHE.get(key)
+        if cached and cached[0] == signature and cached[1] > time.time():
+            value = cached[2]
+        else:
+            value = None
+    if value is None:
         try:
-            attempted = _path(folder, RESULT).exists() or _path(folder, STATE).exists()
+            value = _status(folder, meta)
         except Exception:
-            attempted = False
-        return dict(state='invalid', label='预处理结果不可用', reason='结果格式或证据引用无效；原始录像仍可回看。') if attempted else dict(state='none')
+            # Path 1: an invalid result stays invalid until one of its files changes; polling does not revalidate it.
+            value = _unavailable(folder)
+        with _CACHE_LOCK:
+            _CACHE[key] = (signature, _expiry(value), value)
+            _CACHE.move_to_end(key)
+            while len(_CACHE) > 64:
+                _CACHE.popitem(last=False)
+    return deepcopy(value if include_result else {k: v for k, v in value.items() if k != 'result'})
+
+
+def _list_signature(folder, meta):
+    """Stats only: any change to session.json, a source, a sidecar or the vault references misses."""
+    folder = Path(folder)
+    names = ('session.json', *FILES, 'input-events.corrections.json', READY, STATE, RESULT,
+             'experience-event-edits.json', ANALYSIS_CONTEXT)
+    return json.dumps([STATUS_CACHE_VERSION, {name: _file_stat(folder / name) for name in names},
+                       _library_stats(folder, meta)], sort_keys=True)
+
+
+class StatusStore:
+    """Slim list statuses kept in the app state directory, never in the vault."""
+
+    def __init__(self, path, version):
+        self.path = Path(path)
+        self.version = str(version)
+        self._lock = threading.Lock()
+        self._entries = {}
+        self._dirty = False
+        try:
+            data = json.loads(self.path.read_text(encoding='utf-8'))
+            if isinstance(data, dict) and data.get('version') == self.version and isinstance(data.get('entries'), dict):
+                # Path 5: a damaged entry is dropped instead of breaking every later save.
+                self._entries = {key: entry for key, entry in data['entries'].items()
+                                 if isinstance(entry, list) and len(entry) == 3 and isinstance(entry[2], dict)}
+        except (OSError, ValueError):
+            # Path 4/5: a missing, partial or older-version cache only means a fresh check.
+            pass
+
+    def get(self, key, signature):
+        with self._lock:
+            entry = self._entries.get(key)
+        if (isinstance(entry, list) and len(entry) == 3 and entry[0] == signature
+                and (entry[1] is None or _number(entry[1]) and entry[1] > time.time())
+                and isinstance(entry[2], dict)):
+            return deepcopy(entry[2])
+        return None
+
+    def put(self, key, signature, value):
+        value = {k: v for k, v in value.items() if k != 'result'}
+        with self._lock:
+            entry = self._entries.get(key)
+            if value.get('state') == 'checking' and entry and entry[0] == signature:
+                # A poll racing the background check keeps the check's answer.
+                return
+            self._entries.pop(key, None)
+            # Only leases expire; every other status changes only with a file in the signature.
+            expiry = value.get('expires_at', value.get('reanalysis', {}).get('expires_at'))
+            self._entries[key] = [signature, expiry, value]
+            while len(self._entries) > 2000:
+                self._entries.pop(next(iter(self._entries)))
+            self._dirty = True
+
+    def save(self):
+        with self._lock:
+            if not self._dirty:
+                return
+            entries = {key: entry for key, entry in self._entries.items() if entry[2].get('state') != 'checking'}
+            content = json.dumps(dict(version=self.version, entries=entries), ensure_ascii=False)
+            self._dirty = False
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(self.path.name + '.' + uuid.uuid4().hex + '.tmp')
+        try:
+            tmp.write_text(content, encoding='utf-8')
+            os.replace(tmp, self.path)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+
+def list_status(folder, meta, store):
+    """Session-list status without validating a result: (value, needs_check)."""
+    key = str(folder)
+    try:
+        signature = _list_signature(folder, meta)
+    except Exception:
+        # Path 5: a file the signature cannot stat gets the same answer as the full status.
+        return preprocessing_status(folder, meta), False
+    value = store.get(key, signature)
+    if value is None:
+        try:
+            # Path 1: a worker may rewrite session.json during the scan; read it after the
+            # signature so any later write misses instead of caching an older answer.
+            value = _status(folder, _load(folder, 'session.json', 1024 * 1024), validate=False)
+        except Exception:
+            value = _unavailable(folder)
+        # Polls during the check reuse the same answer instead of re-reading the result.
+        store.put(key, signature, value)
+    return value, value.get('state') == 'checking'
+
+
+def warm_status(folder, store):
+    """Full validation for one listed session, recorded under the signature read before it."""
+    signature = _list_signature(folder, _load(folder, 'session.json', 1024 * 1024))
+    meta = _load(folder, 'session.json', 1024 * 1024)
+    store.put(str(folder), signature, preprocessing_status(folder, meta))

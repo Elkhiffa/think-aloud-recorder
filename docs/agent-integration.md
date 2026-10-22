@@ -120,7 +120,22 @@ catalog-confirm VAULT GAME --proposed NAME (--new ID [--name NAME] | --into ID)
 
 资料库根目录的 `tags.json` 是洞察窗口“界面库”的标签：`{version:1, groups:[{id,name}], tags:[{id,name,group,keywords:[],cover?:{session_id,at}}], activities:{"场次/活动编号":[标签]}, assignments:{"场次/实例":{add:[],remove:[]}}}`。一条证据的标签 = 所在活动的标签 ∪ 关键词命中（只看证据所在界面：目录里有的看正式编号，旧写法只用于对应；目录里没有的看原始写法；跳转路径不参与）∪ add − remove。`tags-report VAULT` 列出各标签条数、没有标签的证据和没打标签的活动，`tags-write VAULT --file F` 校验后整份写入；封面由用户在洞察窗口右键证据卡设置。`feedback-list VAULT [--open]` 读出用户在洞察窗口留下的反馈（资料库根目录 `feedback.json`，每条有 `id`、`target`（`{kind:"issue",id}`、`{kind:"instance",session_id,instance_id,issue?}` 或 `{kind:"tag",id}`）、`text`、`status` 和处理说明），`feedback-resolve VAULT ID --note TEXT` 标记已处理。`issues-dismiss` 只用于候选议题（没有下级、没有场次结果直接带这个标签）：移除该议题及其全部对应，场次结果不变。`bug-hits` 列出记录者本人原话中含 “bug”、“Cocos”、“引擎”、“报错”、“闪退”、“重叠”、“裁切”、“适配”、“歪了”、“偏了”、“偶现”、“不显示”、“没显示”、“超框”、“看不全”、“悬空”、“标错”（不分大小写；只是候选，是否算 bug 由 agent 判断）的转写段落；有说话人标注时只认记录者，没有标注时整段视为记录者。每条按原话引用对上实例，state 为 linked（实例已挂 BUG 或其子议题）、instance（成了实例但未挂）或 raw（没有成为实例）。
 
-洞察报告由跨场次分析 agent 写入资料库根目录的 `洞察/*.md`（单个不超过 1 MB）；工具不撰写报告，只在洞察窗口展示并核对引用。实例引用写作 `[0924 i72](i:SESSION_ID/i72#TA-04.5)`，`#` 后可选写明证据所属议题；议题引用写作 `[TA-04.5](issue:TA-04.5)`。`insight-validate` 返回引用总数和找不到的引用（实例不存在、场次未完成整理或议题不存在）。
+洞察报告由跨场次分析 agent 写入资料库根目录的 `洞察/*.md`（单个不超过 1 MB）；工具不撰写报告，只在洞察窗口展示并核对引用。实例引用写作 `[0924 i72](i:SESSION_ID/i72#TA-04.5)`，`#` 后可选写明证据所属议题；议题引用写作 `[TA-04.5](issue:TA-04.5)`。`insight-validate` 返回以下几项：
+- `citations`：引用总数；
+- `unresolved`：找不到的引用（实例不存在、场次未完成整理或议题不存在）；
+- `quotes_checked`：核对过的原话条数；
+- `quotes_unverified`：对不上的原话。
+- `anchors_unlinked`：`#` 后写的议题上并没有挂这条证据，洞察窗口会落到这条证据的其他卡片上。
+
+原话核对的范围和规则（几段连写在同一个引用前面的原话都核对）：
+- 只核对紧跟在实例引用前面的“……”原话，并和该实例的转写原文比对；
+- 可以用省略号节选，标点和空白不比；
+- 报告附录“转写修正”表（标题里有“转写修正”四个字；表头 `| 原文 | 改成 | 依据 | 引用 |`）里登记过的改字，套用到原文上之后算一致；
+- 仍对不上的，列进 `quotes_unverified`。
+
+`unresolved`、`quotes_unverified`、`anchors_unlinked` 都为空才算通过；命令本身照常返回 ok。洞察窗口只认这两种链接，`#锚点` 式的页内链接会显示成普通文字。报告的写法（按分析简报从上往下写、结构写回议题树）见 `skills/think-aloud-insight/`。
+
+跨场次分析 skill `skills/think-aloud-insight` 和单场次整理 skill `skills/think-aloud-judgments` 的安装方法和 preprocess 相同：把整个目录复制到所用 agent 的技能目录。软件更新不会同步这些副本。
 
 ### 本地情景轨道与界面目录
 

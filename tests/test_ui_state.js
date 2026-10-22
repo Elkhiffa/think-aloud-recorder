@@ -121,6 +121,17 @@ test('latest session: external preprocessing labels never change recording state
   assert.equal(titles.size,1,'the external label never replaces the session title');assert.doesNotMatch([...titles][0],/外部/);
 });
 
+test('latest session: a result still being checked shows a note, never the hand-off, until it is validated',async()=>{
+  // 触发路径：用户 → 启动记录器 → 场次列表先返回、整理结果在后台核对（state=checking）→ 上一场显示“正在核对” → 不修会显示“待整理”和“复制整理指令”。
+  const checking={id:'checked',game:'Game',state:'可回看',can_review:true,path:'D:\\Saved\\sessions\\checked',preprocessing:{state:'checking',label:'核对中'}};
+  const f=await fixture(snapshot({sessions:[checking]}));const last=f.elements.get('lastSession');
+  assert.match(last.innerHTML,/正在核对整理结果/);
+  assert.doesNotMatch(last.innerHTML,/data-copy-handoff|待整理/);
+  assert.equal(findTag(last,'data-last-review','checked').disabled,false);
+  f.data.snapshot.sessions=[{...checking,preprocessing:{state:'complete',kinds:{obstacle:2,confusion:1}}}];await f.run('poll()');
+  assert.doesNotMatch(last.innerHTML,/正在核对/);assert.match(last.innerHTML,/class="kleg"/);
+});
+
 test('latest session: handoff copy names the session folder; start and retry transcription need confirmation',async()=>{
   const ready={id:'ready',game:'Game',state:'可回看',can_review:true,path:'D:\\Saved\\sessions\\ready',preprocessing:{state:'none'}};
   const f=await fixture(snapshot({sessions:[ready]}));const last=f.elements.get('lastSession');
@@ -258,7 +269,7 @@ const GAME_PAYLOAD_KEYS=['name','game','window','vault','hotword_manual','game_h
 const mergeFiles=(general,game)=>{const seen=new Set();return [...general,...game].filter(file=>file&&!seen.has(file.id)&&seen.add(file.id));};
 async function settle(){for(let i=0;i<5;i++)await new Promise(resolve=>setImmediate(resolve));}
 async function fixture(initial=snapshot()) {
-  const {document,elements}=fakeDOM();const calls=[];const data={snapshot:initial,inventorySequence:0,holdInventory:initial.device_inventory?.state==='idle'};
+  const {document,elements}=fakeDOM();const calls=[],timers=[];const data={snapshot:initial,inventorySequence:0,holdInventory:initial.device_inventory?.state==='idle'};
   // Plausible bridge: save_general merges shared keys into every game's config; save_preset stores one game.
   function saveGeneral(payload){
     const allowed=new Set([...GENERAL_KEYS,'general_hotword_files','expected_vocabulary_revision','library_root']);
@@ -283,10 +294,10 @@ async function fixture(initial=snapshot()) {
     return {ok:true,data:{id}};
   }
   const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});if(name==='get_state')return {ok:true,data:JSON.parse(JSON.stringify(data.snapshot))};if(name==='refresh_device_inventory'){if(data.inventoryHandler)return data.inventoryHandler();const id='inventory-'+(++data.inventorySequence);data.snapshot.device_inventory={id,state:data.holdInventory?'running':'succeeded',window_selection:data.snapshot.device_inventory?.window_selection||data.snapshot.readiness?.window_selection};return data.inventoryResult||{ok:true,data:{inventory_id:id}};}if(name==='refresh_devices')return data.refreshResult||{ok:true,data:{started:true,refresh_id:'refresh-1'}};if(name==='choose_directory')return {ok:true,data:{path:data.chosenDirectory||null}};if(name==='choose_hotword_files')return data.dictionaryError?{ok:false,error:data.dictionaryError}:{ok:true,data:{files:data.chosenFiles||[]}};if(name==='save_general')return saveGeneral(plain(args[0]));if(name==='save_preset')return savePreset(plain(args[0]),args[1]);return {ok:true,data:{}};};}});
-  const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(){return 1;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},performance,console,matchMedia:()=>({matches:false,addEventListener(){}}),getComputedStyle:()=>({getPropertyValue:()=>''}),navigator:{clipboard:{writeText:async text=>{data.clipboard=text;}}}});
+  const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){},setItem(){}},setTimeout(fn,ms){timers.push({fn,ms});return timers.length;},clearTimeout(){},setInterval(){},CSS:{escape:x=>x},performance,console,matchMedia:()=>({matches:false,addEventListener(){}}),getComputedStyle:()=>({getPropertyValue:()=>''}),navigator:{clipboard:{writeText:async text=>{data.clipboard=text;}}}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/state.js'),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/app.js'),'utf8'),context);
-  await settle();return {context,elements,calls,data,run:source=>vm.runInContext(source,context)};
+  await settle();return {context,elements,calls,timers,data,run:source=>vm.runInContext(source,context)};
 }
 
 test('actual UI opens first-use wizard; cancel does not persist or enable recording',async()=>{
@@ -849,4 +860,20 @@ test('last update failure and recovery details remain separate from idle discove
   assert.equal(f.elements.get('updateRecoveryValue').value,'synthetic recovery file');
   await f.run('poll()');assert.equal(f.elements.get('updateLastTitle').textContent,'上次更新需要恢复');
   assert.equal(f.calls.some(c=>c.name==='update_action'),false);
+});
+
+test('a running readiness check is followed closely for a bounded time, then the 1 s rhythm resumes',async()=>{
+  // 触发路径：用户 → 切回主窗口 → 后台就绪检查约 0.1 s 完成 → 界面 250 ms 后再取一次状态并启用“开始录制”，最多补 12 次 → 不修要等下一次 1 s 轮询才能开始。
+  const f=await fixture(snapshot({readiness:{ready:false,checking:true,errors:[]}}));
+  const followUps=()=>f.timers.filter(timer=>timer.ms===250);
+  assert.equal(followUps().length,1);
+  await f.run('poll()');await f.run('poll()');
+  assert.equal(followUps().length,1);
+  const before=f.calls.filter(call=>call.name==='get_state').length;
+  for(let ran=0;ran<followUps().length;ran++){followUps()[ran].fn();await settle();}
+  assert.equal(followUps().length,12);
+  assert.equal(f.calls.filter(call=>call.name==='get_state').length,before+12);
+  f.data.snapshot.readiness={ready:true,checking:false,errors:[]};await f.run('poll()');
+  f.data.snapshot.readiness={ready:false,checking:true,errors:[]};await f.run('poll()');
+  assert.equal(followUps().length,13);
 });

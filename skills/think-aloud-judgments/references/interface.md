@@ -19,7 +19,20 @@
 "$PY" -B -X utf8 agent_cli.py submit "$SESSION" --token "$TOKEN" --file "$WORK/result.json"
 "$PY" -B -X utf8 agent_cli.py status "$SESSION"
 "$PY" -B -X utf8 agent_cli.py fail "$SESSION" --token "$TOKEN" --reason "<原因>"
+"$PY" -B -X utf8 agent_cli.py name-activities "$SESSION"                                   # 提交后读命名上下文
+"$PY" -B -X utf8 agent_cli.py name-activities "$SESSION" --file "$WORK/naming.json"          # 预览
+"$PY" -B -X utf8 agent_cli.py name-activities "$SESSION" --file "$WORK/naming.json" --apply  # 写入
 ```
+
+命名候选 `naming.json`。`session_id`、`revision`、`result_sha256`、`expected_name` 照抄第一条命令的返回值；`expected_name` 是读取时的原始名称，未命名时为 `""`：
+
+```json
+{"version": 1, "session_id": "...", "revision": "...", "result_sha256": "...", "expected_name": "",
+ "worker": "<会话标识>", "title": "渡尘墟入门与两局尝试",
+ "activities": [{"name": "渡尘墟", "event_ids": ["e01", "e02"]}, {"name": "据点仓库与备战", "event_ids": ["e05"]}]}
+```
+
+返回 `can_auto_name: false` 表示记录者手动写过标题：标题会原样保留，详情照常更新。
 
 所有命令输出 UTF-8 JSON：成功是 `{ok:true,data:...}`，失败是 `{ok:false,error:...}`。令牌不要写进任何文档。时间一律是“相对录像开始的秒数”。
 

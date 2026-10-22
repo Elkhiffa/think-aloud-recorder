@@ -1393,6 +1393,16 @@ async function deskChecks(context, origin) {
     assert.deepEqual((await page.evaluate(() => window.__deskFixture.calls.map(call => call.method))).filter(name => name.startsWith('win_')), ['win_minimize', 'win_toggle_maximize', 'win_close']);
   });
   await page.close();
+  await check('a session whose result is still being checked reads 核对中 and counts as neither organized nor waiting', async () => {
+    // 触发路径：用户 → 打开资料台 → 场次列表先返回、结果在后台核对（state=checking）→ 状态列“核对中” → 不修会被算进“待整理”。
+    const sessions = deskSessions().map(row => row.id === 'd1' ? { ...row, preprocessing: { state: 'checking', label: '核对中' } } : row);
+    const p = await deskPage(context, origin, deskState({ sessions }));
+    try {
+      assert.equal(await p.locator('#sessionScroll [data-session="d1"] .c-st').innerText(), '核对中');
+      assert.equal(await p.locator('#sessionScroll [data-session="d1"] .pc b').count(), 0, 'no problem count before the result is validated');
+      assert.deepEqual(await p.locator('#stateChips button').evaluateAll(n => n.map(x => x.textContent)), ['全部 5', '已整理 2', '待整理 0', '转写中 1', '失败 1']);
+    } finally { await p.close(); }
+  });
   await check('desk opens on the requested tab and fits its 960×600 minimum', async () => {
     const p = await deskPage(context, origin, deskState({ tab: 'insight' }), { width: 960, height: 600 });
     try {
