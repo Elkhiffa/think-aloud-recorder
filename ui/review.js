@@ -857,9 +857,6 @@
   }
 
     function renderInput(time){
-      const windowState=windowStateAt(windowIndex,time);
-      $('inputFocusState').hidden=source.recording_scope!=='all';
-      $('inputFocusState').textContent=({foreground:'游戏在前台',background:'游戏在后台',unknown:'窗口状态未知'})[windowState];
       const gaps=intervalsInRange(gapIndex,time,time+.000001),gap=gaps[0];
       // A disconnected controller can coexist with valid keyboard input. The
       // capture layer filters missing spans; never erase another device here.
@@ -871,8 +868,7 @@
       const key=[state.mode,device,message,...active.map(item=>item.id+':'+item.active)].join('|');
       if(state.mode==='device'&&(key!==state.lastInput||active.some(item=>!item.active)))renderDevice(device,active,time);
       if(key===state.lastInput)return;state.lastInput=key;
-      $('inputSource').textContent=source.intervals.length?deviceName(device):'操作记录';$('inputSource').hidden=state.device!=='auto';
-      $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):active.length?'':'最近 2 秒无操作';
+            $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):'';
       $('inputState').classList.toggle('is-gap',!!gap);$('inputState').title=message;
       $('currentKeys').hidden=state.mode!=='keys'||!!message;$('deviceView').hidden=state.mode!=='device'||!!message;
       if(state.mode==='device')fitDevice();
