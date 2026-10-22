@@ -4,11 +4,19 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 没有 agent 时，完成的场次照常显示“可回看”。领取、预处理失败、过期或损坏均不会改变录制/转写状态。只有当前素材版本的有效结果才显示“体验事件”页签；事件及证据可定位原始录像。问题无需回答即可完成预处理。
 
-## 手动发起一次预处理
+## 手动发起一次整理
 
 默认由用户控制发起时机：结束一段录制，并等转写和文件整理完成后，把该场次文件夹路径交给外部会话。单次任务完成即结束，不需要定时检查资料库。录制中的场次或仅视频先就绪的场次不应进入预处理。
 
-将源码中的整个 `skills/think-aloud-preprocess` 目录安装到所用 agent 的技能目录后，可使用下面的提示词。软件更新不会同步这个独立副本，更新方法见下方“Skill 安装与更新”。回看顶部复制按钮的下拉菜单提供「复制场次文件夹路径」。这里的路径应指向包含 `session.json`、录像和逐字稿的具体场次文件夹，而不是整个资料库；接口会检查真实整理状态和当前素材版本。
+将源码中的单场整理 skill `skills/think-aloud-judgments` 整个目录安装到所用 agent 的技能目录后，可使用下面的提示词；它就是主窗口“上一场”和资料台场次详情里「复制整理指令」复制出来的内容。软件更新不会同步这个独立副本，更新方法见下方“Skill 安装与更新”。回看顶部复制按钮的下拉菜单提供「复制场次文件夹路径」。这里的路径应指向包含 `session.json`、录像和逐字稿的具体场次文件夹，而不是整个资料库；接口会检查真实整理状态和当前素材版本。
+
+```text
+请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。
+场次文件夹：【粘贴当前场次文件夹路径】
+只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。
+```
+
+跨场次的议题归类和报告用 `skills/think-aloud-insight`，由用户确认分析简报后另行发起。旧的 `think-aloud-preprocess`（体验事件、想法和可选问题）已由这两份 skill 取代；它的场次命名接口说明仍在源码 `skills/think-aloud-preprocess/references/activity-naming.md`。下面是旧预处理提示词，只用于对照旧结果：
 
 ```text
 使用 $think-aloud-preprocess，对这个 Think Aloud 场次做一次预处理：
@@ -30,7 +38,7 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 应用、仓库中的方法文档和 agent 已安装的 Skill 是三个独立对象。安装包升级成功，不表示 Skill 副本已更新；仓库文档可能在应用版本不变时继续澄清方法。不要仅用相同的软件版本号判断它们是否一致。
 
-1. 确定源码提交，取得该提交的整个 `skills/think-aloud-preprocess` 目录；使用 Skill 安装器时指定固定的 `ref`。已安装的目录先复制备份到技能目录之外，避免把备份也作为第二份 Skill 加载。先比较原副本与来源：存在本地定制时保留并审阅，不直接覆盖。
+1. 确定源码提交，取得该提交的 `skills/think-aloud-judgments` 和 `skills/think-aloud-insight` 两个完整目录；使用 Skill 安装器时指定固定的 `ref`。已安装的目录先复制备份到技能目录之外，避免把备份也作为第二份 Skill 加载。先比较原副本与来源：存在本地定制时保留并审阅，不直接覆盖。
 2. 一并同步 `SKILL.md`、`references/protocol.md` 和 `agents/openai.yaml`，以及未来由该 Skill 引用的其他资源。只更新主文档可能继续引用旧协议。不要替换无关 Skill、修改 agent 配置或删除用户添加的文件。
 3. 保存来源提交、旧副本备份位置和安装前后逐文件 SHA256；与实际取得的来源文件核对。用目标应用的 `app/agent_cli.py --help` 确认文档所需入口，必要时再检查子命令。比如 `quote_words` 需要应用 0.6.10，追加预算及高清请求需要 0.6.9；缺少入口时先升级应用，不修改原始素材来绕过兼容限制。
 4. 新副本在后续轮次中可用；正在进行的会话若要采用新方法，应明确读取更新后的主文档及引用资源，并记下实际采用的来源提交。磁盘文件一致、会话读过文档、按规则执行和分析效果达标分别验收，不能互相替代。不因安装 Skill 而重做已有结果。
@@ -135,7 +143,7 @@ catalog-confirm VAULT GAME --proposed NAME (--new ID [--name NAME] | --into ID)
 
 `unresolved`、`quotes_unverified`、`anchors_unlinked` 都为空才算通过；命令本身照常返回 ok。洞察窗口只认这两种链接，`#锚点` 式的页内链接会显示成普通文字。报告的写法（按分析简报从上往下写、结构写回议题树）见 `skills/think-aloud-insight/`。
 
-跨场次分析 skill `skills/think-aloud-insight` 和单场次整理 skill `skills/think-aloud-judgments` 的安装方法和 preprocess 相同：把整个目录复制到所用 agent 的技能目录。软件更新不会同步这些副本。
+跨场次分析 skill `skills/think-aloud-insight` 和单场次整理 skill `skills/think-aloud-judgments` 按上文“Skill 安装与更新”安装：把整个目录复制到所用 agent 的技能目录。软件更新不会同步这些副本。
 
 ### 本地情景轨道与界面目录
 
