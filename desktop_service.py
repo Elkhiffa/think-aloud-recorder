@@ -41,6 +41,8 @@ PRESET_KEYS = ('preset', 'source', 'window', 'monitor', 'mic', 'language', 'hotw
 GENERAL_KEYS = ('source', 'monitor', 'mic', 'preset', 'language', 'transcription_provider', 'record_inputs')
 SUSPECT_STATES = {'录制中', '启动中', '保存中'}
 READINESS_MAX_AGE = 15
+# The two analysis skills' install steps; the in-app usage guide links here.
+SKILL_GUIDE = 'https://github.com/Elkhiffa/think-aloud-recorder/blob/main/docs/agent-integration.md#skill-安装与更新'
 
 
 _CHIME = None
@@ -1590,6 +1592,15 @@ class DesktopService:
             return ok({'requested': True})
         except Exception:
             return self._error('未能请求浏览器打开百炼控制台。')
+
+    def open_skill_guide(self):
+        """Open only the fixed skill install guide in the repository; never pass state."""
+        try:
+            if not webbrowser.open(SKILL_GUIDE):
+                raise RuntimeError('未能请求浏览器打开 skill 安装说明。')
+            return ok({'requested': True})
+        except Exception:
+            return self._error('未能请求浏览器打开 skill 安装说明。')
 
     def _require_transcription(self, cfg, allow_later=False):
         provider = cfg.get('transcription_provider', 'later')

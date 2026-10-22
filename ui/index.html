@@ -29,15 +29,20 @@
     <div class="device-bar hidden" id="deviceBar"><div class="inline-between"><span id="deviceFeedback" role="status">只列出当前实际检测到的设备。</span><button class="link" id="refreshDevices" type="button">刷新设备</button></div><div class="inline-between"><span class="hidden" id="engineFeedback"></span><button class="link hidden" id="reconnectEngine" type="button">重新连接录制引擎</button></div></div>
     <div class="panel hidden" id="panelMethod">
       <div id="methodContent" class="method-content">
-        <p class="method-lead">边体验，边说出你在想什么。</p>
-        <p class="method-description">录下你看到的画面，也留下当时的判断与感受。可以像这样，自然地说：</p>
+        <div class="method-main">
+          <section class="method-part"><p class="method-lead">边体验，边说出你在想什么。</p>
+            <p class="method-description">录下你看到的画面，也留下当时的判断与感受。可以像右边这样，自然地说。</p>
+            <p class="method-note"><strong>说当下的真实想法就好。</strong>可以停顿、犹豫，也可以改口。不必持续说话，不必把每个操作都念出来；困惑、预期落差和情绪，同样值得留下。</p></section>
+          <section class="method-part"><p class="method-lead">录完以后</p>
+            <p class="method-description">转写完成后，交给 Codex 或 Claude 整理：单场用 <span class="skill-name">think-aloud-judgments</span>，跨场次用 <span class="skill-name">think-aloud-insight</span>。首次使用前先安装。</p>
+            <button class="link" type="button" data-open-skill-guide>查看 skill 安装方法</button></section>
+        </div>
         <div class="method-grid">
           <article class="method-card"><h3>观察</h3><p>“这个入口很显眼，但我没找到返回的地方。”</p></article>
           <article class="method-card"><h3>理解</h3><p>“我猜这个标记表示任务还没完成。”</p></article>
           <article class="method-card"><h3>行动</h3><p>“我想先绕到右边，看看有没有别的路线。”</p></article>
           <article class="method-card"><h3>感受</h3><p>“原来点这里就能过去，比我预想的简单。”</p></article>
         </div>
-        <p class="method-note"><strong>说当下的真实想法就好。</strong>可以停顿、犹豫，也可以改口。不必持续说话，不必把每个操作都念出来；困惑、预期落差和情绪，同样值得留下。</p>
       </div>
     </div>
     <div class="panel" id="panelGame">

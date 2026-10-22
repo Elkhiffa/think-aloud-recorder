@@ -207,10 +207,17 @@ progress{width:100%;height:6px;accent-color:var(--ink)}
 .sheet-foot p{font-size:var(--t1);color:var(--ink)}
 .wizard .settings-only{display:none!important}
 /* 记录方法 */
-.method-lead{font:700 var(--t3)/1.35 var(--serif);margin-top:var(--s2)}
+/* 记录方法：左边是怎么说和录完以后，右边是四种说法；窄时上下排 */
+.method-content{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:var(--s5);align-items:start}
+.method-main{display:grid;gap:var(--s4)}
+.method-part{display:grid;gap:var(--s2);justify-items:start}
+.method-lead{font-weight:700}
 .method-description{color:var(--muted)}
-.method-grid{display:grid;grid-template-columns:1fr 1fr;gap:var(--s2);margin:var(--s4) 0}
+.skill-name{white-space:nowrap}
+.method-grid{display:grid;gap:var(--s2)}
 .method-card{padding:var(--s3) var(--s4);border-radius:var(--r-md);background:var(--sheet)}
+.action-dialog .method-card{background:var(--paper)}
+@media (max-width:600px){.method-content{grid-template-columns:minmax(0,1fr)}}
 .method-card h3{font-size:var(--t2);font-weight:700}
 .method-card p{color:var(--muted)}
 .method-note{color:var(--muted)}
@@ -222,7 +229,8 @@ progress{width:100%;height:6px;accent-color:var(--ink)}
 .action-body h2{font:700 var(--t3)/1.35 var(--serif)}
 .action-body label{color:var(--muted);font-size:var(--t1)}
 .action-footer{display:flex;justify-content:flex-end;gap:var(--s2);padding:0 var(--s5) var(--s5)}
-.action-dialog.method-dialog{max-width:min(640px,calc(100vw - 48px))}
+.action-dialog.method-dialog{width:calc(100vw - 32px);max-width:688px}
+.method-dialog .action-body{max-height:calc(100vh - 120px)}
 .vocabulary-words{columns:3;font-size:var(--t1);list-style:none}
 .error-text{color:var(--warn);font-size:var(--t1)}
 .secondary-button{display:inline-flex;align-items:center;height:32px;padding:0 var(--s4);border-radius:var(--r);background:var(--fill)}

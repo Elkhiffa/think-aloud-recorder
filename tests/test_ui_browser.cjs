@@ -596,6 +596,10 @@ async function homeChecks(context, origin) {
     assert.equal(await page.locator('#openVault').isVisible(), false);
     await page.locator('#methodButton').click(); await page.locator('#actionDialog[open]').waitFor();
     assert.equal(await page.locator('#actionBody .method-card').count(), 4);
+    await noHorizontalOverflow(page); await screen(page, 'method-dialog-720x520');
+    // 触发路径：用户 → 记录方法 → 查看 skill 安装方法 → 只请求打开固定的安装说明页。
+    await page.locator('#actionBody [data-open-skill-guide]').click();
+    assert.deepEqual((await calls(page, 'open_skill_guide')).map(call => call.args), [[]]);
     await page.locator('#actionFooter button').first().click();
     await openSettings(page, 'game');
     await page.locator('#openVault').click();
@@ -928,7 +932,9 @@ async function firstUseChecks(context, origin) {
     assert.deepEqual(await stepLabels(page), [{ text: '记录方法', on: true }, { text: '设备与转写', on: false }, { text: '游戏与窗口', on: false }, { text: '保存位置', on: false }]);
     assert.equal(await page.locator('#sheetTabs').isVisible(), false);
     assert.equal(await page.locator('.method-card:visible').count(), 4);
-    assert.ok((await box(page, '#methodContent .method-lead')).y < (await box(page, '#methodContent .method-grid')).y, 'core method precedes all examples and supporting copy');
+    const lead = await box(page, '#methodContent .method-part:first-child .method-lead'), grid = await box(page, '#methodContent .method-grid');
+    assert.ok(lead.x + lead.width <= grid.x || lead.y < grid.y, 'core method precedes all examples and supporting copy');
+    assert.equal(await page.locator('#panelMethod [data-open-skill-guide]').isVisible(), true, 'first launch also points at the skill install guide');
     assert.equal(await page.locator('#wizardNext').innerText(), '开始设置'); assert.equal(await page.locator('#wizardBack').isVisible(), false);
     await screen(page, 'first-method-720x520');
   });

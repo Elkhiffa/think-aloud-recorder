@@ -225,6 +225,8 @@ function openDesk(tab){const api=window.pywebview?.api;return api?.open_desk?act
 $('#openLibrary').onclick=event=>{event.preventDefault();openDesk('sessions');};
 $('#openInsight').onclick=event=>{event.preventDefault();openDesk('insight');};
 $('#footLibrary').onclick=()=>openDesk('sessions');$('#footInsight').onclick=()=>openDesk('insight');
+// The guide's skill link lives in the method text, which the dialog copies; one listener serves both copies.
+document.addEventListener('click',event=>{if(event.target.closest?.('[data-open-skill-guide]')){event.preventDefault();action('open_skill_guide');}});
 function showMicrophone(data={state:'connecting',level:0}){
  const states={
   connecting:['正在读取音量…','说句话，确认音量条随声音变化。'],
@@ -282,8 +284,8 @@ function renderControls(){renderHome();renderUpdates();renderUpdateBadge();const
  ['wizardCancel','wizardBack'].forEach(id=>$('#'+id).disabled=store.requestPending||saving);$('#reuseVault').disabled=fieldsLocked||store.snapshot?.default_vault?.is_directory===false;$('#wizardNext').disabled=locked&&!sheetOpen()||store.requestPending||saving||conflict||(currentStepKey()==='vault'||sheetMode==='settings'&&sheetTab==='game')&&store.needsVaultConfirmation;
  const m=store.snapshot?.model||{};$('#downloadModel').disabled=locked||saving||['verifying','ready'].includes(m.state);$('#existingModel').disabled=locked||saving||['downloading','verifying'].includes(m.state);$('#modelLocation').disabled=locked||saving||['downloading','verifying'].includes(m.state);$('#verifyCloud').disabled=locked||saving||!store.snapshot?.capabilities?.cloud_key||!!$('#cloudKey').value.trim();
  renderSheetFoot();}
-$('#methodButton').onclick=()=>showDialog('让想法跟上体验',$('#methodContent').innerHTML);
-$('#methodLink').onclick=()=>showDialog('让想法跟上体验',$('#methodContent').innerHTML);
+$('#methodButton').onclick=()=>showDialog('让想法跟上体验','<div class="method-content">'+$('#methodContent').innerHTML+'</div>');
+$('#methodLink').onclick=()=>showDialog('让想法跟上体验','<div class="method-content">'+$('#methodContent').innerHTML+'</div>');
 $('#recordButton').onclick=()=>{if(store.recording)action('stop_recording');else if(store.canStart)action('start_recording',[store.startPayload()]);};
 $('#openVault').onclick=()=>action('open_folder');
 $('#settingsButton').onclick=()=>{if(sheetOpen())return;openSheet(store.presets.length?'settings':'first','game');};

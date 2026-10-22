@@ -2476,6 +2476,16 @@ class DesktopServiceTests(unittest.TestCase):
         with patch.object(bridge.webbrowser, 'open', side_effect=OSError('synthetic failure')):
             self.assertFalse(self.service.open_bailian_console()['ok'])
 
+    def test_skill_guide_opens_only_the_fixed_repository_page(self):
+        # 触发路径：用户 → 记录方法（或首次设置第一步）→ 查看 skill 安装方法 → 浏览器打开仓库里的安装说明。
+        self.service._cfg['game'] = 'Private project name'
+        with patch.object(bridge.webbrowser, 'open', return_value=True) as browser:
+            self.assertEqual(self.service.open_skill_guide(), {'ok': True, 'data': {'requested': True}})
+        browser.assert_called_once_with(bridge.SKILL_GUIDE)
+        self.assertTrue(bridge.SKILL_GUIDE.startswith('https://github.com/Elkhiffa/think-aloud-recorder/'))
+        with patch.object(bridge.webbrowser, 'open', side_effect=OSError('synthetic failure')):
+            self.assertFalse(self.service.open_skill_guide()['ok'])
+
     def test_update_polling_is_read_only_and_never_checks_network(self):
         self.service.set_update_lifecycle(lambda:2,MagicMock())
         self.updates.snapshot.return_value['state']='ready'
