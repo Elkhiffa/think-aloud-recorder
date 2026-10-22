@@ -390,6 +390,9 @@ def evidence(folder, start=None, end=None):
         if end - start > 600:
             raise ValueError('每次最多读取 10 分钟的操作证据。')
     segments = _transcript(folder, duration)
+    import transcript_corrections
+    # Path 3: agents quote the confirmed wording (corrected_text) and still see the transcript (text).
+    transcript_corrections.annotate(folder, meta['id'], segments)
     inputs = _normalized_inputs(folder, meta, duration)
     from speaker_roles import speaker_payload
     speakers = speaker_payload(folder, meta, segments)
@@ -1037,6 +1040,12 @@ def _status(folder, meta, validate=True):
                 result, editing = project(folder, result, _file_hash(_path(folder, RESULT)))
             except (OSError, ValueError, TypeError):
                 editing = dict(error='手动校准记录无法读取，暂时显示原整理结果；校准文件已保留。')
+            import transcript_corrections
+            try:
+                # Path 3: quotes gain the user-confirmed wording beside the transcript; nothing is rewritten.
+                result = transcript_corrections.project(folder, result)
+            except (OSError, ValueError, TypeError, KeyError):
+                pass  # A damaged corrections file leaves quotes as transcribed; the file itself is kept.
             value = dict(state='complete', label=f'已预处理 · {len(result["events"])} 个事件',
                          events=len(result['events']), questions=len(result['questions']),
                          ideas=len(result['ideas']), instances=len(result.get('instances', [])), result=result, editing=editing,
@@ -1079,15 +1088,17 @@ def _file_stat(path):
 
 
 def _library_stats(folder, meta):
-    """Vault files a version 2 result is checked against: issues.json and the game catalog."""
+    """Vault files a version 2 result is checked against or projected with: issues.json, the game catalog and the
+    confirmed transcript corrections."""
     from game_catalog import catalog_path
     from issue_registry import FILE
+    import transcript_corrections
     vault = Path(folder).parent.parent
     try:
         catalog = _file_stat(catalog_path(vault, meta.get('game')))
     except ValueError:
         catalog = None
-    return [_file_stat(vault / FILE), catalog]
+    return [_file_stat(vault / FILE), catalog, _file_stat(vault / transcript_corrections.FILE)]
 
 
 def preprocessing_status(folder, meta=None, include_result=False):

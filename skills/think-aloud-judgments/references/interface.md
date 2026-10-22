@@ -14,7 +14,7 @@
 "$PY" -B -X utf8 agent_cli.py quote-words "$SESSION" --ref t000040      # 一条原话的逐词时间
 "$PY" -B -X utf8 agent_cli.py context-read "$SESSION" --start 300 --end 420 --compact  # 情景文字，合并相邻相同标题
 "$PY" -B -X utf8 agent_cli.py context-read "$SESSION" --start 330 --end 345            # 不合并，含每帧全部文字和坐标
-"$PY" -B -X utf8 agent_cli.py frame "$SESSION" --at 362.5 --output "$WORK/frames/f0362.5.png"  # 1920 宽截图；文件名不能重复
+"$PY" -B -X utf8 agent_cli.py frame "$SESSION" --at 362.5 --output "$WORK/frames/f0362.5.jpg"  # 默认 1280 宽 JPEG；看小字加 --width 1920；文件名不能重复
 "$PY" -B -X utf8 agent_cli.py validate "$SESSION" --file "$WORK/result.json"
 "$PY" -B -X utf8 agent_cli.py submit "$SESSION" --token "$TOKEN" --file "$WORK/result.json"
 "$PY" -B -X utf8 agent_cli.py status "$SESSION"
@@ -37,6 +37,16 @@
 所有命令输出 UTF-8 JSON：成功是 `{ok:true,data:...}`，失败是 `{ok:false,error:...}`。令牌不要写进任何文档。时间一律是“相对录像开始的秒数”。
 
 界面目录在 `VAULT/game-assets/<场次 session.json 的 game>/catalog.json`。每个界面的 `id` 是规范编号（按界面组命名，规则见 SKILL.md 第 4 步），`aliases` 是曾用过的其他写法，`path_note` 是带层级注释的路径。目录不存在时，界面全部按规则自行命名。
+
+**转写修正**：从上下文认出误转写时，提议给用户确认，不改逐字稿。写一份 UTF-8 JSON，再运行：
+
+```bash
+"$PY" -B -X utf8 agent_cli.py transcript-fix-propose "$VAULT" --file "$WORK/fixes.json" --worker "<会话标识>"
+```
+
+- 同一个词在别的场次也会这样误听（多是术语、玩法名，如 `左交`→`走焦`），写全库规则：`{"from":"左交","to":"走焦","basis":"上下文在讲手柄焦点移动"}`；
+- 只是这一句听错（常用词，如 `老师`→`老是`），写单处修正，加上 `"session_id"` 和 `"ref":"t000123"`；
+- 提议只写进资料库的 `transcript-corrections.json` 待确认，不改任何引用；用户确认后，引用自动带上 `corrected_text`。这是单场整理唯一可以写资料库根目录的地方，只能通过这条命令。
 
 情景文字是每 5 秒一帧的本地 OCR，有错字、会漏掉短暂状态，只能当线索。`frame` 截的是那一刻的静态画面，不证明前后过程。
 

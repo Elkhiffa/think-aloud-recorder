@@ -131,10 +131,12 @@ v2 保留 v1 的 session_id、revision、summary、coverage、events、questions
 issues-list VAULT
 issues-add VAULT --title TITLE [--id ID] [--status candidate|confirmed] [--parent ID]
 issues-update VAULT ID [--title TITLE] [--description TEXT] [--status candidate|confirmed]
+issues-update VAULT --file UPDATES.json   # [{id,title?,description?,status?}]，整批校验通过才写入
 issues-merge VAULT FROM_ID INTO_ID
 issues-dismiss VAULT ID
 issues-link VAULT --file LINKS.json | --issue ID --session SESSION --instance INSTANCE [--reason TEXT] [--role support|counter]
 issues-unlink VAULT ID --session SESSION --instance INSTANCE
+issues-unlink VAULT --file UNLINKS.json   # [{issue,session_id,instance_id}]，任何一条不存在整批都不写
 instances-query VAULT [--issue ID]... [--screen ID] [--element ID] [--kind KIND] [--session ID]
 bug-hits VAULT
 insight-validate VAULT REPORT
@@ -155,12 +157,32 @@ catalog-confirm VAULT GAME --proposed NAME (--new ID [--name NAME] | --into ID)
 原话核对的范围和规则（几段连写在同一个引用前面的原话都核对）：
 - 只核对紧跟在实例引用前面的“……”原话，并和该实例的转写原文比对；
 - 可以用省略号节选，标点和空白不比；
+- 和资料库里用户确认过的转写修正（见下文“转写修正”）一致的，算一致；
 - 报告附录“转写修正”表（标题里有“转写修正”四个字；表头 `| 原文 | 改成 | 依据 | 引用 |`）里登记过的改字，套用到原文上之后算一致；
 - 仍对不上的，列进 `quotes_unverified`。
 
 `unresolved`、`quotes_unverified`、`anchors_unlinked` 都为空才算通过；命令本身照常返回 ok。洞察窗口只认这两种链接，`#锚点` 式的页内链接会显示成普通文字。报告的写法（按分析简报从上往下写、结构写回议题树）见 `skills/think-aloud-insight/`。
 
 跨场次分析 skill `skills/think-aloud-insight` 和单场次整理 skill `skills/think-aloud-judgments` 按上文“Skill 安装与更新”安装：把整个目录复制到所用 agent 的技能目录。软件更新不会同步这些副本。
+
+### 转写修正
+
+agent 从上下文认出误转写（如 `左交`→`走焦`），提议修正，用户在对话里看过命中后确认。逐字稿从不改写；确认后，结果和证据里的原话在 `text`（转写原文）旁多一个 `corrected_text`（修正后的字），场次的素材版本不变，已有整理结果不会因此失效。
+
+资料库根目录的 `transcript-corrections.json` 保存 `{version:1, corrections:[{id, from, to, basis, status, proposed_by, proposed_at, decided_at?, session_id?, ref?, exclude?}]}`：
+
+- 带 `session_id` 和 `ref`（如 `t000123`）的是单处修正，只改这一段；不带的是全库规则，改所有场次里出现的这个词，`exclude` 列出它要跳过的段；
+- `status` 是 `proposed`（待确认，不生效）、`confirmed` 或 `rejected`；同一个原文不能有两条改法不同的已确认全库规则。
+
+```text
+transcript-fix-propose VAULT --file FIXES.json --worker NAME   # [{from,to,basis,session_id?,ref?}]；每条都要在逐字稿里有命中，整批校验通过才写入
+transcript-fix-list VAULT [--status proposed|confirmed|rejected|all] [--session ID]   # 每条修正连同它的全部命中（场次、段号、时间、原文、改后）
+transcript-fix-confirm VAULT ID [ID ...]
+transcript-fix-reject VAULT ID [ID ...]
+transcript-fix-exclude VAULT ID --session SESSION --ref REF   # 让全库规则跳过这一段
+```
+
+单场整理 agent 只能通过 `transcript-fix-propose` 写这个文件；确认和驳回由用户在对话里决定后执行。回看窗口里的确认入口还没做，以后读同一个文件。
 
 ### 本地情景轨道与界面目录
 

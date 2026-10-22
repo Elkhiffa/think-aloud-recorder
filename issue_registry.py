@@ -188,15 +188,28 @@ def link_instances(vault, rows):
 
 
 def unlink_instance(vault, issue, session_id, instance_id):
+    return unlink_instances(vault, [dict(issue=issue, session_id=session_id, instance_id=instance_id)])
+
+
+def unlink_instances(vault, rows):
+    """Remove issue -> instance links; every row must name an existing link before anything is written."""
+    if not isinstance(rows, list) or not rows:
+        raise ValueError('至少需要一条要撤下的议题对应。')
     with metadata_lock(vault):
         data = read_links(vault)
-        kept = [link for link in data['links']
-                if (link['issue'], link['session_id'], link['instance_id']) != (issue, session_id, instance_id)]
-        if len(kept) == len(data['links']):
-            raise ValueError('没有这条议题对应。')
-        data['links'] = kept
+        present = {(link['issue'], link['session_id'], link['instance_id']) for link in data['links']}
+        drop = set()
+        for row in rows:
+            # 路径 3：按简报写回议题树时，一次撤下一批不属于本议题的证据；任何一条对不上都不写。
+            if not isinstance(row, dict):
+                raise ValueError('要撤下的议题对应必须是对象。')
+            key = (row.get('issue'), row.get('session_id'), row.get('instance_id'))
+            if key not in present:
+                raise ValueError('没有这条议题对应：' + '/'.join(map(str, key)))
+            drop.add(key)
+        data['links'] = [link for link in data['links'] if (link['issue'], link['session_id'], link['instance_id']) not in drop]
         protocol._write(vault, LINKS, data)
-        return dict(removed=1, total=len(kept))
+        return dict(removed=len(drop), total=len(data['links']))
 
 
 def _find(data, ident):
@@ -264,21 +277,35 @@ def move_issue(vault, ident, parent=None):
 
 
 def update_issue(vault, ident, title=None, description=None, status=None):
+    return update_issues(vault, [dict(id=ident, title=title, description=description, status=status)])[0]
+
+
+def update_issues(vault, rows):
+    """Change titles, descriptions or statuses; every row is checked before anything is written."""
+    if not isinstance(rows, list) or not rows:
+        raise ValueError('至少需要一条议题修改。')
     with metadata_lock(vault):
         data = read_registry(vault)
-        row = _find(data, ident)
-        if ident == BUG and (title is not None or status is not None):
-            raise ValueError('BUG 是固定议题，只能修改说明。')
-        if title is not None:
-            row['title'] = _title(title)
-        if description is not None:
-            if not isinstance(description, str):
-                raise ValueError('议题 description 必须是字符串。')
-            row['description'] = description
-        if status is not None:
-            row['status'] = _status(status)
+        changed = []
+        for change in rows:
+            # 路径 3：写回议题树时一次改一批子议题的长说明，从 UTF-8 文件读入，不经命令行参数。
+            if not isinstance(change, dict):
+                raise ValueError('议题修改必须是对象。')
+            ident, title, description, status = (change.get(key) for key in ('id', 'title', 'description', 'status'))
+            row = _find(data, ident)
+            if ident == BUG and (title is not None or status is not None):
+                raise ValueError('BUG 是固定议题，只能修改说明。')
+            if title is not None:
+                row['title'] = _title(title)
+            if description is not None:
+                if not isinstance(description, str):
+                    raise ValueError('议题 description 必须是字符串。')
+                row['description'] = description
+            if status is not None:
+                row['status'] = _status(status)
+            changed.append(row)
         protocol._write(vault, FILE, data)
-        return row
+        return changed
 
 
 def dismiss_issue(vault, ident):

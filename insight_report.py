@@ -87,19 +87,23 @@ def _corrections(text):
 
 
 def _said_text(sessions, row):
+    """The transcript wording and, where the user confirmed transcript corrections, the corrected wording."""
     result = sessions[row['session_id']][3]
     instance = next(item for item in result.get('instances', []) if item['id'] == row['instance_id'])
-    return ''.join(said.get('text') or '' for said in instance['said'])
+    return (''.join(said.get('text') or '' for said in instance['said']),
+            ''.join(said.get('corrected_text') or said.get('text') or '' for said in instance['said']))
 
 
 def _quote_matches(quote, said, fixes):
-    # 路径 1：引号可以用省略号节选；标点和空白不比，只比字。登记过的改字套用到原文上再比。
+    # 路径 1：引号可以用省略号节选；标点和空白不比，只比字。用户确认过的转写修正（资料库 transcript-corrections.json）
+    # 和附录里登记的改字都算一致。
+    raw, confirmed = said
     parts = [NOT_WORD.sub('', part) for part in re.split(r'…+|\.{3,}', quote)]
     parts = [part for part in parts if part]
-    fixed = said
+    fixed = raw
     for original, corrected in fixes:
         fixed = fixed.replace(original, corrected)
-    return bool(parts) and any(all(part in NOT_WORD.sub('', text) for part in parts) for text in (said, fixed))
+    return bool(parts) and any(all(part in NOT_WORD.sub('', text) for part in parts) for text in (raw, confirmed, fixed))
 
 
 def _cited_after(text, end, rows):

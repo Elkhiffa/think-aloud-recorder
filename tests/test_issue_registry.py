@@ -211,6 +211,52 @@ class IssueRegistryTests(unittest.TestCase):
             issues.update_issue(self.vault, 'BUG', title='缺陷')
         self.assertEqual(issues.add_issue(self.vault, '手柄独占', parent='BUG')['id'], 'BUG.1')
 
+    def test_batch_update_and_unlink_from_files_write_all_or_nothing(self):
+        """触发路径：跨场次 agent 按简报写回议题树 → 用 UTF-8 文件一次改一批长说明、撤下一批证据；任何一条不对整批不写。"""
+        import agent_cli
+        self.make_session('first', '2026-10-08T12:00:00+08:00', [])
+        issues.link_instances(self.vault, [dict(issue=ident, session_id='first', instance_id='i1') for ident in ('TA-01', 'TA-02')])
+        updates = self.vault.parent / (self.vault.name + '-updates.json')
+        self.addCleanup(updates.unlink, missing_ok=True)
+        description = '定义：手柄按 B 退层的落点各系统不一。\n纳入：“按 B 回到了主菜单”。\n排除：键鼠 Esc。'
+        updates.write_text(json.dumps([dict(id='TA-01', description=description), dict(id='TA-02', title='入口位置不明')],
+                                      ensure_ascii=False), encoding='utf-8')
+        self.assertEqual(agent_cli.main(['issues-update', str(self.vault), '--file', str(updates)]), 0)
+        rows = {row['id']: row for row in issues.read_registry(self.vault)['issues']}
+        self.assertEqual((rows['TA-01']['description'], rows['TA-02']['title']), (description, '入口位置不明'))
+        before = issues.read_registry(self.vault)
+        with self.assertRaisesRegex(ValueError, '议题不存在'):
+            issues.update_issues(self.vault, [dict(id='TA-01', title='不该写入'), dict(id='TA-99', title='不存在')])
+        self.assertEqual(issues.read_registry(self.vault), before)
+        links = issues.read_links(self.vault)
+        with self.assertRaisesRegex(ValueError, '没有这条议题对应'):
+            issues.unlink_instances(self.vault, [dict(issue='TA-01', session_id='first', instance_id='i1'),
+                                                 dict(issue='TA-01', session_id='first', instance_id='i9')])
+        self.assertEqual(issues.read_links(self.vault), links)
+        result = issues.unlink_instances(self.vault, [dict(issue=ident, session_id='first', instance_id='i1') for ident in ('TA-01', 'TA-02')])
+        self.assertEqual((result['removed'], result['total']), (2, 0))
+
+    def test_frame_defaults_to_a_1280_wide_capture(self):
+        """触发路径：单场 agent 并行截图核对 → 默认 1280 宽 JPEG（1920 PNG 曾让并行读图卡住）；要看小字时显式 --width 1920。"""
+        from unittest.mock import patch
+        import agent_cli
+        folder = self.make_session('first', '2026-10-08T12:00:00+08:00', [])
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            Path(command[-1]).write_bytes(b'synthetic jpeg')
+            return type('Done', (), {'returncode': 0})()
+        work = self.vault.parent / (self.vault.name + '-frames')
+        with patch('agent_cli.subprocess.run', fake_run):
+            agent_cli.frame(folder, 3, work / 'a.jpg')
+            agent_cli.frame(folder, 3, work / 'b.png', width=1920)
+        self.addCleanup(lambda: [path.unlink() for path in work.glob('*')] and None)
+        self.assertIn('scale=min(1280\\,iw):-2', calls[0]); self.assertIn('-q:v', calls[0])
+        self.assertIn('scale=min(1920\\,iw):-2', calls[1]); self.assertNotIn('-q:v', calls[1])
+        with self.assertRaisesRegex(ValueError, '宽度'):
+            agent_cli.frame(folder, 3, work / 'c.jpg', width=4000)
+
 
 if __name__ == '__main__':
     unittest.main()
