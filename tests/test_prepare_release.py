@@ -270,6 +270,23 @@ class ReleasePreparationTests(unittest.TestCase):
         self.make(code={'secret_store.py': b'# changed credential implementation\n'})
         self.assert_blocked(self.run_preflight(), 'key_application_commit_binding')
 
+    def test_pinned_ui_font_absent_from_commit_binds_by_its_pin(self):
+        # 触发路径：维护者 → 发布预检 → 包里有 fetch_fonts 下载、不进 git 的界面字体 → 按固定哈希核对 → 不修每次正式发布都被拦下。
+        raw = b'synthetic font bytes'
+        name = release.UI_FONTS[0]
+        with patch.object(release, 'font_pins', return_value={name: digest(raw)}):
+            self.make(code={name: raw})
+            report = self.run_preflight()
+        self.assertIn({'name': 'key_application_commit_binding', 'status': 'passed'}, report['checks'])
+        item = next(item for item in report['commit_binding']['files'] if item['path'] == name)
+        self.assertEqual(item['comparison'], 'pinned_font')
+
+    def test_ui_font_that_differs_from_its_pin_is_rejected(self):
+        name = release.UI_FONTS[0]
+        with patch.object(release, 'font_pins', return_value={name: digest(b'the pinned font')}):
+            self.make(code={name: b'a different font'})
+            self.assert_blocked(self.run_preflight(), 'key_application_commit_binding')
+
     def test_extra_executable_source_absent_from_commit_is_rejected(self):
         self.make(code={'ui/extra.js': b'window.unreviewed = true;\n'})
         self.assert_blocked(self.run_preflight(), 'key_application_commit_binding')
