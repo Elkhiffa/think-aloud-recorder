@@ -94,9 +94,10 @@ async function seek(page, time) {
 }
 async function select(page, device) { await page.locator('#deviceSelect').selectOption(device); await settle(page); }
 async function screenshot(page, name) {
-  const extra = page.locator('#deviceView .device-extra');
-  if (await extra.count() && await extra.isVisible()) {
-    const extraBox = await extra.boundingBox(), stateBox = await page.locator('#inputState').boundingBox();
+  const extra = page.locator('#deviceView .device-extra'), state = page.locator('#inputState');
+  // The companion footer is display:none while empty (c4ae8e8); only a rendered footer can be overlapped.
+  if (await extra.count() && await extra.isVisible() && await state.isVisible()) {
+    const extraBox = await extra.boundingBox(), stateBox = await state.boundingBox();
     assert.ok(extraBox && stateBox, `${name}: extra keys and footer have rendered geometry`);
     assert.ok(extraBox.y + extraBox.height <= stateBox.y + .5,
       `${name}: extra keys overlap footer: bottom=${extraBox.y + extraBox.height}, footerTop=${stateBox.y}`);

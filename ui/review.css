@@ -252,7 +252,8 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 .key-bar.fixed-band>.bar-glyph{position:absolute}
 .hold-label{position:absolute;left:0;width:100%;height:28px;padding:0 4px;display:flex;align-items:center;justify-content:center;gap:4px;font:12px/20px "Segoe UI","Microsoft YaHei UI",sans-serif;white-space:nowrap;color:var(--hold-ink);background:var(--hold-bg);box-shadow:inset 3px 0 var(--hold-line);border-radius:4px;z-index:2;pointer-events:none;overflow:hidden}
 .hold-label svg{width:14px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5}
-.fixed-band.activity-band .held-section,.fixed-band.activity-band .hold-label{margin-top:0}
+/* The activity band's 1px dashed border pushes absolutely placed children down; lift them back onto the hold (2dbb1d5). Not a margin, so the spacing scale does not apply. */
+.fixed-band.activity-band .held-section,.fixed-band.activity-band .hold-label{translate:0 -1px}
 .input-timeline-panel{position:relative}
 .timeline-return{position:absolute;right:12px;top:48px;z-index:8;display:flex;align-items:center;gap:4px;min-height:32px;padding:4px 8px;border:1px solid var(--accent);border-radius:4px;background:var(--surface);color:var(--accent);font-size:12px;box-shadow:0 3px 12px #29221a20}
 .timeline-return[data-direction=below]{top:auto;bottom:40px}
