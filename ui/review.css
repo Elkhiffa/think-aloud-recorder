@@ -537,3 +537,11 @@ h2,.input-heading h2,.current-quote-heading h2,.review-companion .input-heading 
 .line time,.input-detail time,#currentQuoteTime,.video-slot .plyr__time,.session-info{font-variant-numeric:tabular-nums}
 .keycap,.controller text,.mouse-motion,.time-tick time,.timeline-playhead time,.quote-bar,.timeline-gap,.bar-glyph,.hold-label,#inputScope,.timeline-window-label>span{font-family:"Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif}
 *{scrollbar-width:thin;scrollbar-color:var(--rule) transparent}
+/* 设备图 in the compact companion: no diagram fits the 112px row, so the row grows while 设备图 is chosen, the device line
+   joins the heading, and review.js scales the diagram to the room left (fitDevice). */
+.review-companion:has([data-input-mode=device][aria-pressed=true]){flex-basis:176px}
+.review-companion .input-heading .input-meta{margin:0 0 0 auto;min-height:0}
+.review-companion .controller{max-height:104px}
+.review-companion .device-extra .keycap{height:21px;min-width:22px;padding:4px;font-size:10px}
+.review-companion .input-panel:not(:has([data-input-mode=device][aria-pressed=true])) .input-meta{display:none}
+@container(max-width:700px){.review-companion:has([data-input-mode=device][aria-pressed=true]){flex-basis:232px;grid-template-rows:minmax(0,64px) minmax(0,1fr)}}

@@ -832,6 +832,11 @@
     return `<svg class="controller ${ps?'dualsense':'xbox'}" viewBox="0 0 460 211" role="img" aria-label="${deviceName(device)} 设备图"><path class="controller-shell" d="M120 44C101 44 84 53 79 76L60 163c-5 24 14 36 30 23l44-41h192l44 41c16 13 35 1 30-23l-19-87c-5-23-22-32-41-32Z"/>${control(ps?'L2':'LT','rect',ps?'L2':'LT',137,13)}${control(ps?'R2':'RT','rect',ps?'R2':'RT',323,13)}<rect class="trigger-meter" data-meter="${ps?'L2':'LT'}" x="113" y="20" width="0" height="3" rx="1"/><rect class="trigger-meter" data-meter="${ps?'R2':'RT'}" x="299" y="20" width="0" height="3" rx="1"/>${control(ps?'L1':'LB','rect',ps?'L1':'LB',137,39)}${control(ps?'R1':'RB','rect',ps?'R1':'RB',323,39)}${ps?'<rect class="controller-detail" x="178" y="59" width="104" height="41" rx="7"/>':'<circle class="controller-detail" cx="230" cy="73" r="12"/><text class="minor-label" x="230" y="73">X</text>'}${stick('LeftStick',ps?181:128,ps?130:88)}${stick('RightStick',279,130)}${dpad(ps?126:183,ps?94:132)}${symbols.map(([code,label,x,y])=>control(code,'circle',label,x,y)).join('')}<text class="controller-name" x="230" y="192">${ps?'DualSense':'Xbox'}</text></svg>`;
   }
   let renderedDevice = '';
+  // The companion is shorter than any diagram at its drawn size: shrink the whole diagram (keys, sticks, extra row) to the
+  // room the panel leaves, keeping its proportions. Runs on panel resize and when the shown keys change, not every frame.
+  function fitDevice(){const view=$('deviceView'),body=$('inputBody');if(view.hidden||body.hidden)return;view.style.zoom='';
+    const overflow=body.scrollHeight-body.clientHeight;if(overflow>0)view.style.zoom=String(Math.max(.4,Math.floor((1-(overflow+1)/view.offsetHeight)*1000)/1000));}
+  new ResizeObserver(fitDevice).observe($('inputBody'));
   function renderDevice(device,active,time) {
     if (renderedDevice !== device) { $('deviceView').innerHTML = device === 'keyboard' ? keyboardMarkup() : controllerMarkup(device); renderedDevice = device; }
     const visible = active.filter(item => group(item.device) === device);
@@ -866,10 +871,11 @@
       const key=[state.mode,device,message,...active.map(item=>item.id+':'+item.active)].join('|');
       if(state.mode==='device'&&(key!==state.lastInput||active.some(item=>!item.active)))renderDevice(device,active,time);
       if(key===state.lastInput)return;state.lastInput=key;
-      $('inputSource').textContent=source.intervals.length?deviceName(device):'操作记录';
+      $('inputSource').textContent=source.intervals.length?deviceName(device):'操作记录';$('inputSource').hidden=state.device!=='auto';
       $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):active.length?'':'最近 2 秒无操作';
       $('inputState').classList.toggle('is-gap',!!gap);$('inputState').title=message;
       $('currentKeys').hidden=state.mode!=='keys'||!!message;$('deviceView').hidden=state.mode!=='device'||!!message;
+      if(state.mode==='device')fitDevice();
       $('currentKeys').innerHTML=active.map(item=>`<div class="current-item" data-recent-id="${escape(item.id)}"><span class="keycap ${item.active?'active':'recent'}">${glyph(item)}</span><span>${escape(/^D[Pp]ad/.test(item.code)?'十字键':item.label||item.code)}${item.value!=null&&item.kind!=='button'?` · ${Math.round(item.value*100)}%`:''}</span></div>`).join('');
     }
     document.querySelectorAll('[data-input-mode]').forEach(button=>button.onclick=()=>{state.mode=button.dataset.inputMode;document.querySelectorAll('[data-input-mode]').forEach(node=>node.setAttribute('aria-pressed',String(node===button)));$('inputBody').hidden=state.mode==='collapsed';$('deviceSelectLabel').hidden=state.mode!=='device';$('inputPanel').classList.toggle('is-collapsed',state.mode==='collapsed');state.lastInput='';renderInput(video.currentTime);});

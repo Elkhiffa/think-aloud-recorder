@@ -102,6 +102,10 @@ async function screenshot(page, name) {
     assert.ok(extraBox.y + extraBox.height <= stateBox.y + .5,
       `${name}: extra keys overlap footer: bottom=${extraBox.y + extraBox.height}, footerTop=${stateBox.y}`);
   }
+  // 触发路径：用户 → 回看 → 最近操作选「设备图」→ 紧凑面板里整张设备图（含额外键）都要看得到，不用在面板里滚动。
+  const fit = await page.evaluate(() => { const body = document.getElementById('inputBody'), view = document.getElementById('deviceView');
+    return view.hidden ? null : { overflow: body.scrollHeight - body.clientHeight, bottom: view.getBoundingClientRect().bottom, room: body.getBoundingClientRect().bottom }; });
+  if (fit) assert.ok(fit.overflow <= 0 && fit.bottom <= fit.room + .5, `${name}: whole device diagram fits the panel: ${JSON.stringify(fit)}`);
   const filename = `${name}.png`;
   await page.screenshot({ path: path.join(output, filename) }); report.screenshots.push(filename);
 }

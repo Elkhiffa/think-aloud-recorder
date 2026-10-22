@@ -35,7 +35,9 @@ async function main(){
    await seek(6);assert.equal(await page.locator('#currentQuoteLabel').textContent(),'上一句');assert.equal(await page.locator('#currentQuoteTime').textContent(),'00:00:01');
    await seek(8);assert.equal(await page.locator('#currentQuoteText').textContent(),data.segments[1].text);
    await page.locator('#inputTab').click();await seek(2);
-   const before=await page.locator('video').boundingBox();for(const mode of ['device','collapsed','keys']){await page.locator(`[data-input-mode=${mode}]`).click();await settle();const after=await page.locator('video').boundingBox();assert.ok(Math.abs(before.height-after.height)<1);}
+   // 设备图 alone takes room from the video (the companion grows so the diagram is readable); every other mode leaves it as it was.
+    const before=await page.locator('video').boundingBox();for(const mode of ['device','collapsed','keys']){await page.locator(`[data-input-mode=${mode}]`).click();await settle();const after=await page.locator('video').boundingBox();
+      if(mode==='device')assert.ok(after.height<before.height-1&&Math.abs(after.width/after.height-before.width/before.height)<.01);else assert.ok(Math.abs(before.height-after.height)<1);}
    assert.equal(await page.locator('#status').textContent(),'');
  });
  await check('speed is direct; gear contains only double-click fullscreen; clicks toggle once',async()=>{
