@@ -64,6 +64,36 @@ def _title_regions(regions):
                 raise ValueError('title region detect 须为 vertical_edge，x_range 为 0–1 的递增区间。')
 
 
+def _band(value):
+    return isinstance(value, list) and len(value) == 2 and all(map(_fraction, value)) and value[0] < value[1]
+
+
+def _active_tabs(rules):
+    # 路径 2：用户按本游戏的视觉规范手填激活页签规则；高度按游戏画面高度归一化，
+    # 因为界面随高度缩放、横向贴边，带鱼屏与 16:9 的横向位置不同。
+    if not isinstance(rules, dict):
+        raise ValueError('active_tabs 必须是对象。')
+    gold = rules.get('gold')
+    if (not isinstance(gold, dict) or type(gold.get('min_b')) not in (int, float)
+            or not _fraction(gold.get('min_s'))):
+        raise ValueError('active_tabs.gold 须含数值 min_b 与 0–1 的 min_s。')
+    if not _fraction(rules.get('top_max_y')) or rules['top_max_y'] <= 0:
+        raise ValueError('active_tabs.top_max_y 必须是 (0, 1] 的高度比例。')
+    bands = rules.get('text_bands')
+    if not isinstance(bands, list) or not all(map(_band, bands)):
+        raise ValueError('active_tabs.text_bands 必须是 0–1 递增区间的数组。')
+    rows = rules.get('text_rows', [])
+    if not isinstance(rows, list):
+        raise ValueError('active_tabs.text_rows 必须是数组。')
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError('active_tabs.text_rows 的每项必须是对象。')
+        _text(row.get('screen'), 'active_tabs.text_rows screen')
+        _texts(row.get('tabs'), 'active_tabs.text_rows tabs')
+        if len(row['tabs']) < 2:
+            raise ValueError('active_tabs.text_rows tabs 至少要有两个页签文字。')
+
+
 def validate_catalog(data):
     """Validate the v1 format, with globally unique element IDs."""
     # 路径 2：catalog-validate 检查手工目录，避免无效或重复 ID 的引用。
@@ -72,6 +102,8 @@ def validate_catalog(data):
     _text(data.get('game'), 'game')
     if 'title_regions' in data:
         _title_regions(data['title_regions'])
+    if 'active_tabs' in data:
+        _active_tabs(data['active_tabs'])
     if not isinstance(data.get('screens'), list):
         raise ValueError('screens 必须是数组。')
     screen_ids, element_ids = set(), set()

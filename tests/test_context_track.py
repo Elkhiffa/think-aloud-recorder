@@ -146,7 +146,8 @@ class ContextTrackTests(unittest.TestCase):
         self.assertEqual([sorted(frame) for frame in track['frames']],
                          [['items', 't', 'titles'], ['t', 'titles'], ['t', 'titles'],
                           ['items', 't', 'titles'], ['t', 'titles']])
-        self.assertEqual(track['frames'][0], dict(t=1, titles=[], items=[[70.0, 30.0, '世界']]))
+        self.assertEqual(track['frames'][0], dict(t=1, titles=[], items=[
+            [70.0, 30.0, '世界', [[20, 20], [120, 20], [120, 40], [20, 40]]]]))
         self.assertEqual(track['frames'][1], dict(t=3, titles=[dict(
             region='screen_top_left', text='道具', x=0)]))
         self.assertEqual(track['screens'], [
@@ -194,6 +195,118 @@ class ContextTrackTests(unittest.TestCase):
         self.assertEqual(summary['interval'], 5)
         self.assertEqual([sorted(frame) for frame in track['frames']], [['items', 't']] * 2)
         self.assertEqual([span['screen'] for span in track['screens']], ['bag.items', 'world'])
+
+
+GREY, GOLD = (170, 170, 170), (90, 160, 200)   # BGR：灰白未激活字、金色激活字
+RULES = dict(gold=dict(min_b=12, min_s=.25), top_max_y=.1, text_bands=[[.12, .26]])
+
+
+def tab_frame(rows):
+    """A 960x540 dark frame plus its OCR result; rows are (top y, [(text, colour), ...])."""
+    image = np.full((540, 960, 3), 20, np.uint8)
+    result = []
+    for y, tabs in rows:
+        for index, (text, colour) in enumerate(tabs):
+            x = 100 + 70 * index
+            image[y:y + 16, x:x + 40:2] = colour
+            result.append([[[x, y], [x + 40, y], [x + 40, y + 16], [x, y + 16]], text, .9])
+    return image, result
+
+
+class ActiveTabTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.folder = root / '场次' / 'session'
+        self.folder.mkdir(parents=True)
+        (self.folder / 'session.json').write_text(
+            json.dumps(dict(game='合成游戏'), ensure_ascii=False), encoding='utf-8')
+        (self.folder / '录像.mp4').write_bytes(b'synthetic-video')
+        self.catalog = root / 'game-assets' / '合成游戏' / 'catalog.json'
+        self.catalog.parent.mkdir(parents=True)
+        self.write_rules(RULES)
+
+    def write_rules(self, rules):
+        catalog = dict(version=1, game='合成游戏', screens=[])
+        if rules is not None:
+            catalog['active_tabs'] = rules
+        self.catalog.write_text(json.dumps(catalog, ensure_ascii=False), encoding='utf-8')
+
+    def build(self, frames, ocr=True):
+        engine = Mock(side_effect=[(result, None) for _, result in frames])
+        samples = [(2.5 + 5 * index, image) for index, (image, _) in enumerate(frames)]
+        with patch.object(context, '_ocr_engine', return_value=engine), patch.object(
+                context, '_sample_frames', return_value=samples):
+            summary = context.build(self.folder)
+        self.assertEqual(engine.called, ocr)
+        return summary, context.load_track(self.folder)
+
+    def shop(self):
+        return tab_frame([
+            (20, [('背包', GREY), ('商店', GOLD), ('任务', GREY)]),
+            (90, [('精选', GOLD), ('月卡', GREY)]),
+            (130, [('外观', GOLD), ('和鸣', GOLD), ('福利', GREY)]),
+            (340, [('简介', GREY), ('教学', GOLD)]),
+            (490, [('前往', GREY), ('开始匹配', GOLD)])])
+
+    def test_gold_tab_reported_only_on_top_and_text_band_rows(self):
+        """触发路径：agent 对燕云场次运行 context-build，目录有 active_tabs → 顶部和横向页签报出亮着的那个；底部金色按钮、两个金色的推广字不报，否则时间线满是“激活：开始匹配”。"""
+        _, track = self.build([self.shop()])
+        frame = track['frames'][0]
+        self.assertEqual(frame['tabs'], [
+            dict(kind='top', active='商店', row=['背包', '商店', '任务']),
+            dict(kind='text', active='精选', row=['精选', '月卡'])])
+        self.assertEqual(len(frame['items'][0]), 4)
+        self.assertEqual(track['active_tabs'], RULES)
+        read = context.read_track(self.folder)['frames'][0]
+        self.assertEqual(read['tabs'], frame['tabs'])
+        self.assertEqual({len(item) for item in read['items']}, {3})
+
+    def test_declared_text_row_outside_band_is_reported(self):
+        """触发路径：用户在目录 text_rows 声明某界面不在高度带内的横向页签 → context-build 应报出它，未声明的带外金色字仍不报。"""
+        self.write_rules(dict(RULES, text_rows=[dict(screen='流派指引/流派推荐', tabs=['简介', '教学'])]))
+        _, track = self.build([self.shop()])
+        self.assertIn(dict(kind='text', active='教学', row=['简介', '教学']), track['frames'][0]['tabs'])
+        self.assertNotIn('开始匹配', [tab['active'] for tab in track['frames'][0]['tabs']])
+
+    def test_rule_change_recomputes_tabs_without_ocr(self):
+        """触发路径：用户调整目录 active_tabs 门槛后对已建轨道的场次再运行 context-build → 字框已在轨道里，只应重新取色，不应重跑几十分钟 OCR。"""
+        self.build([self.shop()])
+        self.write_rules(dict(RULES, text_bands=[]))
+        summary, track = self.build([self.shop()], ocr=False)
+        self.assertTrue(summary['retabbed'])
+        self.assertEqual([tab['active'] for tab in track['frames'][0]['tabs']], ['商店'])
+        self.assertEqual(track['active_tabs']['text_bands'], [])
+
+    def test_old_track_without_corners_is_rebuilt(self):
+        """触发路径：用户升级后在目录里加上 active_tabs，对已有场次运行 context-build → 旧轨道只有中心点、算不了字色 → 应整段重跑并补上字框和页签。"""
+        self.write_rules(None)
+        _, old = self.build([self.shop()])
+        for item in old['frames'][0]['items']:
+            del item[3]
+        (self.folder / context.TRACK).write_text(json.dumps(old, ensure_ascii=False), encoding='utf-8')
+        self.write_rules(RULES)
+        summary, track = self.build([self.shop()])
+        self.assertFalse(summary['reused'])
+        self.assertEqual(track['frames'][0]['tabs'][0]['active'], '商店')
+
+    def test_compact_splits_when_active_tab_changes(self):
+        """触发路径：agent 运行 context-read --compact → 同一标题下从“商店”切到“任务”是换了界面，应分成两段；规则沉默的帧不算切换。"""
+        top = lambda active: tab_frame([(20, [(text, GOLD if text == active else GREY)
+                                              for text in ('背包', '商店', '任务')])])
+        silent = tab_frame([(20, [('背包', GREY), ('商店', GREY), ('任务', GREY)])])
+        self.build([top('商店'), silent, top('商店'), top('任务')])
+        frames = context.read_track(self.folder, compact=True)['frames']
+        self.assertEqual([(row['t'], row['end'], row.get('tabs')) for row in frames],
+                         [(2.5, 12.5, ['商店']), (17.5, 17.5, ['任务'])])
+
+    def test_catalog_rejects_width_based_band(self):
+        """触发路径：用户手填 active_tabs 后运行 catalog-validate → 把像素或倒序区间写进高度带应报错，而不是静默不报任何页签。"""
+        import game_catalog
+        catalog = dict(version=1, game='合成游戏', screens=[], active_tabs=dict(RULES, text_bands=[[120, 260]]))
+        with self.assertRaisesRegex(ValueError, 'text_bands'):
+            game_catalog.validate_catalog(catalog)
 
 
 if __name__ == '__main__':
