@@ -36,6 +36,23 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 ## Skill 安装与更新
 
+**第一次安装**：
+
+1. 在 [Releases](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) 下载与所装应用同一版本的 **Source code (zip)**，完整解压。skill 不在应用安装包里。
+2. 把解压出的 `skills\think-aloud-judgments` 和 `skills\think-aloud-insight` 两个文件夹整个复制到 agent 的技能目录：Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`。两个都用就两处都复制。也可以在 PowerShell 里运行（把第一行换成实际解压位置）：
+
+   ```powershell
+   $src = "D:\Downloads\think-aloud-recorder-0.9.0\skills"
+   foreach ($dest in "$env:USERPROFILE\.claude\skills", "$env:USERPROFILE\.codex\skills") {
+     New-Item -ItemType Directory -Force $dest | Out-Null
+     Copy-Item -Recurse "$src\think-aloud-judgments", "$src\think-aloud-insight" $dest
+   }
+   ```
+
+3. 新开一个 agent 会话，skill 就可以用了。场次转写完成后，在主窗口或资料台点「复制整理指令」，粘贴给 agent。
+
+以前装过旧版 `think-aloud-preprocess` 的，可以把它从技能目录移走；它已由这两份 skill 取代。**以后更新**时目录里已有同名文件夹，按下面的步骤先备份、再比较、再替换，不要直接覆盖。
+
 应用、仓库中的方法文档和 agent 已安装的 Skill 是三个独立对象。安装包升级成功，不表示 Skill 副本已更新；仓库文档可能在应用版本不变时继续澄清方法。不要仅用相同的软件版本号判断它们是否一致。
 
 1. 确定源码提交，取得该提交的 `skills/think-aloud-judgments` 和 `skills/think-aloud-insight` 两个完整目录；使用 Skill 安装器时指定固定的 `ref`。已安装的目录先复制备份到技能目录之外，避免把备份也作为第二份 Skill 加载。先比较原副本与来源：存在本地定制时保留并审阅，不直接覆盖。
