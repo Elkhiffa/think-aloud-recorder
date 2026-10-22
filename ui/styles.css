@@ -129,11 +129,14 @@ button:disabled{cursor:default;opacity:.5}
 .kleg b{font-size:var(--t2)}
 .quote{border-radius:var(--r-md);background:var(--sheet);padding:var(--s3) var(--s4);margin-top:var(--s3)}
 .quote p{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
-.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--s2);list-style:none;margin-top:var(--s2)}
-.steps li{border-radius:var(--r-md);padding:var(--s2) var(--s3);background:var(--sheet);font-size:var(--t1);color:var(--faint)}
-.steps li::after{content:"";display:block;height:4px;border-radius:2px;background:var(--fill);margin-top:var(--s2)}
-.steps .done{color:var(--ink)}.steps .done::after{background:var(--ink)}
-.steps .now{color:var(--ink)}.steps .now::after{background:linear-gradient(90deg,var(--ink) 50%,var(--fill) 50%)}
+/* 上一场的进度：已完成和还没到的步骤收窄成标签宽，只有当前这一步（进行中或失败）铺满并带进度条。已完成显示灰色对勾，还没到的只有空条 */
+.steps{display:flex;gap:var(--s2);list-style:none;margin-top:var(--s2)}
+.steps li{flex:none;display:flex;flex-direction:column;gap:var(--s2);border-radius:var(--r-md);padding:var(--s2) var(--s3);background:var(--sheet);font-size:var(--t1);color:var(--ink)}
+.steps li::after{content:"";align-self:stretch;height:4px;border-radius:2px;background:var(--fill)}
+.steps .done{align-items:center}
+.steps .done::after{align-self:center;width:10px;height:5px;margin-bottom:2px;border-radius:0;background:none;border:solid var(--faint);border-width:0 0 2px 2px;transform:rotate(-45deg)}
+.steps .now,.steps .fail{flex:1}
+.steps .now::after{background:linear-gradient(90deg,var(--ink) 50%,var(--fill) 50%)}
 .steps .fail{color:var(--warn)}.steps .fail::after{background:var(--warn-bg)}
 .handoff{margin-top:var(--s3);display:flex;align-items:center;gap:var(--s3)}
 .handoff p{font-size:var(--t1);color:var(--muted)}

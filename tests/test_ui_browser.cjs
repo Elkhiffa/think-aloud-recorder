@@ -318,6 +318,9 @@ async function homeChecks(context, origin) {
     // The running background job is shown where the last session sits, not as a blocker.
     assert.deepEqual(await page.locator('#lastSession .steps li').allInnerTexts(), ['已保存', '转写中', '待整理']);
     assert.equal(await page.locator('#lastSession .steps li.now').first().innerText(), '转写中');
+    // Only the step in progress takes the width; the finished and the not-yet steps stay as narrow as their labels.
+    const stepWidths = await page.locator('#lastSession .steps li').evaluateAll(items => items.map(item => item.getBoundingClientRect().width));
+    assert.ok(stepWidths[1] > 2 * Math.max(stepWidths[0], stepWidths[2]), JSON.stringify(stepWidths));
     assert.equal(await page.locator('#queueBrief').innerText(), '1 段转写中', 'background work is summarised under 全部场次');
     assert.equal((await calls(page, 'start_recording')).length, 0);
   });
