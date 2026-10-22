@@ -172,7 +172,7 @@ agent 从上下文认出误转写（如 `左交`→`走焦`），提议修正，
 资料库根目录的 `transcript-corrections.json` 保存 `{version:1, corrections:[{id, from, to, basis, status, proposed_by, proposed_at, decided_at?, session_id?, ref?, exclude?}]}`：
 
 - 带 `session_id` 和 `ref`（如 `t000123`）的是单处修正，只改这一段；不带的是全库规则，改所有场次里出现的这个词，`exclude` 列出它要跳过的段；
-- 全库规则的门槛（用户 2026-10-22 定）：同一个误转写出现多处、每处都按上下文核对过，而且原文不是常用词（“限时”“上传”“人影”“连续冲刺”这类日常词不行）；`transcript-fix-list` 列出的命中里只要有一处不该改，就不做规则，改成逐句的单处修正。
+- 全库规则的门槛（用户 2026-10-22 定）：同一个误转写出现多处、每处都按上下文核对过，而且原文不是常用词（“限时”“上传”“人影”“连续冲刺”这类日常词不行）；规则只是候选：确认前，把 `transcript-fix-list` 列出的每一处命中都结合上下文（拿不准就截图看画面）核对，不该改的用 `transcript-fix-exclude` 排除，剩下的都对了才确认。整理新场次时，也用 `transcript-fix-list VAULT --status confirmed --session <场次 id>` 核对已确认规则在这一场的命中，不该改的同样排除。
 - `status` 是 `proposed`（待确认，不生效）、`confirmed` 或 `rejected`；同一个原文不能有两条改法不同的已确认全库规则。
 
 ```text
