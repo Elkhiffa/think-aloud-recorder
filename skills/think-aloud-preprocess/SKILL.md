@@ -1,9 +1,11 @@
 ---
 name: think-aloud-preprocess
-description: "Preprocess Think Aloud recordings into traceable experience events, exploratory ideas and optional questions, and publish them through the recorder's local agent interface. Use for session preprocessing or a user-authorized database intake workflow; subsequent design synthesis is a separate task."
+description: "RETIRED. Do not use to organize or analyze Think Aloud sessions: use think-aloud-judgments (one session) and think-aloud-insight (across sessions). Kept only as the reference for reading old v1 experience-event results."
 ---
 
-# Think Aloud 体验预处理
+# Think Aloud 体验预处理（已停用）
+
+**已停用**：整理单场用 `think-aloud-judgments`，跨场次分析用 `think-aloud-insight`。本文件只用于读懂旧版 v1 体验事件结果，不要按它领取或提交场次。
 
 把指定场次整理成后续设计分析可引用的体验材料。记录器本身没有 agent；此 skill 由外部会话执行。没有预处理结果也不影响录制、转写、回看或导出。
 

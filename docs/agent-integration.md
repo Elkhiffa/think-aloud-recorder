@@ -200,7 +200,7 @@ catalog-hotwords VAULT GAME --output FILE
 - 操作证据通过与回看相同的撤销/缺口逻辑读取，应用同步偏移并保留原时间、后台状态。异常/缺失输入不构成“没有操作”的证据。
 - UI 只读取本地校验结果，不执行生成的 HTML、脚本或链接。导出保留验证后的事件和静态回看，不携带任务领取令牌、就绪文件或本机处理历史。
 
-可维护的预处理 skill 位于源码 `skills/think-aloud-preprocess`，包括方法和具体结果格式。它可单独复制到另一台电脑的 Codex skills 目录；软件包不携带用户技能配置。持续监控由用户明确授权的外部会话承担，本接口不会自行创建会话、定时任务或云端上传。
+整理方法在源码 `skills/think-aloud-judgments`（单场）和 `skills/think-aloud-insight`（跨场次），安装见上文“Skill 安装与更新”；软件包不携带用户技能配置。`skills/think-aloud-preprocess` 已停用，只用于读懂旧版 v1 结果。持续监控由用户明确授权的外部会话承担，本接口不会自行创建会话、定时任务或云端上传。
 
 0.7.1 支持在回看中校准体验事件的起止时间、名称、概述、问题与感受、备注。原 agent 结果保持不变，手动修正独立保存在 `experience-event-edits.json`。下次整理读取 `evidence.manual_corrections` 的字段差异和 diff，并提交当前 `corrections_review` 采纳说明；漏读或并发新修改会阻止覆盖。事件阅读顺序为概述、具体问题、弱化备注、默认收起的证据。
 ## 词库衔接

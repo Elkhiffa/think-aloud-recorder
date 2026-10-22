@@ -1,4 +1,4 @@
 interface:
-  display_name: "Think Aloud 体验预处理"
-  short_description: "把体验录制整理为带时间证据的事件、待展开想法和可选问题"
-  default_prompt: "使用 $think-aloud-preprocess，预处理指定的 Think Aloud 场次并回写体验事件。"
+  display_name: "Think Aloud 体验预处理（已停用）"
+  short_description: "已停用；整理场次改用 think-aloud-judgments 和 think-aloud-insight"
+  default_prompt: "不要用这个 skill 整理场次；请改用 $think-aloud-judgments。"
