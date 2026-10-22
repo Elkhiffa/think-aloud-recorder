@@ -205,7 +205,8 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible,.p
 .kind-chip,.kind-bar .kind-chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 var(--s2);border:0;border-radius:var(--r-sm);background:none;color:var(--muted);font-size:12px}
 .kind-chip::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--kc,var(--k-other))}
 .kind-chip:hover{background:none;color:var(--ink)}
-.kind-chip.active{background:var(--sheet);color:var(--ink);box-shadow:0 1px 2px rgb(60 40 20 / .08)}
+/* 多选筛选选中是墨色（同界面来源筛选）；同时只激活一个的页签和分段选中是白色 */
+.kind-chip.active,.kind-chip.active:hover{background:var(--ink);color:var(--sheet)}
 .kind-confusion{--kc:var(--k-confusion)}.kind-obstacle{--kc:var(--k-obstacle)}.kind-cost{--kc:var(--k-cost)}.kind-negative{--kc:var(--k-negative)}
 /* 议题之间 16（组间）；行和展开内容的内边距 8 / 12（组内边距）；内容之间 8、同级子议题之间 4（组内间距） */
 .row{border-radius:var(--r-sm);padding:var(--s1) var(--s3);margin:0}
