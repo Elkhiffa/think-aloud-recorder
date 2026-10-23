@@ -1292,6 +1292,9 @@ class DesktopServiceTests(unittest.TestCase):
             return self.service._update_readiness()
 
     def test_idle_readiness_requires_main_foreground_and_resumes_on_activation(self):
+        # Start from no verified result: a ready afterwards could only come from the probe that focus cancelled.
+        self.service._readiness = dict(ready=False, checking=False, errors=[], checked_at=None)
+        self.service._last_readiness = (None, None)
         with patch.object(self.service, '_main_is_foreground', return_value=False), \
              patch.object(self.service, '_probe_obs_devices') as probe:
             self.assertFalse(self.service._request_readiness())
@@ -1328,6 +1331,9 @@ class DesktopServiceTests(unittest.TestCase):
             probe.assert_not_called()
 
     def test_focus_loss_during_probe_cannot_publish_ready(self):
+        # Start from no verified result: a ready afterwards could only come from the probe that focus cancelled.
+        self.service._readiness = dict(ready=False, checking=False, errors=[], checked_at=None)
+        self.service._last_readiness = (None, None)
         entered, release = threading.Event(), threading.Event()
         foreground = {'active': True}
         def probe():
@@ -1396,6 +1402,9 @@ class DesktopServiceTests(unittest.TestCase):
             probe.assert_called_once()
 
     def test_focus_cycle_during_launch_file_check_keeps_one_shot_available(self):
+        # Start from no verified result: a ready afterwards could only come from the probe that focus cancelled.
+        self.service._readiness = dict(ready=False, checking=False, errors=[], checked_at=None)
+        self.service._last_readiness = (None, None)
         self.service._startup_launch_attempted = False
         foreground = {'active': True}
         is_file = Path.is_file
@@ -1463,6 +1472,7 @@ class DesktopServiceTests(unittest.TestCase):
                          patch.object(self.service, '_probe_obs_devices', side_effect=lambda: self.actual_probe(self.service)), \
                          patch.object(self.service, '_cache_devices', wraps=self.service._cache_devices) as cache, \
                          patch.object(self.service, '_probe_location') as location:
+                        checked_before = self.service._readiness.get('checked_at')
                         state = self.service._run_automatic_readiness()
                     client.create_input.assert_not_called()
                     client.remove_input.assert_not_called()
@@ -1474,10 +1484,18 @@ class DesktopServiceTests(unittest.TestCase):
                     self.assertIn('inventory_id', cache.call_args.kwargs)
                     self.assertEqual(self.service._device_inventory['state'], 'succeeded')
                     location.assert_not_called()
-                    self.assertFalse(state['ready'])
-                    self.assertIsNone(state['checked_at'])
+                    # The cancelled probe publishes nothing. Focus still away: the last completed check is kept,
+                    # marked deferred. Focus already back: a newer check takes over, so no result is left.
+                    self.assertTrue(state['deferred'])
+                    if restore_foreground:
+                        self.assertEqual((state['ready'], state['checked_at']), (False, None))
+                    else:
+                        self.assertEqual(state['checked_at'], checked_before)
 
     def test_focus_change_during_connection_releases_socket_and_stops_following_probe(self):
+        # Start from no verified result: a ready afterwards could only come from the probe that focus cancelled.
+        self.service._readiness = dict(ready=False, checking=False, errors=[], checked_at=None)
+        self.service._last_readiness = (None, None)
         self.service._startup_launch_attempted = False
         client = MagicMock()
         foreground = {'active': True}
@@ -1771,6 +1789,30 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertFalse(state['ready'])
         self.assertEqual(state['errors'][0]['code'], 'OBS_UNAVAILABLE')
 
+    def test_switching_to_the_game_keeps_the_last_completed_check(self):
+        # 触发路径：用户确认就绪后切到游戏 → 主窗口不在前台，空闲检查暂停（da48e73）→ 录制块保持上次检查完成时的状态；
+        # 切回后新的检查还没做完又切走，也还是上次完成的结果；改过设置后，旧结果不再代表现在的设置。
+        self.assertTrue(self.readiness()['ready'])
+        with patch.object(self.service, '_main_is_foreground', return_value=False):
+            self.service.main_activation_changed()
+            visible = self.service._visible_readiness()
+        self.assertEqual((visible['ready'], visible['deferred'], visible['errors']), (True, True, []))
+        # Back in front: the re-check runs quietly, the block keeps the last completed check meanwhile.
+        self.service._mark_readiness_checking(True, quiet=True)
+        visible = self.service._visible_readiness()
+        self.assertNotIn('deferred', visible)
+        self.assertEqual((visible['ready'], visible['checking']), (True, False))
+        # A check the user asked for (重新检查) shows as checking.
+        self.service._mark_readiness_checking(True)
+        self.assertEqual((self.service._visible_readiness()['ready'], self.service._visible_readiness()['checking']), (False, True))
+        with patch.object(self.service, '_main_is_foreground', return_value=False):
+            self.service.main_activation_changed()
+            self.assertTrue(self.service._visible_readiness()['ready'])
+            self.service._cfg['window'] = 'Other game:OtherClass:other.exe'
+            self.service.main_activation_changed()
+            visible = self.service._visible_readiness()
+        self.assertEqual((visible['ready'], visible['deferred'], visible['errors']), (False, True, []))
+
     def test_focus_cancelled_native_query_cannot_publish_or_consume_obs_launch_attempt(self):
         before = deepcopy(self.service._devices)
         self.service._startup_launch_attempted = False
@@ -1782,10 +1824,12 @@ class DesktopServiceTests(unittest.TestCase):
         with patch.object(self.service, '_main_is_foreground', side_effect=lambda: foreground['active']), \
              patch.object(device_inventory, 'devices', side_effect=native), \
              patch.object(bridge.recorder, 'client') as connect:
+            checked_before = self.service._readiness.get('checked_at')
             with self.service._operation_lock:
                 state = self.service._run_automatic_readiness()
             connect.assert_not_called()
-        self.assertFalse(state['ready'])
+        self.assertTrue(state['deferred'])
+        self.assertEqual(state['checked_at'], checked_before)
         self.assertEqual(self.service._devices, before)
         self.assertEqual(self.service._device_inventory['state'], 'idle')
         self.assertFalse(self.service._startup_launch_attempted)

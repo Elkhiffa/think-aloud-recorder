@@ -1,17 +1,14 @@
 """Local OCR context derived only from the source video, never session revision."""
 import json
 import math
+import re
 from pathlib import Path
-
-import numpy as np
 
 import agent_protocol as protocol
 import game_catalog
+import layout_common
 
 TRACK = 'context-track.json'
-# Panel edge: brightness step across 3 px, averaged over 9 rows, must exceed 2.5
-# grey levels in the same direction on at least 60% of rows.
-_EDGE_SPAN, _EDGE_ROWS, _EDGE_STEP, _EDGE_COVER = 3, 9, 2.5, .6
 
 
 def _source_video(folder):
@@ -36,7 +33,7 @@ def _ocr_engine(title=False):
 
 
 def _sample_frames(path, interval, start, end):
-    """Seek to interval midpoints, yielding actual video PTS and 960-wide BGR."""
+    """Seek to interval midpoints, yielding actual video PTS, 960-wide BGR and source-size BGR."""
     import av
     with av.open(str(path)) as container:
         stream = container.streams.video[0]
@@ -55,7 +52,8 @@ def _sample_frames(path, interval, start, end):
                     return
                 height = round(frame.height * 960 / frame.width)
                 image = frame.reformat(width=960, height=height, format='bgr24')
-                yield round(at, 6), image.to_ndarray()
+                # 路径 2：焦点框顶部的小三角只有约 16 像素宽，960 宽下与框线融在一起，要在原尺寸上确认。
+                yield round(at, 6), image.to_ndarray(), frame.to_ndarray(format='bgr24')
                 break
             else:
                 return
@@ -71,23 +69,10 @@ def _items(result):
             continue
         x = sum(point[0] for point in box) / len(box)
         y = sum(point[1] for point in box) / len(box)
-        items.append([round(float(x), 2), round(float(y), 2), text])
+        # 路径 2：激活页签要按字框取字色和底色；读取方只用前三项，角点追加在末尾。
+        corners = [[round(float(px)), round(float(py))] for px, py in box]
+        items.append([round(float(x), 2), round(float(y), 2), text, corners])
     return items
-
-
-def _panel_left(image, x_range):
-    """Return the column where a same-direction step spans the most rows, or None."""
-    # 路径 2：不同页面的右侧面板宽度不同。面板多为半透明暗底，夜景下与场景只差几级灰度；
-    # 道具格、浮窗的竖线更强却不贯穿全高。因此比较跳变覆盖的行数，而不是梯度大小。
-    gray = image.mean(axis=2)
-    total = np.cumsum(gray[:, _EDGE_SPAN:] - gray[:, :-_EDGE_SPAN], axis=0)
-    step = (total[_EDGE_ROWS:] - total[:-_EDGE_ROWS]) / _EDGE_ROWS
-    cover = np.maximum((step > _EDGE_STEP).mean(axis=0), (step < -_EDGE_STEP).mean(axis=0))
-    width = image.shape[1]
-    low = max(0, int(x_range[0] * width) - _EDGE_SPAN)
-    high = int(x_range[1] * width) - _EDGE_SPAN
-    column = low + int(cover[low:high].argmax())
-    return column + _EDGE_SPAN if cover[column] >= _EDGE_COVER else None
 
 
 def _titles(engine, image, regions):
@@ -98,7 +83,7 @@ def _titles(engine, image, regions):
         x, y, w, h = region['rect']
         detect = region.get('detect')
         if detect is not None:
-            left = _panel_left(image, detect['x_range'])
+            left = layout_common._panel_left(image, detect['x_range'])
             # 路径 2：画面上没有贯穿的面板边界时退回目录给出的原位置。
             if left is not None:
                 x = left / width
@@ -108,6 +93,113 @@ def _titles(engine, image, regions):
         if text:
             titles.append(dict(region=region['id'], text=text, x=round(x, 4)))
     return titles
+
+
+_DERIVED = ('tabs', 'headings', 'focus')
+
+
+def _recompute(folder, cached, params, layout):
+    """Re-derive layout fields from stored boxes on freshly decoded frames; None if frames drift."""
+    frames = [dict(frame) for frame in cached['frames']]
+    for frame in frames:
+        for key in _DERIVED:
+            frame.pop(key, None)
+    # 路径 2：用户从目录删掉规则时只需去掉旧结果，不必解码。
+    count = 0 if layout else len(frames)
+    sampled = _sample_frames(folder / '录像.mp4', params['interval'], params['start'],
+                             params['end']) if layout else ()
+    for at, image, full in sampled:
+        # 路径 4：旧版本的解码器取到的帧时刻可能不同，字框就对不上，改为整段重跑。
+        if count >= len(frames) or frames[count]['t'] != at:
+            return None
+        frame = frames[count]
+        if 'items' in frame:
+            frame.update(layout_common.derive(image, full, frame['items'], layout))
+        count += 1
+    if count != len(frames):
+        return None
+    track = dict(cached, frames=frames)
+    # 路径 4：M3 回填的轨道把规则记在 active_tabs 下，换成 layout。
+    track.pop('active_tabs', None)
+    track.pop('layout', None)
+    if layout:
+        track['layout'] = layout
+    return track
+
+
+CHECK = 'screen-check.json'
+
+
+def _grab(folder, at):
+    """960-wide and source-size BGR of the frame at `at`, or None past the end."""
+    from contextlib import closing
+    import visual_nodes
+    with closing(visual_nodes._decode(Path(folder) / '录像.mp4', at, at, {})) as decoded:
+        _, frame = next(decoded, (None, None))
+    if frame is None:
+        return None
+    small = frame.reformat(width=960, height=round(frame.height * 960 / frame.width), format='bgr24')
+    return small.to_ndarray(), frame.to_ndarray(format='bgr24')
+
+
+def check_screens(folder, instances):
+    """Compare each instance's screen id with the tabs lit at its checked frame (the first video evidence).
+
+    A segment that sits in a detected tab row but is not the lit one is reported; segments that are not
+    visible as tabs say nothing. Results are cached per moment in screen-check.json, keyed by the video
+    and the catalog layout, so a corrected resubmission does not OCR again."""
+    folder = Path(folder)
+    moments = {}
+    for instance in instances:
+        at = next((row['start'] for row in instance.get('evidence', ()) if row.get('kind') == 'video'), None)
+        screen = instance.get('screen')
+        if at is not None and isinstance(screen, str) and '/' in screen:
+            moments.setdefault(float(at), []).append(instance)
+    out = dict(checked=0, warnings=[])
+    if not moments:
+        return out
+    catalog = game_catalog.session_catalog(folder)
+    layout = catalog.get('layout') if catalog is not None else None
+    # 路径 4：没有版式规则的游戏不核对，提交照常。
+    if not layout or 'tabs' not in layout:
+        return dict(out, skipped='界面目录没有 layout.tabs，未核对页签。')
+    try:
+        engine = _ocr_engine()
+    except ValueError as error:
+        # 路径 3：安装版不带画面文字识别，agent 经本地接口提交时只说明未核对，不拦提交。
+        return dict(out, skipped=f'{error}，未核对页签。')
+    source = _source_video(folder)
+    path = folder / CHECK
+    cache = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+    if cache.get('source_video') != source or cache.get('layout') != layout:
+        cache = dict(source_video=source, layout=layout, frames={})
+    for at, group in sorted(moments.items()):
+        key = f'{at:g}'
+        tabs = cache['frames'].get(key)
+        if tabs is None:
+            grabbed = _grab(folder, at)
+            # 路径 3：核对时刻超出录像末尾（validate 只要求在录像时长内）时跳过这一刻。
+            if grabbed is None:
+                continue
+            image, full = grabbed
+            result, _ = engine(image)
+            tabs = cache['frames'][key] = layout_common.derive(image, full, _items(result), layout).get('tabs', [])
+        out['checked'] += 1
+        for instance in group:
+            parts = instance['screen'].split('/')
+            every = [re.sub(r'（.*?）', '', parts[0])] + parts[1:]
+            for tab in tabs:
+                # 路径 3：组名常与第一个页签同名（属性/体质），模块入口与更深一段同排（装备/槽位调平）；
+                # 编号里任何一段正亮在这一排里，就算对上了（M4 验收里这两类占误报的多数）。
+                if any(layout_common._same_tab(segment, tab['active']) for segment in every):
+                    continue
+                for segment in every[:3]:
+                    if any(layout_common._same_tab(segment, t) for t in tab['row']):
+                        out['warnings'].append(dict(instance=instance.get('id'), at=at, screen=instance['screen'],
+                                                    segment=segment, lit=tab['active'], row=tab['row']))
+                        break
+    protocol._write(folder, CHECK, cache)
+    return out
 
 
 def _track_path(folder, output=None):
@@ -145,21 +237,35 @@ def build(folder, *, interval=5, title_interval=2, full_interval=10, start=0, en
         if not math.isfinite(interval) or not 2 <= interval <= 10:
             raise ValueError('抽帧间隔必须在 2–10 秒之间。')
         params = dict(version=1, interval=interval, start=start, end=end)
-    shown = {key: value for key, value in params.items() if key not in ('version', 'title_regions')}
+    layout = catalog.get('layout') if catalog is not None else None
+    if layout:
+        params['layout'] = layout
+    shown = {key: value for key, value in params.items()
+             if key not in ('version', 'title_regions', 'layout')}
     source = _source_video(folder)
     # 路径 2/1：相同视频及采样参数复用；转写、记录者变化不参与有效性。
     # 路径 2：用户按设计规范改了标题区坐标，旧标题文字不再对应，需要重跑。
     if path.is_file():
         cached = json.loads(path.read_text(encoding='utf-8'))
-        if cached['source_video'] == source and all(
-                cached.get(key, 0 if key == 'start' else None) == value
-                for key, value in params.items()):
+        sampled = cached['source_video'] == source and all(
+            cached.get(key, 0 if key == 'start' else None) == value
+            for key, value in params.items() if key != 'layout')
+        if sampled and cached.get('layout') == layout and 'active_tabs' not in cached:
             return dict(path=str(path.resolve()), frames=len(cached['frames']), reused=True,
                         **shown)
+        # 路径 2：用户改了目录里的版式规则 → 字框已在轨道里，只重新解码取色，不重跑 OCR。
+        # 路径 4：旧轨道没有字框，只能整段重跑。
+        if sampled and all(len(item) == 4 for frame in cached['frames']
+                           for item in frame.get('items', ())):
+            track = _recompute(folder, cached, params, layout)
+            if track is not None:
+                protocol._write(path.parent, path.name, track)
+                return dict(path=str(path.resolve()), frames=len(track['frames']), reused=True,
+                            recomputed=True, **shown)
     engine = _ocr_engine()
     title_engine = _ocr_engine(title=True) if regions else None
     frames, next_full = [], start
-    for at, image in _sample_frames(folder / '录像.mp4', params['interval'], start, end):
+    for at, image, full in _sample_frames(folder / '录像.mp4', params['interval'], start, end):
         frame = dict(t=at)
         if regions:
             frame['titles'] = _titles(title_engine, image, regions)
@@ -171,6 +277,8 @@ def build(folder, *, interval=5, title_interval=2, full_interval=10, start=0, en
                 next_full += full_interval
         result, _ = engine(image)
         frame['items'] = _items(result)
+        if layout:
+            frame.update(layout_common.derive(image, full, frame['items'], layout))
         frames.append(frame)
     track = dict(version=params.pop('version'), source_video=source, **params,
                  frames=frames,
@@ -198,32 +306,50 @@ def _title(items):
 def read_track(folder, *, start=None, end=None, compact=False, output=None):
     """Return time-filtered OCR; compact merges adjacent frames, preferring title text."""
     track = load_track(folder, output=output)
-    frames, previous_title, group_full = [], None, False
+    frames, previous_title, previous_tabs, group_full = [], None, None, False
     for frame in track['frames']:
         at, items = frame['t'], frame.get('items')
         if (start is not None and at < start) or (end is not None and at > end):
             continue
         titles = ' '.join(title['text'] for title in frame.get('titles', ()))
         text = '\n'.join(item[2] for item in items) if items is not None else titles
+        # 没报出激活页签（只有标题区的帧、或规则保持沉默）当作未知，不当作“换了页签”。
+        # 焦点不进分段输出：手柄操作时它每几秒就变。
+        tabs = [tab['active'] for tab in frame.get('tabs', ())] or None
+        named = frame.get('headings', {})
+        headings = ([named['main']] if 'main' in named else []) + named.get('side', []) or None
         if compact:
             # 路径 2：两层轨道中只识别了标题区、且标题区无字的帧没有可读文字，不参与合并。
             if items is None and not titles:
                 continue
             title = titles or _title(items)
-            if frames and title == previous_title:
+            # 路径 2：同一标题下切换页签（商店 精选→月卡）是换了界面，不能并进一段。
+            # 侧窗标题在顶部文字里，换侧窗时 title 已经不同，不必另比。
+            if frames and title == previous_title and (
+                    tabs is None or previous_tabs is None or tabs == previous_tabs):
                 frames[-1]['end'] = at
                 # 路径 2：组首只有标题时，用组内第一张整屏帧补全文字，避免画面上的反证被略去。
                 if items is not None and not group_full:
                     frames[-1]['text'], group_full = text[:120], True
+                if tabs and previous_tabs is None:
+                    frames[-1]['tabs'] = tabs
+                if headings and 'headings' not in frames[-1]:
+                    frames[-1]['headings'] = headings
+                previous_tabs = previous_tabs if tabs is None else tabs
                 continue
             frames.append(dict(t=at, end=at, text=text[:120]))
-            previous_title, group_full = title, items is not None
+            frames[-1].update({k: v for k, v in (('tabs', tabs), ('headings', headings)) if v})
+            previous_title, previous_tabs, group_full = title, tabs, items is not None
         else:
             row = dict(t=at, text=text)
             if 'titles' in frame:
                 row['titles'] = frame['titles']
             if items is not None:
-                row['items'] = items
+                # 路径 2：字框角点只供重算页签，不塞进 agent 读取的文字。
+                row['items'] = [item[:3] for item in items]
+            for key in _DERIVED:
+                if key in frame:
+                    row[key] = frame[key]
             frames.append(row)
     layers = {key: track[key] for key in ('title_interval', 'full_interval') if key in track}
     return dict(version=track['version'], interval=track['interval'], **layers,

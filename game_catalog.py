@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import layout_common
+
 
 SOURCES = ('manual', 'ocr_cluster', 'engine')
 
@@ -72,6 +74,9 @@ def validate_catalog(data):
     _text(data.get('game'), 'game')
     if 'title_regions' in data:
         _title_regions(data['title_regions'])
+    if 'layout' in data:
+        # 路径 2：版式规则由目录点名的识别方法自己校验（layout_common.RECOGNIZERS）。
+        layout_common.validate(data['layout'])
     if not isinstance(data.get('screens'), list):
         raise ValueError('screens 必须是数组。')
     screen_ids, element_ids = set(), set()

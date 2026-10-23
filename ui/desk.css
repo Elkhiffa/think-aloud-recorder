@@ -29,7 +29,7 @@ button:disabled{cursor:default;opacity:.5}
 .desk{display:flex;flex-direction:column;flex:1;min-height:0}
 .tb{height:40px;flex:none;display:flex;align-items:baseline;gap:var(--s2);padding-left:var(--s4);line-height:20px}
 .tb .brand{align-self:center}
-.brand{width:10px;height:10px;border-radius:2px;background:var(--rec)}
+.brand{flex:none;width:16px;height:16px;color:var(--rec)}
 .tb-name{font-size:var(--t1);color:var(--muted)}
 .tb-game{font-weight:700;margin-left:var(--s2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
 .dtabs{display:flex;align-items:baseline;gap:var(--s5);margin-left:var(--s5)}

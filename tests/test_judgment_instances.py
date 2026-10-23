@@ -73,6 +73,16 @@ class JudgmentInstanceTests(unittest.TestCase):
         self.assertEqual(recorder.read(self.folder / agent.RESULT)['version'], 2)
         self.assertEqual(session_review_payload(self.folder)['preprocessing']['result']['instances'], validated['instances'])
 
+    def test_submit_reports_screen_check_without_blocking(self):
+        """触发路径：外部 agent 提交带“组名/页签”编号的整理，而这个游戏的界面目录还没有版式规则 → 提交照常完成，回执里说明未核对页签。"""
+        candidate = self.candidate()
+        candidate['instances'][0].update(screen='背包/道具', screen_proposed=True, elements=[])
+        job = agent.claim(self.folder, 'synthetic-v2-worker')
+        submitted = agent.submit(self.folder, job['token'], candidate)
+        self.assertEqual(submitted['state'], 'complete')
+        self.assertEqual(submitted['screen_check']['checked'], 0)
+        self.assertIn('layout', submitted['screen_check']['skipped'])
+
     def test_refers_to_outside_video_is_rejected(self):
         """触发路径：agent 给出超出录像时长的时间（LLM 写错时间是已发生过的问题）→ 回看点击后定位到不存在的位置。"""
         candidate = self.candidate()
