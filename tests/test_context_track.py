@@ -31,7 +31,7 @@ class ContextTrackTests(unittest.TestCase):
         times = times or [2.5 + 5 * i for i in range(len(results))]
         engine = Mock(side_effect=[(result, None) for result in results])
         with patch.object(context, '_ocr_engine', return_value=engine), patch.object(
-                context, '_sample_frames', return_value=[(at, self.image) for at in times]):
+                context, '_sample_frames', return_value=[(at, self.image, self.image) for at in times]):
             summary = context.build(self.folder, **options)
         return summary, context.load_track(self.folder, output=options.get('output'))
 
@@ -125,7 +125,7 @@ class ContextTrackTests(unittest.TestCase):
         title_engine = Mock(side_effect=[(result, None) for result in title_results])
         with patch.object(context, '_ocr_engine', side_effect=lambda title=False: (
                 title_engine if title else full_engine)), patch.object(
-                context, '_sample_frames', return_value=frames):
+                context, '_sample_frames', return_value=[(at, image, image) for at, image in frames]):
             summary = context.build(self.folder, **options)
         return summary, context.load_track(self.folder), full_engine, title_engine
 
@@ -199,6 +199,7 @@ class ContextTrackTests(unittest.TestCase):
 
 GREY, GOLD = (170, 170, 170), (90, 160, 200)   # BGR：灰白未激活字、金色激活字
 RULES = dict(gold=dict(min_b=12, min_s=.25), top_max_y=.1, text_bands=[[.12, .26]])
+LAYOUT = dict(tabs=RULES)
 
 
 def tab_frame(rows):
@@ -225,17 +226,17 @@ class ActiveTabTests(unittest.TestCase):
         (self.folder / '录像.mp4').write_bytes(b'synthetic-video')
         self.catalog = root / 'game-assets' / '合成游戏' / 'catalog.json'
         self.catalog.parent.mkdir(parents=True)
-        self.write_rules(RULES)
+        self.write_rules(LAYOUT)
 
     def write_rules(self, rules):
         catalog = dict(version=1, game='合成游戏', screens=[])
         if rules is not None:
-            catalog['active_tabs'] = rules
+            catalog['layout'] = rules
         self.catalog.write_text(json.dumps(catalog, ensure_ascii=False), encoding='utf-8')
 
     def build(self, frames, ocr=True):
         engine = Mock(side_effect=[(result, None) for _, result in frames])
-        samples = [(2.5 + 5 * index, image) for index, (image, _) in enumerate(frames)]
+        samples = [(2.5 + 5 * index, image, image) for index, (image, _) in enumerate(frames)]
         with patch.object(context, '_ocr_engine', return_value=engine), patch.object(
                 context, '_sample_frames', return_value=samples):
             summary = context.build(self.folder)
@@ -251,42 +252,42 @@ class ActiveTabTests(unittest.TestCase):
             (490, [('前往', GREY), ('开始匹配', GOLD)])])
 
     def test_gold_tab_reported_only_on_top_and_text_band_rows(self):
-        """触发路径：agent 对燕云场次运行 context-build，目录有 active_tabs → 顶部和横向页签报出亮着的那个；底部金色按钮、两个金色的推广字不报，否则时间线满是“激活：开始匹配”。"""
+        """触发路径：agent 对燕云场次运行 context-build，目录有 layout.tabs → 顶部和横向页签报出亮着的那个；底部金色按钮、两个金色的推广字不报，否则时间线满是“激活：开始匹配”。"""
         _, track = self.build([self.shop()])
         frame = track['frames'][0]
         self.assertEqual(frame['tabs'], [
             dict(kind='top', active='商店', row=['背包', '商店', '任务']),
             dict(kind='text', active='精选', row=['精选', '月卡'])])
         self.assertEqual(len(frame['items'][0]), 4)
-        self.assertEqual(track['active_tabs'], RULES)
+        self.assertEqual(track['layout'], LAYOUT)
         read = context.read_track(self.folder)['frames'][0]
         self.assertEqual(read['tabs'], frame['tabs'])
         self.assertEqual({len(item) for item in read['items']}, {3})
 
     def test_declared_text_row_outside_band_is_reported(self):
-        """触发路径：用户在目录 text_rows 声明某界面不在高度带内的横向页签 → context-build 应报出它，未声明的带外金色字仍不报。"""
-        self.write_rules(dict(RULES, text_rows=[dict(screen='流派指引/流派推荐', tabs=['简介', '教学'])]))
+        """触发路径：用户在目录 layout.tabs.groups 声明某界面不在高度带内的横向页签 → context-build 应报出它，未声明的带外金色字仍不报。"""
+        self.write_rules(dict(tabs=dict(RULES, groups=[dict(screen='流派指引/流派推荐', tabs=['简介', '教学'])])))
         _, track = self.build([self.shop()])
         self.assertIn(dict(kind='text', active='教学', row=['简介', '教学']), track['frames'][0]['tabs'])
         self.assertNotIn('开始匹配', [tab['active'] for tab in track['frames'][0]['tabs']])
 
     def test_rule_change_recomputes_tabs_without_ocr(self):
-        """触发路径：用户调整目录 active_tabs 门槛后对已建轨道的场次再运行 context-build → 字框已在轨道里，只应重新取色，不应重跑几十分钟 OCR。"""
+        """触发路径：用户调整目录 layout 门槛后对已建轨道的场次再运行 context-build → 字框已在轨道里，只应重新取色，不应重跑几十分钟 OCR。"""
         self.build([self.shop()])
-        self.write_rules(dict(RULES, text_bands=[]))
+        self.write_rules(dict(tabs=dict(RULES, text_bands=[])))
         summary, track = self.build([self.shop()], ocr=False)
-        self.assertTrue(summary['retabbed'])
+        self.assertTrue(summary['recomputed'])
         self.assertEqual([tab['active'] for tab in track['frames'][0]['tabs']], ['商店'])
-        self.assertEqual(track['active_tabs']['text_bands'], [])
+        self.assertEqual(track['layout']['tabs']['text_bands'], [])
 
     def test_old_track_without_corners_is_rebuilt(self):
-        """触发路径：用户升级后在目录里加上 active_tabs，对已有场次运行 context-build → 旧轨道只有中心点、算不了字色 → 应整段重跑并补上字框和页签。"""
+        """触发路径：用户升级后在目录里加上 layout，对已有场次运行 context-build → 旧轨道只有中心点、算不了字色 → 应整段重跑并补上字框和页签。"""
         self.write_rules(None)
         _, old = self.build([self.shop()])
         for item in old['frames'][0]['items']:
             del item[3]
         (self.folder / context.TRACK).write_text(json.dumps(old, ensure_ascii=False), encoding='utf-8')
-        self.write_rules(RULES)
+        self.write_rules(LAYOUT)
         summary, track = self.build([self.shop()])
         self.assertFalse(summary['reused'])
         self.assertEqual(track['frames'][0]['tabs'][0]['active'], '商店')
@@ -301,10 +302,55 @@ class ActiveTabTests(unittest.TestCase):
         self.assertEqual([(row['t'], row['end'], row.get('tabs')) for row in frames],
                          [(2.5, 12.5, ['商店']), (17.5, 17.5, ['任务'])])
 
+    HEADINGS = dict(main=dict(margin=[.04, .16], y=[.045, .085], height=[.033, .055]),
+                    side=dict(y=[.055, .085], min_height=.043), icon_tabs=['道具', '培养', '任务'])
+
+    def menu(self, side_title='选择心法', name_card=False, gold_tab=False):
+        """Page title, a side panel (edge at x=600) with its title and a tooltip name without a panel edge;
+        or a name card whose ID line sits right under the name; or a gold tab at the page-title position.
+        Texts are kept > 7 heights apart so none of them chain into a tab row."""
+        image = np.full((540, 960, 3), 20, np.uint8)
+        image[:, 600:] = 60
+        result = []
+
+        def text(x, y, w, h, word, colour):
+            image[y:y + h, x:x + w:2] = colour
+            result.append([[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], word, .9])
+        white = (230, 230, 230)
+        if name_card:
+            text(610, 24, 72, 24, '余澄宇', white)
+            text(610, 52, 120, 12, '角色编号', white)
+            return image, result
+        if gold_tab:
+            text(50, 22, 40, 20, '装备', GOLD)
+            return image, result
+        text(50, 22, 40, 20, '心法', white)
+        text(610, 26, 96, 24, side_title, white)
+        text(330, 26, 96, 24, '鹿仙玉佩', white)
+        return image, result
+
+    def test_page_and_side_titles_reported(self):
+        """触发路径：agent 对菜单场次运行 context-build，目录有 layout.headings → 记下左上页面标题和右侧面板标题；亮着的金字页签、没有面板边缘的浮窗物品名、下面紧跟角色编号的名字不算标题。"""
+        self.write_rules(dict(LAYOUT, headings=self.HEADINGS))
+        _, track = self.build([self.menu(), self.menu(name_card=True), self.menu(gold_tab=True)])
+        self.assertEqual(track['frames'][0]['headings'], dict(main='心法', side=['选择心法']))
+        self.assertNotIn('headings', track['frames'][1])
+        self.assertNotIn('headings', track['frames'][2])
+        self.assertEqual(context.read_track(self.folder, compact=True)['frames'][0]['headings'],
+                         ['心法', '选择心法'])
+
+    def test_bag_title_is_the_active_icon_tab(self):
+        """触发路径：用户在背包里切图标页签，识别把标题左边的背包图标读成一个字（简培养）→ 侧窗标题应还原为“培养”，并记成亮着的一级图标页签。"""
+        self.write_rules(dict(LAYOUT, headings=self.HEADINGS))
+        _, track = self.build([self.menu(side_title='简培养')])
+        frame = track['frames'][0]
+        self.assertEqual(frame['headings']['side'], ['培养'])
+        self.assertEqual(frame['tabs'][0], dict(kind='icon', active='培养', row=['培养']))
+
     def test_catalog_rejects_width_based_band(self):
-        """触发路径：用户手填 active_tabs 后运行 catalog-validate → 把像素或倒序区间写进高度带应报错，而不是静默不报任何页签。"""
+        """触发路径：用户手填 layout 后运行 catalog-validate → 把像素或倒序区间写进高度带应报错，而不是静默不报任何页签。"""
         import game_catalog
-        catalog = dict(version=1, game='合成游戏', screens=[], active_tabs=dict(RULES, text_bands=[[120, 260]]))
+        catalog = dict(version=1, game='合成游戏', screens=[], layout=dict(tabs=dict(RULES, text_bands=[[120, 260]])))
         with self.assertRaisesRegex(ValueError, 'text_bands'):
             game_catalog.validate_catalog(catalog)
 

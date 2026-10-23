@@ -17,6 +17,7 @@ _EDGE_SPAN, _EDGE_ROWS, _EDGE_STEP, _EDGE_COVER = 3, 9, 2.5, .6
 # heights within 1.35x, gaps up to 7 heights, pitch within 1.5x; minimum text height 8/1080.
 _TAB_CHARS, _ROW_DY, _ROW_HEIGHTS, _ROW_GAP, _ROW_PITCH, _TAB_MIN_H = 6, .45, 1.35, 7, 1.5, 8 / 1080
 _TAB_NOISE = {'返回', '说明'}
+_BUMPERS = {'LB', 'RB', 'Q', 'E', 'LT', 'RT'}
 
 
 def _source_video(folder):
@@ -41,7 +42,7 @@ def _ocr_engine(title=False):
 
 
 def _sample_frames(path, interval, start, end):
-    """Seek to interval midpoints, yielding actual video PTS and 960-wide BGR."""
+    """Seek to interval midpoints, yielding actual video PTS, 960-wide BGR and source-size BGR."""
     import av
     with av.open(str(path)) as container:
         stream = container.streams.video[0]
@@ -60,7 +61,8 @@ def _sample_frames(path, interval, start, end):
                     return
                 height = round(frame.height * 960 / frame.width)
                 image = frame.reformat(width=960, height=height, format='bgr24')
-                yield round(at, 6), image.to_ndarray()
+                # 路径 2：焦点框顶部的小三角只有约 16 像素宽，960 宽下与框线融在一起，要在原尺寸上确认。
+                yield round(at, 6), image.to_ndarray(), frame.to_ndarray(format='bgr24')
                 break
             else:
                 return
@@ -171,32 +173,113 @@ def _gold(bgr, rules):
     return b >= rules['gold']['min_b'] and (high - low) / max(high, 1e-6) >= rules['gold']['min_s']
 
 
-def _active_tabs(image, items, rules):
+def _active_tabs(image, lab, rows, rules, top, span):
     """Top and horizontal-text tab rows with exactly one gold tab; anything else stays silent."""
-    import cv2
-    top, bottom = _game_rows(image)
-    span = bottom - top
-    lab = None
     tabs = []
-    for members in _tab_rows(items, _TAB_MIN_H * span):
+    for members in rows:
         y = (sum(box['cy'] for box in members) / len(members) - top) / span
         texts = [box['text'] for box in members]
         if y < rules['top_max_y']:
             kind = 'top'
         elif any(low <= y <= high for low, high in rules['text_bands']) or any(
-                len(set(texts) & set(row['tabs'])) >= 2 for row in rules.get('text_rows', ())):
+                len(set(texts) & set(group['tabs'])) >= 2 for group in rules.get('groups', ())):
             kind = 'text'
         else:
             # 路径 2：带外的金色字多是按钮、角标和卡片标题（2026-10 随机 80 帧里带外 16 排全是）。
             continue
-        if lab is None:
-            lab = cv2.cvtColor(image.astype(np.float32) / 255, cv2.COLOR_BGR2Lab)
         inks = [_ink(image, lab, box) for box in members]
         gold = [index for index, ink in enumerate(inks) if ink is not None and _gold(ink, rules)]
         # 路径 2：两个金色（商店“和鸣”推广字）或没有金色时不报，宁缺勿错。
         if len(gold) == 1:
             tabs.append(dict(kind=kind, active=texts[gold[0]], row=texts))
     return tabs
+
+
+def _text_boxes(items):
+    boxes = []
+    for index, item in enumerate(items):
+        if len(item) < 4:
+            continue
+        xs, ys = [point[0] for point in item[3]], [point[1] for point in item[3]]
+        boxes.append(dict(i=index, text=item[2], t=re.sub(r'\s', '', item[2]), x0=min(xs), x1=max(xs),
+                          y0=min(ys), y1=max(ys), cx=(min(xs) + max(xs)) / 2, cy=(min(ys) + max(ys)) / 2,
+                          h=max(ys) - min(ys)))
+    return boxes
+
+
+def _headings(image, lab, items, rules, gold, top, span, in_rows):
+    """Page title (left, fixed margin) and side-window titles (top of a full-height right panel)."""
+    width = image.shape[1]
+    within = lambda value, band: band[0] <= value <= band[1]
+    boxes = _text_boxes(items)
+    main, side = None, []
+    for b in boxes:
+        t = b['t']
+        if (b['i'] in in_rows or not 2 <= len(t) <= 10 or re.search(r'\d', t)
+                or not re.search(r'[一-鿿]', t)):
+            continue
+        y, h = (b['cy'] - top) / span, b['h'] / span
+        left = b['cx'] < width / 2
+        margin = (b['x0'] if left else width - b['x1']) / span
+        if 'main' in rules and left and within(margin, rules['main']['margin']) and within(
+                y, rules['main']['y']) and within(h, rules['main']['height']):
+            kind = 'main'
+        elif 'side' in rules and within(y, rules['side']['y']) and h >= rules['side']['min_height']:
+            kind = 'side'
+            # 路径 2：侧窗标题左侧有一条贯穿画面高度的面板边缘；浮窗里的物品名、作者署名没有。
+            low, high = (b['x0'] - .1 * span) / width, (b['x0'] + .01 * span) / width
+            if high <= max(low, 0) or _panel_left(image, [max(0.0, low), min(1.0, high)]) is None:
+                continue
+        else:
+            continue
+        # 路径 2：金字是亮着的页签（装备、月卡）；正下方紧贴一行字的是角色卡（名字 + 角色编号）；
+        # 左边紧挨 LB / Q 的是识别粘成一个字的页签排（LB 单人多人）。
+        ink = _ink(image, lab, b) if gold else None
+        if ink is not None and _gold(ink, gold):
+            continue
+        if any(o is not b and 0 <= o['y0'] - b['y1'] < .6 * b['h']
+               and min(o['x1'], b['x1']) - max(o['x0'], b['x0']) > 0 for o in boxes):
+            continue
+        if any(o['t'].upper() in _BUMPERS and abs(o['cy'] - b['cy']) < .6 * b['h']
+               and 0 <= b['x0'] - o['x1'] < 3 * b['h'] for o in boxes):
+            continue
+        if kind == 'main':
+            main = b if main is None or b['h'] > main['h'] else main
+        else:
+            side.append(b)
+    names = rules.get('icon_tabs', ())
+    # 路径 2：背包标题左侧的图标常被识别成一个字（淄培养、简培养）；已知名称允许开头多一个字。
+    fix = lambda t: t[1:] if t not in names and t[1:] in names else t
+    out = {}
+    if main is not None:
+        out['main'] = main['t']
+    if side:
+        out['side'] = [fix(b['t']) for b in sorted(side, key=lambda b: b['x0'])]
+    return out
+
+
+def _layout(image, full, items, layout):
+    """Everything the catalog layout asks for on one full-OCR frame: tabs, headings, focus."""
+    import cv2
+    top, bottom = _game_rows(image)
+    span = bottom - top
+    lab = cv2.cvtColor(image.astype(np.float32) / 255, cv2.COLOR_BGR2Lab)
+    rows = _tab_rows(items, _TAB_MIN_H * span)
+    out = {}
+    tab_rules = layout.get('tabs')
+    tabs = _active_tabs(image, lab, rows, tab_rules, top, span) if tab_rules else []
+    if 'headings' in layout:
+        in_rows = {box['i'] for members in rows for box in members}
+        headings = _headings(image, lab, items, layout['headings'], tab_rules, top, span, in_rows)
+        if headings:
+            out['headings'] = headings
+        # 路径 2：背包亮着的图标页签就是侧窗标题（用户 2026-10-23 给的规格）。
+        for name in headings.get('side', ()):
+            if name in layout['headings'].get('icon_tabs', ()):
+                tabs.insert(0, dict(kind='icon', active=name, row=[name]))
+    if tabs:
+        out['tabs'] = tabs
+    return out
 
 
 def _panel_left(image, x_range):
@@ -234,31 +317,35 @@ def _titles(engine, image, regions):
     return titles
 
 
-def _retab(folder, cached, params, rules):
-    """Recompute frame tabs from stored boxes on freshly decoded frames; None if frames drift."""
+_DERIVED = ('tabs', 'headings', 'focus')
+
+
+def _recompute(folder, cached, params, layout):
+    """Re-derive layout fields from stored boxes on freshly decoded frames; None if frames drift."""
     frames = [dict(frame) for frame in cached['frames']]
     for frame in frames:
-        frame.pop('tabs', None)
+        for key in _DERIVED:
+            frame.pop(key, None)
     # 路径 2：用户从目录删掉规则时只需去掉旧结果，不必解码。
-    count = 0 if rules else len(frames)
+    count = 0 if layout else len(frames)
     sampled = _sample_frames(folder / '录像.mp4', params['interval'], params['start'],
-                             params['end']) if rules else ()
-    for at, image in sampled:
+                             params['end']) if layout else ()
+    for at, image, full in sampled:
         # 路径 4：旧版本的解码器取到的帧时刻可能不同，字框就对不上，改为整段重跑。
         if count >= len(frames) or frames[count]['t'] != at:
             return None
         frame = frames[count]
         if 'items' in frame:
-            tabs = _active_tabs(image, frame['items'], rules)
-            if tabs:
-                frame['tabs'] = tabs
+            frame.update(_layout(image, full, frame['items'], layout))
         count += 1
     if count != len(frames):
         return None
     track = dict(cached, frames=frames)
+    # 路径 4：M3 回填的轨道把规则记在 active_tabs 下，换成 layout。
     track.pop('active_tabs', None)
-    if rules:
-        track['active_tabs'] = rules
+    track.pop('layout', None)
+    if layout:
+        track['layout'] = layout
     return track
 
 
@@ -297,11 +384,11 @@ def build(folder, *, interval=5, title_interval=2, full_interval=10, start=0, en
         if not math.isfinite(interval) or not 2 <= interval <= 10:
             raise ValueError('抽帧间隔必须在 2–10 秒之间。')
         params = dict(version=1, interval=interval, start=start, end=end)
-    rules = catalog.get('active_tabs') if catalog is not None else None
-    if rules:
-        params['active_tabs'] = rules
+    layout = catalog.get('layout') if catalog is not None else None
+    if layout:
+        params['layout'] = layout
     shown = {key: value for key, value in params.items()
-             if key not in ('version', 'title_regions', 'active_tabs')}
+             if key not in ('version', 'title_regions', 'layout')}
     source = _source_video(folder)
     # 路径 2/1：相同视频及采样参数复用；转写、记录者变化不参与有效性。
     # 路径 2：用户按设计规范改了标题区坐标，旧标题文字不再对应，需要重跑。
@@ -309,23 +396,23 @@ def build(folder, *, interval=5, title_interval=2, full_interval=10, start=0, en
         cached = json.loads(path.read_text(encoding='utf-8'))
         sampled = cached['source_video'] == source and all(
             cached.get(key, 0 if key == 'start' else None) == value
-            for key, value in params.items() if key != 'active_tabs')
-        if sampled and cached.get('active_tabs') == rules:
+            for key, value in params.items() if key != 'layout')
+        if sampled and cached.get('layout') == layout and 'active_tabs' not in cached:
             return dict(path=str(path.resolve()), frames=len(cached['frames']), reused=True,
                         **shown)
-        # 路径 2：用户改了目录里的激活页签规则 → 字框已在轨道里，只重新解码取色，不重跑 OCR。
+        # 路径 2：用户改了目录里的版式规则 → 字框已在轨道里，只重新解码取色，不重跑 OCR。
         # 路径 4：旧轨道没有字框，只能整段重跑。
         if sampled and all(len(item) == 4 for frame in cached['frames']
                            for item in frame.get('items', ())):
-            track = _retab(folder, cached, params, rules)
+            track = _recompute(folder, cached, params, layout)
             if track is not None:
                 protocol._write(path.parent, path.name, track)
                 return dict(path=str(path.resolve()), frames=len(track['frames']), reused=True,
-                            retabbed=True, **shown)
+                            recomputed=True, **shown)
     engine = _ocr_engine()
     title_engine = _ocr_engine(title=True) if regions else None
     frames, next_full = [], start
-    for at, image in _sample_frames(folder / '录像.mp4', params['interval'], start, end):
+    for at, image, full in _sample_frames(folder / '录像.mp4', params['interval'], start, end):
         frame = dict(t=at)
         if regions:
             frame['titles'] = _titles(title_engine, image, regions)
@@ -337,10 +424,8 @@ def build(folder, *, interval=5, title_interval=2, full_interval=10, start=0, en
                 next_full += full_interval
         result, _ = engine(image)
         frame['items'] = _items(result)
-        if rules:
-            tabs = _active_tabs(image, frame['items'], rules)
-            if tabs:
-                frame['tabs'] = tabs
+        if layout:
+            frame.update(_layout(image, full, frame['items'], layout))
         frames.append(frame)
     track = dict(version=params.pop('version'), source_video=source, **params,
                  frames=frames,
@@ -375,14 +460,18 @@ def read_track(folder, *, start=None, end=None, compact=False, output=None):
             continue
         titles = ' '.join(title['text'] for title in frame.get('titles', ()))
         text = '\n'.join(item[2] for item in items) if items is not None else titles
-        # 没报出激活页签（只有标题的帧、或规则保持沉默）当作未知，不当作“换了页签”。
+        # 没报出激活页签（只有标题区的帧、或规则保持沉默）当作未知，不当作“换了页签”。
+        # 焦点不进分段输出：手柄操作时它每几秒就变。
         tabs = [tab['active'] for tab in frame.get('tabs', ())] or None
+        named = frame.get('headings', {})
+        headings = ([named['main']] if 'main' in named else []) + named.get('side', []) or None
         if compact:
             # 路径 2：两层轨道中只识别了标题区、且标题区无字的帧没有可读文字，不参与合并。
             if items is None and not titles:
                 continue
             title = titles or _title(items)
             # 路径 2：同一标题下切换页签（商店 精选→月卡）是换了界面，不能并进一段。
+            # 侧窗标题在顶部文字里，换侧窗时 title 已经不同，不必另比。
             if frames and title == previous_title and (
                     tabs is None or previous_tabs is None or tabs == previous_tabs):
                 frames[-1]['end'] = at
@@ -391,11 +480,12 @@ def read_track(folder, *, start=None, end=None, compact=False, output=None):
                     frames[-1]['text'], group_full = text[:120], True
                 if tabs and previous_tabs is None:
                     frames[-1]['tabs'] = tabs
+                if headings and 'headings' not in frames[-1]:
+                    frames[-1]['headings'] = headings
                 previous_tabs = previous_tabs if tabs is None else tabs
                 continue
             frames.append(dict(t=at, end=at, text=text[:120]))
-            if tabs:
-                frames[-1]['tabs'] = tabs
+            frames[-1].update({k: v for k, v in (('tabs', tabs), ('headings', headings)) if v})
             previous_title, previous_tabs, group_full = title, tabs, items is not None
         else:
             row = dict(t=at, text=text)
@@ -404,8 +494,9 @@ def read_track(folder, *, start=None, end=None, compact=False, output=None):
             if items is not None:
                 # 路径 2：字框角点只供重算页签，不塞进 agent 读取的文字。
                 row['items'] = [item[:3] for item in items]
-            if 'tabs' in frame:
-                row['tabs'] = frame['tabs']
+            for key in _DERIVED:
+                if key in frame:
+                    row[key] = frame[key]
             frames.append(row)
     layers = {key: track[key] for key in ('title_interval', 'full_interval') if key in track}
     return dict(version=track['version'], interval=track['interval'], **layers,
