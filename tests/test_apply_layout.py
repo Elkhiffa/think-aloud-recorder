@@ -55,10 +55,15 @@ class ApplyLayoutTests(unittest.TestCase):
             (folder / '录像.mp4').write_bytes(b'')
             layout = json.loads(path.read_text(encoding='utf-8'))['layout']
             (folder / 'context-track.json').write_text(json.dumps(dict(layout=layout), ensure_ascii=False), encoding='utf-8')
+            early = vault / '场次' / '2026-09-16 早期'
+            early.mkdir()
+            (early / '录像.mp4').write_bytes(b'')
+            (early / 'session.json').write_text(json.dumps(dict(game='燕云'), ensure_ascii=False), encoding='utf-8')
             with patch('ocr_component.ensure_importable', return_value=True), patch('subprocess.call') as call:
                 result = context_track.rebuild(vault, progress=lambda line: None)
             call.assert_not_called()
-            self.assertEqual((result['sessions'], result['skipped'], result['failed']), (1, 1, []))
+            self.assertEqual((result['sessions'], result['skipped'], result['failed']), (2, 1, []))
+            self.assertEqual(result['other_game'], ['2026-09-16 早期'])
 
     def test_unknown_game_is_refused_before_anything_is_written(self):
         with tempfile.TemporaryDirectory() as tmp:

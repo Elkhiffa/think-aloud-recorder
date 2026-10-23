@@ -395,6 +395,13 @@ def rebuild(vault, game=None, workers=2, progress=print):
     def one(folder):
         if _built_with(folder, layout):
             return folder.name, 'skipped', 0
+        try:
+            recorded = json.loads((folder / 'session.json').read_text(encoding='utf-8-sig')).get('game')
+        except (OSError, ValueError):
+            recorded = None
+        if recorded != game:
+            # 路径 5：早期场次记的游戏名不同（如“燕云”），找不到这份目录，轨道不会带页签；单列，不算失败。
+            return folder.name, 'other-game', 0
         started = time.time()
         with (logs / (folder.name[:22] + '.log')).open('w', encoding='utf-8') as log:
             code = subprocess.call([sys.executable, '-B', '-X', 'utf8', str(app / 'agent_cli.py'), 'context-build', str(folder)],
@@ -410,4 +417,5 @@ def rebuild(vault, game=None, workers=2, progress=print):
             rows.append(dict(session=name, state=state, seconds=seconds))
     return dict(sessions=len(rows), built=sum(row['state'] == 'ok' for row in rows),
                 skipped=sum(row['state'] == 'skipped' for row in rows),
-                failed=[row['session'] for row in rows if row['state'] not in ('ok', 'skipped')], logs=str(logs))
+                other_game=[row['session'] for row in rows if row['state'] == 'other-game'],
+                failed=[row['session'] for row in rows if row['state'] not in ('ok', 'skipped', 'other-game')], logs=str(logs))
