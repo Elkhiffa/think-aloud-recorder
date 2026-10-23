@@ -394,6 +394,46 @@ class ActiveTabTests(unittest.TestCase):
             dict(kind='top', active='精选', row=['推荐', '精选'], level=1),
             dict(kind='group', active='道具', row=['礼包', '道具', '外观'], level=2)])
 
+    def mail(self):
+        return tab_frame([(20, [('收件箱', GOLD), ('藏信匣', GREY), ('发件箱', GREY)])])
+
+    def check(self, instances, frames):
+        engine = Mock(side_effect=[(result, None) for _, result in frames])
+        grabs = {at: (image, image) for at, (image, _) in zip(sorted({i['evidence'][0]['start'] for i in instances}), frames)}
+        with patch.object(context, '_ocr_engine', return_value=engine), patch.object(
+                context, '_grab', side_effect=lambda folder, at: grabs[at]):
+            return context.check_screens(self.folder, instances), engine
+
+    @staticmethod
+    def instance(ident, screen, at):
+        return dict(id=ident, screen=screen, evidence=[dict(kind='video', start=at, end=at)])
+
+    def test_submit_check_flags_a_screen_id_whose_tab_is_not_lit(self):
+        """触发路径：外部 agent 提交单场整理，编号写成“邮件/藏信匣”，核对时刻画面上亮的是“收件箱”→ 提交回执里提醒 agent 再看一眼；写对的“邮件/收件箱”不提醒，画面上看不到的段不下结论。"""
+        instances = [self.instance('i1', '邮件/藏信匣', 3), self.instance('i2', '邮件/收件箱/详情', 3),
+                     # 组名与第一个页签同名、亮的是编号里更深一段：编号是对的，不提醒。
+                     self.instance('i3', '藏信匣/收件箱', 3)]
+        out, _ = self.check(instances, [self.mail()])
+        self.assertEqual(out['checked'], 1)
+        self.assertEqual(out['warnings'], [dict(instance='i1', at=3, screen='邮件/藏信匣', segment='藏信匣',
+                                                lit='收件箱', row=['收件箱', '藏信匣', '发件箱'])])
+
+    def test_resubmitted_moment_is_not_read_again(self):
+        """触发路径：agent 收到提醒后改了编号再提交 → 同一核对时刻已在 screen-check.json 里，不应再花约 2 秒重新识别。"""
+        instances = [self.instance('i1', '邮件/藏信匣', 3)]
+        self.check(instances, [self.mail()])
+        instances[0]['screen'] = '邮件/收件箱'
+        out, engine = self.check(instances, [])
+        engine.assert_not_called()
+        self.assertEqual((out['checked'], out['warnings']), (1, []))
+
+    def test_submit_check_without_ocr_says_unchecked(self):
+        """触发路径：agent 经安装版的本地接口提交，安装版没有画面文字识别 → 回执写明未核对，提交本身不受影响。"""
+        with patch.object(context, '_ocr_engine', side_effect=ValueError('OCR 依赖未安装')):
+            out = context.check_screens(self.folder, [self.instance('i1', '邮件/藏信匣', 3)])
+        self.assertEqual(out['checked'], 0)
+        self.assertIn('OCR 依赖未安装', out['skipped'])
+
     def test_catalog_rejects_width_based_band(self):
         """触发路径：用户手填 layout 后运行 catalog-validate → 把像素或倒序区间写进高度带应报错，而不是静默不报任何页签。"""
         import game_catalog

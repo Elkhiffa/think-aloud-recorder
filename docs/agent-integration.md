@@ -66,7 +66,7 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 每个场次在录像、转写和独立回看文件完成后，最后原子发布 `agent-ready.json`。信号包含协议版本、场次 ID、素材 revision、相对源文件名及大小/修改时间、录像时长。没有安装路径、配置或密钥。
 
-`agent_cli.py` 是外部会话的本地接口，使用自带 Python。`scan` 读取就绪场次；`publish` 为指定旧场次补发或更新信号；`claim` 领取，`reprocess` 备份后重新领取已有结果，`renew` 续期，`evidence` 读概览/区间，`frame` 提取图片，`validate` 校验候选，`submit` 提交，`fail` 记录原因，`status` 回读状态。完整参数见 `--help`。
+`agent_cli.py` 是外部会话的本地接口，使用自带 Python。`scan` 读取就绪场次；`publish` 为指定旧场次补发或更新信号；`claim` 领取，`reprocess` 备份后重新领取已有结果，`renew` 续期，`evidence` 读概览/区间，`frame` 提取图片，`validate` 校验候选，`submit` 提交，`fail` 记录原因，`status` 回读状态。完整参数见 `--help`。v2 结果提交写入后，`submit` 在锁外按每条实例第一条画面证据的时刻取帧识别，用界面目录的 `layout` 判出亮着的页签，回执附 `screen_check:{checked,warnings[],skipped?}`：编号里某一段（组名去掉括号、第一、二段页签）在画面上属于一排页签、亮着的却是另一个时，记一条 `{instance,at,screen,segment,lit,row}`；画面上看不到的段不下结论。只提醒，不拦截提交。每刻约 2 秒；结果按时刻缓存在场次目录的 `screen-check.json`（录像或 layout 变了自动作废），改正后重新提交不再重复识别。目录没有 layout、或运行环境没有画面文字识别（安装版）时只写 `skipped`。
 
 0.6.10 增加 `quote-words SESSION --ref t000040 [--offset 0 --limit 80]`，按需读取一条原话的原始词时间，最多每页 200 词。当同一转写片段中的话相隔很久，可在结果中用 `{"kind":"quote_words","ref":"t000040","word_range":[3,9]}` 引用原数组索引 3–8。程序生成节选文字、时间和说话人，回看点击定位到节选起点；不修改原转写、素材 revision 或已有机械索引。没有有效词时间时明确拒绝节选，普通整段引用仍可使用。词间空档不等于已确认的静音。
 

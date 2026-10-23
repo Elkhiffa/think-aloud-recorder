@@ -607,6 +607,81 @@ def _recompute(folder, cached, params, layout):
     return track
 
 
+CHECK = 'screen-check.json'
+
+
+def _grab(folder, at):
+    """960-wide and source-size BGR of the frame at `at`, or None past the end."""
+    from contextlib import closing
+    import visual_nodes
+    with closing(visual_nodes._decode(Path(folder) / '录像.mp4', at, at, {})) as decoded:
+        _, frame = next(decoded, (None, None))
+    if frame is None:
+        return None
+    small = frame.reformat(width=960, height=round(frame.height * 960 / frame.width), format='bgr24')
+    return small.to_ndarray(), frame.to_ndarray(format='bgr24')
+
+
+def check_screens(folder, instances):
+    """Compare each instance's screen id with the tabs lit at its checked frame (the first video evidence).
+
+    A segment that sits in a detected tab row but is not the lit one is reported; segments that are not
+    visible as tabs say nothing. Results are cached per moment in screen-check.json, keyed by the video
+    and the catalog layout, so a corrected resubmission does not OCR again."""
+    folder = Path(folder)
+    moments = {}
+    for instance in instances:
+        at = next((row['start'] for row in instance.get('evidence', ()) if row.get('kind') == 'video'), None)
+        screen = instance.get('screen')
+        if at is not None and isinstance(screen, str) and '/' in screen:
+            moments.setdefault(float(at), []).append(instance)
+    out = dict(checked=0, warnings=[])
+    if not moments:
+        return out
+    catalog = game_catalog.session_catalog(folder)
+    layout = catalog.get('layout') if catalog is not None else None
+    # 路径 4：没有版式规则的游戏不核对，提交照常。
+    if not layout or 'tabs' not in layout:
+        return dict(out, skipped='界面目录没有 layout.tabs，未核对页签。')
+    try:
+        engine = _ocr_engine()
+    except ValueError as error:
+        # 路径 3：安装版不带画面文字识别，agent 经本地接口提交时只说明未核对，不拦提交。
+        return dict(out, skipped=f'{error}，未核对页签。')
+    source = _source_video(folder)
+    path = folder / CHECK
+    cache = json.loads(path.read_text(encoding='utf-8')) if path.is_file() else {}
+    if cache.get('source_video') != source or cache.get('layout') != layout:
+        cache = dict(source_video=source, layout=layout, frames={})
+    for at, group in sorted(moments.items()):
+        key = f'{at:g}'
+        tabs = cache['frames'].get(key)
+        if tabs is None:
+            grabbed = _grab(folder, at)
+            # 路径 3：核对时刻超出录像末尾（validate 只要求在录像时长内）时跳过这一刻。
+            if grabbed is None:
+                continue
+            image, full = grabbed
+            result, _ = engine(image)
+            tabs = cache['frames'][key] = _layout(image, full, _items(result), layout).get('tabs', [])
+        out['checked'] += 1
+        for instance in group:
+            parts = instance['screen'].split('/')
+            every = [re.sub(r'（.*?）', '', parts[0])] + parts[1:]
+            for tab in tabs:
+                # 路径 3：组名常与第一个页签同名（属性/体质），模块入口与更深一段同排（装备/槽位调平）；
+                # 编号里任何一段正亮在这一排里，就算对上了（M4 验收里这两类占误报的多数）。
+                if any(_same_tab(segment, tab['active']) for segment in every):
+                    continue
+                for segment in every[:3]:
+                    if any(_same_tab(segment, t) for t in tab['row']):
+                        out['warnings'].append(dict(instance=instance.get('id'), at=at, screen=instance['screen'],
+                                                    segment=segment, lit=tab['active'], row=tab['row']))
+                        break
+    protocol._write(folder, CHECK, cache)
+    return out
+
+
 def _track_path(folder, output=None):
     return (Path(output) if output is not None else Path(folder)) / TRACK
 
