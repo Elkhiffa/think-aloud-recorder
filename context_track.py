@@ -414,14 +414,24 @@ def _focus_rings(image, rules, min_v):
     return rings
 
 
+def _crop(image, x0, y0, x1, y1):
+    """Slice clamped to the picture; None when nothing is left. A focus frame on the leftmost icon or the
+    top row reaches past the edge, and a negative index would wrap around (E3: 20260929-162827)."""
+    height, width = image.shape[:2]
+    x0, x1 = max(0, int(x0)), min(width, int(x1))
+    y0, y1 = max(0, int(y0)), min(height, int(y1))
+    return image[y0:y1, x0:x1] if x1 > x0 and y1 > y0 else None
+
+
 def _focus_triangle(full, box, scale, rules, min_v):
     """Share (0-10) of the gold near the top edge that sits in the centre: the downward triangle.
     Big frames carry it above the edge line, small icon frames draw it down into the frame."""
     x, y, w, h = [v * scale for v in box]
     unit = full.shape[0] / 1080
-    band = _focus_mask(full[int(max(0, y - 6)):int(y + .2 * h + 6), int(x):int(x + w)], rules, min_v)
-    if band.size == 0:
+    crop = _crop(full, x, y - 6, x + w, y + .2 * h + 6)
+    if crop is None:
         return 0.0
+    band = _focus_mask(crop, rules, min_v)
     cover = band.mean(axis=1)
     edge = next((r for r, v in enumerate(cover) if v >= .5), None)
     if edge is None:
@@ -451,9 +461,10 @@ def _focus_narrowing(full, box, scale, rules, min_v):
     unit = full.shape[0] / 1080
     half = max(14 * unit, .15 * w)
     cx = x + w / 2
-    band = _focus_mask(full[int(max(0, y - 6 * unit)):int(y + min(.3 * h, 40 * unit)),
-                            int(cx - half):int(cx + half)], rules, min_v)
-    widths = band.sum(axis=1)
+    crop = _crop(full, cx - half, y - 6 * unit, cx + half, y + min(.3 * h, 40 * unit))
+    if crop is None:
+        return 0
+    widths = _focus_mask(crop, rules, min_v).sum(axis=1)
     best = 0
     for start in range(len(widths)):
         if not 4 * unit <= widths[start] <= 2 * half * .95:

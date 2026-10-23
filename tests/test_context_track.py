@@ -434,6 +434,20 @@ class ActiveTabTests(unittest.TestCase):
         self.assertEqual(out['checked'], 0)
         self.assertIn('OCR 依赖未安装', out['skipped'])
 
+    def test_focus_on_the_leftmost_icon_does_not_stop_the_build(self):
+        """触发路径：用户在左侧图文页签列把焦点停在最靠边的图标上，agent 对这场运行 context-build → 焦点框贴着画面左边和上边，取框上沿的小块会越界；应照常报出焦点，而不是整场失败（E3 实测 20260929-162827）。"""
+        import cv2
+        full = np.full((1080, 1920, 3), 20, np.uint8)
+        gold = (60, 170, 230)
+        cv2.circle(full, (40, 52), 40, gold, 3)                  # 圆形焦点贴着左边与上边
+        cv2.fillPoly(full, [np.array([[32, 2], [48, 2], [40, 10]])], gold)
+        cv2.rectangle(full, (0, 300), (150, 450), gold, 4)       # 方框贴左边
+        cv2.fillPoly(full, [np.array([[67, 290], [83, 290], [75, 299]])], gold)
+        image = cv2.resize(full, (960, 540), interpolation=cv2.INTER_AREA)
+        self.write_rules(dict(LAYOUT, focus=dict(hue=[26, 44], min_s=.31, levels=[.59, .35])))
+        _, track = self.build([(image, [], full)])
+        self.assertIn('focus', track['frames'][0])
+
     def test_catalog_rejects_width_based_band(self):
         """触发路径：用户手填 layout 后运行 catalog-validate → 把像素或倒序区间写进高度带应报错，而不是静默不报任何页签。"""
         import game_catalog
