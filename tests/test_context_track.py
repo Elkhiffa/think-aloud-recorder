@@ -199,7 +199,7 @@ class ContextTrackTests(unittest.TestCase):
 
 GREY, GOLD = (170, 170, 170), (90, 160, 200)   # BGR：灰白未激活字、金色激活字
 RULES = dict(gold=dict(min_b=12, min_s=.25), top_max_y=.1, text_bands=[[.12, .26]])
-LAYOUT = dict(tabs=RULES)
+LAYOUT = dict(recognizer='yanyun', tabs=RULES)
 
 
 def tab_frame(rows):
@@ -268,7 +268,7 @@ class ActiveTabTests(unittest.TestCase):
 
     def test_declared_text_row_outside_band_is_reported(self):
         """触发路径：用户在目录 layout.tabs.groups 声明某界面不在高度带内的横向页签 → context-build 应报出它，未声明的带外金色字仍不报。"""
-        self.write_rules(dict(tabs=dict(RULES, groups=[dict(screen='流派指引/流派推荐', tabs=['简介', '教学'])])))
+        self.write_rules(dict(LAYOUT, tabs=dict(RULES, groups=[dict(screen='流派指引/流派推荐', tabs=['简介', '教学'])])))
         _, track = self.build([self.shop()])
         self.assertIn('教学', [tab['active'] for tab in track['frames'][0]['tabs'] if tab['kind'] == 'group'])
         self.assertNotIn('开始匹配', [tab['active'] for tab in track['frames'][0]['tabs']])
@@ -276,7 +276,7 @@ class ActiveTabTests(unittest.TestCase):
     def test_rule_change_recomputes_tabs_without_ocr(self):
         """触发路径：用户调整目录 layout 门槛后对已建轨道的场次再运行 context-build → 字框已在轨道里，只应重新取色，不应重跑几十分钟 OCR。"""
         self.build([self.shop()])
-        self.write_rules(dict(tabs=dict(RULES, text_bands=[])))
+        self.write_rules(dict(LAYOUT, tabs=dict(RULES, text_bands=[])))
         summary, track = self.build([self.shop()], ocr=False)
         self.assertTrue(summary['recomputed'])
         self.assertEqual([tab['active'] for tab in track['frames'][0]['tabs']], ['商店'])
@@ -388,7 +388,7 @@ class ActiveTabTests(unittest.TestCase):
         image[20:36, 170:210:2] = GOLD
         result += [[[[100, 20], [140, 20], [140, 36], [100, 36]], '推荐', .9],
                    [[[170, 20], [210, 20], [210, 36], [170, 36]], '精选', .9]]
-        self.write_rules(dict(tabs=dict(RULES, groups=[dict(screen='商店/精选', tabs=['礼包', '道具', '外观'])])))
+        self.write_rules(dict(LAYOUT, tabs=dict(RULES, groups=[dict(screen='商店/精选', tabs=['礼包', '道具', '外观'])])))
         _, track = self.build([(image, result)])
         self.assertEqual(track['frames'][0]['tabs'], [
             dict(kind='top', active='精选', row=['推荐', '精选'], level=1),
@@ -451,9 +451,16 @@ class ActiveTabTests(unittest.TestCase):
     def test_catalog_rejects_width_based_band(self):
         """触发路径：用户手填 layout 后运行 catalog-validate → 把像素或倒序区间写进高度带应报错，而不是静默不报任何页签。"""
         import game_catalog
-        catalog = dict(version=1, game='合成游戏', screens=[], layout=dict(tabs=dict(RULES, text_bands=[[120, 260]])))
+        catalog = dict(version=1, game='合成游戏', screens=[], layout=dict(LAYOUT, tabs=dict(RULES, text_bands=[[120, 260]])))
         with self.assertRaisesRegex(ValueError, 'text_bands'):
             game_catalog.validate_catalog(catalog)
+
+    def test_catalog_names_a_shipped_recognizer(self):
+        """触发路径：用户把别的游戏的目录 layout 抄过来，或写了本版本记录器没带的识别方法 → catalog-validate 应报错并列出可用的方法，而不是建轨道时静默不识别。"""
+        import game_catalog
+        for layout in (dict(tabs=RULES), dict(LAYOUT, recognizer='别的游戏')):
+            with self.subTest(layout=layout), self.assertRaisesRegex(ValueError, 'recognizer.*yanyun'):
+                game_catalog.validate_catalog(dict(version=1, game='合成游戏', screens=[], layout=layout))
 
 
 if __name__ == '__main__':

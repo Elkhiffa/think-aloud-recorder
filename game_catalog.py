@@ -2,6 +2,8 @@
 import json
 from pathlib import Path
 
+import layout_common
+
 
 SOURCES = ('manual', 'ocr_cluster', 'engine')
 
@@ -64,67 +66,6 @@ def _title_regions(regions):
                 raise ValueError('title region detect 须为 vertical_edge，x_range 为 0–1 的递增区间。')
 
 
-def _band(value):
-    return isinstance(value, list) and len(value) == 2 and all(map(_fraction, value)) and value[0] < value[1]
-
-
-def _tab_rules(rules):
-    gold = rules.get('gold')
-    if (not isinstance(gold, dict) or type(gold.get('min_b')) not in (int, float)
-            or not _fraction(gold.get('min_s'))):
-        raise ValueError('layout.tabs.gold 须含数值 min_b 与 0–1 的 min_s。')
-    if not _fraction(rules.get('top_max_y')) or rules['top_max_y'] <= 0:
-        raise ValueError('layout.tabs.top_max_y 必须是 (0, 1] 的高度比例。')
-    bands = rules.get('text_bands')
-    if not isinstance(bands, list) or not all(map(_band, bands)):
-        raise ValueError('layout.tabs.text_bands 必须是 0–1 递增区间的数组。')
-    groups = rules.get('groups', [])
-    if not isinstance(groups, list):
-        raise ValueError('layout.tabs.groups 必须是数组。')
-    for group in groups:
-        if not isinstance(group, dict):
-            raise ValueError('layout.tabs.groups 的每项必须是对象。')
-        _text(group.get('screen'), 'layout.tabs.groups screen')
-        _texts(group.get('tabs'), 'layout.tabs.groups tabs')
-        if len(group['tabs']) < 2:
-            raise ValueError('layout.tabs.groups tabs 至少要有两个页签文字。')
-
-
-def _heading_rules(rules):
-    main, side = rules.get('main'), rules.get('side')
-    if main is not None and (not isinstance(main, dict)
-                             or not all(_band(main.get(key)) for key in ('margin', 'y', 'height'))):
-        raise ValueError('layout.headings.main 须含 0–1 递增区间 margin、y、height。')
-    if side is not None and (not isinstance(side, dict) or not _band(side.get('y'))
-                             or not _fraction(side.get('min_height'))):
-        raise ValueError('layout.headings.side 须含 0–1 递增区间 y 与 0–1 的 min_height。')
-    _texts(rules.get('icon_tabs', []), 'layout.headings.icon_tabs')
-
-
-def _layout(layout):
-    # 路径 2：用户按本游戏的视觉规范手填版式规则。高度按游戏画面高度归一化，横向距离也以画面高度为单位：
-    # 燕云在 PC 上高度按比例、宽度按到较近边缘的固定边距适配，带鱼屏与 16:9 同一套数值。
-    if not isinstance(layout, dict) or not layout:
-        raise ValueError('layout 必须是非空对象。')
-    unknown = set(layout) - {'tabs', 'headings', 'focus'}
-    if unknown:
-        raise ValueError('layout 不认识的键：' + '、'.join(sorted(unknown)))
-    for key, check in (('tabs', _tab_rules), ('headings', _heading_rules), ('focus', _focus_rules)):
-        if key in layout:
-            if not isinstance(layout[key], dict):
-                raise ValueError(f'layout.{key} 必须是对象。')
-            check(layout[key])
-
-
-def _focus_rules(rules):
-    hue = rules.get('hue')
-    if (not isinstance(hue, list) or len(hue) != 2 or not all(type(v) in (int, float) for v in hue)
-            or not 0 <= hue[0] < hue[1] <= 360 or not _fraction(rules.get('min_s'))
-            or not isinstance(rules.get('levels'), list) or not rules['levels']
-            or not all(map(_fraction, rules['levels']))):
-        raise ValueError('layout.focus 须含色相区间 hue（度）、0–1 的 min_s 与亮度档 levels。')
-
-
 def validate_catalog(data):
     """Validate the v1 format, with globally unique element IDs."""
     # 路径 2：catalog-validate 检查手工目录，避免无效或重复 ID 的引用。
@@ -134,7 +75,8 @@ def validate_catalog(data):
     if 'title_regions' in data:
         _title_regions(data['title_regions'])
     if 'layout' in data:
-        _layout(data['layout'])
+        # 路径 2：版式规则由目录点名的识别方法自己校验（layout_common.RECOGNIZERS）。
+        layout_common.validate(data['layout'])
     if not isinstance(data.get('screens'), list):
         raise ValueError('screens 必须是数组。')
     screen_ids, element_ids = set(), set()
