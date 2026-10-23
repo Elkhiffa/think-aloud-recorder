@@ -4,7 +4,10 @@ import tempfile
 import unittest
 
 import game_catalog as catalog
-from scripts.apply_layout import apply_layout
+from unittest.mock import patch
+
+import context_track
+from game_catalog import apply_layout, layout_status
 
 
 class ApplyLayoutTests(unittest.TestCase):
@@ -27,6 +30,35 @@ class ApplyLayoutTests(unittest.TestCase):
             self.assertEqual(json.loads(Path(report['backup']).read_text(encoding='utf-8')), original)
             self.assertTrue(apply_layout(vault)['unchanged'])
             self.assertEqual(len(list(path.parent.glob('catalog.json.before-layout-*'))), 1)
+            self.assertEqual(layout_status(vault, '燕云十六声'),
+                             dict(available=True, catalog=True, enabled=True, current=True))
+
+    def test_status_before_enabling(self):
+        # 路径 1：设置 → 游戏 打开时判断能不能显示“启用”。
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(layout_status(Path(tmp), '燕云十六声'),
+                             dict(available=True, catalog=False, enabled=False, current=False))
+            self.assertFalse(layout_status(Path(tmp), '另一个游戏')['available'])
+
+    def test_rebuild_skips_tracks_built_with_the_current_layout_and_needs_a_layout(self):
+        # 路径 1：重建中断后照原命令重跑；还没启用就先提示启用。
+        with tempfile.TemporaryDirectory() as tmp:
+            vault = Path(tmp) / '燕云十六声'
+            path = catalog.catalog_path(vault, '燕云十六声')
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(dict(version=1, game='燕云十六声', screens=[]), ensure_ascii=False), encoding='utf-8')
+            with self.assertRaisesRegex(ValueError, '界面路径识别'):
+                context_track.rebuild(vault, progress=lambda line: None)
+            apply_layout(vault)
+            folder = vault / '场次' / '2026-10-01 第一场'
+            folder.mkdir(parents=True)
+            (folder / '录像.mp4').write_bytes(b'')
+            layout = json.loads(path.read_text(encoding='utf-8'))['layout']
+            (folder / 'context-track.json').write_text(json.dumps(dict(layout=layout), ensure_ascii=False), encoding='utf-8')
+            with patch('ocr_component.ensure_importable', return_value=True), patch('subprocess.call') as call:
+                result = context_track.rebuild(vault, progress=lambda line: None)
+            call.assert_not_called()
+            self.assertEqual((result['sessions'], result['skipped'], result['failed']), (1, 1, []))
 
     def test_unknown_game_is_refused_before_anything_is_written(self):
         with tempfile.TemporaryDirectory() as tmp:

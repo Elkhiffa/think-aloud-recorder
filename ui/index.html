@@ -35,7 +35,7 @@
             <p class="method-note"><strong>说当下的真实想法就好。</strong>可以停顿、犹豫，也可以改口。不必持续说话，不必把每个操作都念出来；困惑、预期落差和情绪，同样值得留下。</p></section>
           <section class="method-part"><p class="method-lead">录完以后</p>
             <p class="method-description">转写完成后，交给 Codex 或 Claude 整理：单场用 <span class="skill-name">think-aloud-judgments</span>，跨场次用 <span class="skill-name">think-aloud-insight</span>。首次使用前先安装。</p>
-            <button class="link" type="button" data-open-skill-guide>查看 skill 安装方法</button></section>
+            <div class="button-row"><button class="btn" type="button" data-install-skills>安装分析 skill</button><button class="link" type="button" data-open-skill-guide>安装说明</button></div></section>
         </div>
         <div class="method-grid">
           <article class="method-card"><h3>观察</h3><p>“这个入口很显眼，但我没找到返回的地方。”</p></article>
@@ -51,6 +51,7 @@
       <div class="field" data-in="game-vocab"><label>游戏词库</label><div><div class="chips" id="gameHotwordFiles"></div><button class="chip add" id="chooseGameHotwordFiles" type="button">＋ 添加</button></div><p class="hint">只用于这款游戏的转写，和通用词库合并使用。</p></div>
       <div class="field" data-in="game-manual"><label for="hotwords">补充词条</label><textarea id="hotwords" data-draft="hotword_manual" rows="2" placeholder="词库中没有的游戏专有词，每行一个"></textarea><p class="hint" id="manualWordCount"></p></div>
       <div class="field" data-in="game-vault"><label for="vault">保存位置</label><div class="input-row"><input id="vault" data-draft="vault" readonly placeholder="选择保存位置"><button class="btn" id="chooseVault" type="button">选择</button></div><div class="hint inline-between"><span id="vaultHint">每场体验分别保存，不覆盖已有录像或笔记。</span><button class="link" id="openVault" type="button" disabled title="打开当前资料库"><span id="savedLocation">打开文件夹</span></button></div><div class="vault-reuse hidden" id="reuseVaultNotice"><p id="reuseVaultMessage" role="status"></p><button class="btn" id="reuseVault" type="button">使用已有资料库</button></div></div>
+      <div class="field hidden" id="layoutField" data-in="game-layout"><span class="label">界面路径识别</span><div><div class="inline-between"><p class="hint" id="layoutHint"></p><button class="btn" id="enableLayout" type="button">启用</button></div><div id="layoutRebuild" class="update-result-path hidden"><label for="layoutCommand">旧场次要重建情景轨道才会带上页签信息 · 在 PowerShell 里运行，可中断后重跑</label><textarea id="layoutCommand" readonly spellcheck="false" rows="3"></textarea></div></div></div>
       <div class="field danger-zone" data-in="game-delete"><span class="label">删除游戏</span><div><button class="link danger" id="deleteGame" type="button">删除这个游戏</button><p class="hint">只移除软件里的设置和入口；资料文件夹默认保留。</p></div></div>
     </div>
     <div class="panel hidden" id="panelGeneral">
@@ -68,6 +69,7 @@
       <div class="field" data-in="general-vocab"><label>通用词库</label><div><div class="chips" id="hotwordFiles"></div><button class="chip add" id="chooseHotwordFiles" type="button">＋ 添加</button> <a class="link" id="dictionaryDownload" href="https://pinyin.sogou.com/dict/" target="_blank" rel="noopener noreferrer">下载词库</a></div><p class="hint" id="vocabularyCount">尚未选择词库</p><p class="hint hidden" id="vocabularyStorage">内置词库位于软件目录的 vocabularies/uiux-terms.txt。</p><span class="hidden" id="vocabularySummary"></span></div>
       <h3 class="group settings-only">资料</h3>
       <div class="field settings-only" data-in="general-library"><label for="libraryRoot">资料总库</label><div class="input-row"><input id="libraryRoot" readonly placeholder="尚未设置：新游戏的文件夹会放在这里"><button class="btn" id="chooseLibrary" type="button">选择</button></div><p class="hint">每个游戏一个文件夹，放在资料总库下。</p></div>
+      <div class="field settings-only" data-in="general-ocr"><span class="label">识别组件</span><div class="box"><div class="inline-between"><div><strong>本地文字识别</strong><p class="hint" id="ocrHint">约 65 MB · 整理场次时生成情景轨道、识别界面路径需要它，更新软件时保留。</p></div><span class="state-label" id="ocrStatus"></span></div><div id="ocrProgressArea" class="hidden"><div class="inline-between hint"><span id="ocrProgressLabel"></span><span id="ocrBytes"></span></div><progress id="ocrProgress" max="100" aria-label="识别组件下载进度"></progress></div><p class="inline-error hidden" id="ocrError" role="status"></p><div class="button-row" id="ocrActions"><button class="btn" id="downloadOcr" type="button">下载</button></div></div></div>
       <div class="field settings-only" data-in="general-method"><span class="label">记录方法</span><button class="link" id="methodLink" type="button">查看“边玩边说”的记录方法</button></div>
       <h3 class="group settings-only" id="updateGroup">版本与更新</h3>
       <section class="update settings-only" aria-labelledby="updateGroup">

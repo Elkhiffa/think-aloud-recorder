@@ -8,6 +8,7 @@ owns per-session processing and never writes foreground recording activity.
 from copy import deepcopy
 from pathlib import Path
 from app_paths import installation_root, vocabulary_dir
+import importlib.util
 import json
 import os
 import re
@@ -25,6 +26,7 @@ from hotword_files import (merge_files, split_words, validate_words, compile_hot
                            read_dictionary_snapshots, bundled_dictionary_snapshots,
                            SOGOU_DICTIONARIES)
 from model_manager import ModelManager
+from ocr_component import OcrComponent
 from portable_config import load_settings, stored_settings, default_vault_path
 from processing import process_isolated
 import secret_store
@@ -147,6 +149,9 @@ class DesktopService:
         self._config_file_revision = (vocabulary_agent.file_digest(self.root / 'config.json')
                                       if (self.root / 'config.json').exists() else None)
         self._model = ModelManager(self.root)
+        self._ocr = OcrComponent(self.root)
+        # The development runtime has rapidocr itself; the settings row then says so instead of offering a download.
+        self._ocr_builtin = importlib.util.find_spec('rapidocr_onnxruntime') is not None
         from updater import UpdateManager
         self._updates = UpdateManager(self.root)
         import agent_protocol
@@ -591,7 +596,11 @@ class DesktopService:
                 model = {key: model.get(key) for key in ('state', 'model', 'path', 'downloaded_bytes',
                          'total_bytes', 'error', 'source', 'revision')}
                 model['error'] = self._safe_text(model.get('error'))
-                state = dict(config=self._public_config(), closing=self._exit_pending,
+                ocr = self._ocr.status()
+                ocr = {key: ocr.get(key) for key in ('state', 'downloaded_bytes', 'total_bytes', 'error', 'revision')}
+                ocr['error'] = self._safe_text(ocr.get('error'))
+                ocr['builtin'] = self._ocr_builtin
+                state = dict(config=self._public_config(), closing=self._exit_pending, app_dir=str(self.root),
                              insight=self._insight_summary(),
                              updates=self._update_snapshot(model),
                              default_vault=self._default_vault(),
@@ -599,7 +608,7 @@ class DesktopService:
                              readiness=self._visible_readiness(),
                              presets=self._preset_list(), active_preset_id=self._cfg.get('active_preset_id'),
                              background_jobs=list(jobs.values()),
-                             activity=activity, devices=deepcopy(self._devices), model=model,
+                             activity=activity, devices=deepcopy(self._devices), model=model, ocr=ocr,
                              device_defaults=deepcopy(self._device_defaults),
                              device_refresh=deepcopy(self._device_refresh),
                              device_inventory=deepcopy(self._device_inventory))
@@ -1631,6 +1640,37 @@ class DesktopService:
         except Exception:
             return self._error('未能请求浏览器打开 skill 安装说明。')
 
+    def layout_action(self, action):
+        """Interface path recognition for the saved active game: status, or enable (write the shipped layout rules)."""
+        import game_catalog
+        with self._lock:
+            try:
+                if action not in ('status', 'enable'):
+                    raise ValueError('界面路径识别操作无效。')
+                vault, game = self._cfg.get('vault'), self._cfg.get('game')
+                if not vault or not game:
+                    return ok(dict(available=False))
+                if action == 'enable':
+                    self._guard(allow_active=True)
+                    game_catalog.apply_layout(vault, game)
+                status = game_catalog.layout_status(vault, game)
+                python, cli = self.root / 'runtime' / 'python.exe', self.root / 'agent_cli.py'
+                status.update(ocr_ready=self._ocr_builtin or self._ocr.status().get('state') == 'ready',
+                              command=f'& "{python}" -B -X utf8 "{cli}" context-rebuild "{vault}" --game "{game}"')
+                return ok(status)
+            except Exception as error:
+                return self._error(error)
+
+    def install_skills(self):
+        """Copy the packaged analysis skills into the user's Claude Code / Codex skill folders."""
+        import skill_install
+        with self._lock:
+            try:
+                self._guard(allow_active=True)
+                return ok(skill_install.install(self.root, Path.home(), time.strftime('%Y%m%d-%H%M%S')))
+            except Exception as error:
+                return self._error(error)
+
     def _require_transcription(self, cfg, allow_later=False):
         provider = cfg.get('transcription_provider', 'later')
         if provider == 'later':
@@ -2139,6 +2179,22 @@ class DesktopService:
             except Exception as error:
                 return self._error(error)
 
+    def ocr_action(self, action):
+        with self._lock:
+            try:
+                self._guard()
+                if action == 'pause':
+                    result = self._ocr.pause_download()
+                elif action == 'download':
+                    result = self._ocr.start_download()
+                else:
+                    raise ValueError('识别组件操作无效。')
+                if isinstance(result, dict) and not result.get('ok', True):
+                    return self._error(result.get('error', '识别组件操作未完成。'))
+                return ok(self.get_state()['data']['ocr'])
+            except Exception as error:
+                return self._error(error)
+
     def set_update_lifecycle(self, review_count, close_windows):
         """Native callbacks stay outside the JavaScript bridge."""
         with self._lock:
@@ -2177,6 +2233,8 @@ class DesktopService:
         state=(model if model is not None else self._model.status()).get('state')
         if state in ('downloading','verifying') or self._model.wait(timeout=0) is False:
             reasons.append('本地模型正在下载或校验，请先暂停并等待文件保存。')
+        if self._ocr.status().get('state') in ('downloading','verifying') or self._ocr.wait(timeout=0) is False:
+            reasons.append('识别组件正在下载或安装，请先暂停并等待文件保存。')
         if self._dialog_open:
             reasons.append('请先完成或取消当前文件选择。')
         if self._review_opening:
@@ -2472,7 +2530,8 @@ class DesktopService:
                        or self._review_opening > 0)
             if not blocked:
                 self._model.pause_download()
-                blocked = self._model.wait(timeout=0) is False
+                self._ocr.pause_download()
+                blocked = self._model.wait(timeout=0) is False or self._ocr.wait(timeout=0) is False
             if blocked:
                 return False
             self._invalidate_device_inventory(running_only=True)

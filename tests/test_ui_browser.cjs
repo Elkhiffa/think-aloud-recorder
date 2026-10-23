@@ -77,6 +77,7 @@ function snapshot(overrides = {}) {
       mic: [{ itemName: '示例麦克风（合成测试）', itemValue: 'synthetic-mic', itemEnabled: true }],
     },
     model: { state: 'missing', downloaded_bytes: 0, total_bytes: 100 },
+    ocr: { state: 'missing', downloaded_bytes: 0, total_bytes: 68049623, error: null, revision: 'synthetic-ocr', builtin: false },
     capabilities: { cloud_key: true },
     ...overrides,
   };
@@ -254,6 +255,15 @@ async function bridge(page, state = snapshot()) {
       if (method === 'choose_directory') return { ok: true, data: { path: fixture.directory } };
       if (method === 'choose_hotword_files') return { ok: true, data: { files: fixture.imported } };
       if (method === 'get_layout') return { ok: true, data: fixture.layout };
+      if (method === 'layout_action') {
+        const status = fixture.layoutStatus || { available: false };
+        if (args[0] === 'enable') Object.assign(status, { enabled: true, current: true });
+        return { ok: true, data: { ...status } };
+      }
+      if (method === 'ocr_action') {
+        Object.assign(fixture.snapshot.ocr, args[0] === 'pause' ? { state: 'paused' } : { state: 'downloading', downloaded_bytes: 21000000 });
+        return { ok: true, data: { ...fixture.snapshot.ocr } };
+      }
       if (method === 'save_layout') { fixture.layout = { ...fixture.layout, [args[0]]: args[1] }; return { ok: true }; }
       if (['ready', 'copy_path', 'open_folder', 'open_document', 'open_bailian_console', 'open_dictionary_site', 'save_cloud_key',
         'open_desk', 'open_review', 'process_session', 'stop_recording', 'win_minimize', 'win_toggle_maximize', 'win_close'].includes(method)) return { ok: true };
@@ -651,6 +661,35 @@ async function homeChecks(context, origin) {
 // ---------------------------------------------------------------- settings sheet (游戏 | 通用)
 async function settingsChecks(context, origin) {
   const page = await mainPage(context, origin);
+  await pageCheck(page, 'out-of-box rows: 识别组件 downloads after a confirmation, 界面路径识别 enables and shows the rebuild command', async () => {
+    await page.evaluate(() => { window.__syntheticFixture.layoutStatus = { available: true, catalog: true, enabled: false, current: false, ocr_ready: false,
+      command: '& "D:\\synthetic-only\\app\\runtime\\python.exe" -B -X utf8 "D:\\synthetic-only\\app\\agent_cli.py" context-rebuild "D:\\synthetic-only\\think-aloud-database" --game "示例游戏 · 合成测试"' }; });
+    await openSettings(page, 'game');
+    await page.locator('#layoutField').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#layoutHint').innerText(), /识别组件/);
+    assert.equal(await page.locator('#layoutRebuild').isVisible(), false);
+    await page.locator('#enableLayout').click();
+    await page.locator('#layoutRebuild').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#enableLayout').isVisible(), false);
+    assert.match(await page.locator('#layoutCommand').inputValue(), /context-rebuild/);
+    assert.deepEqual((await calls(page, 'layout_action')).map(call => call.args[0]), ['status', 'enable']);
+    await page.locator('#layoutField').scrollIntoViewIfNeeded(); await noHorizontalOverflow(page);
+    await screen(page, 'settings-layout-720x520');
+    await page.locator('#tabGeneral').click();
+    assert.equal(await page.locator('#ocrStatus').innerText(), '未下载');
+    await page.locator('#downloadOcr').scrollIntoViewIfNeeded(); await page.locator('#downloadOcr').click();
+    assert.match(await page.locator('#actionDialog').innerText(), /files\.pythonhosted\.org/);
+    assert.equal((await calls(page, 'ocr_action')).length, 0, 'nothing downloads before the confirmation');
+    await page.locator('#actionFooter button', { hasText: '开始下载' }).click();
+    await page.waitForFunction(() => window.__syntheticFixture.calls.some(call => call.method === 'ocr_action'));
+    await pollNow(page);
+    assert.equal(await page.locator('#ocrStatus').innerText(), '下载中');
+    assert.equal(await page.locator('#downloadOcr').innerText(), '暂停下载');
+    assert.equal(await page.locator('#ocrProgressArea').isVisible(), true);
+    await page.locator('#ocrProgressArea').scrollIntoViewIfNeeded(); await noHorizontalOverflow(page);
+    await screen(page, 'settings-ocr-720x520');
+    await closeSheet(page);
+  });
   await pageCheck(page, 'settings open on the current game; untouched settings offer only 关闭', async () => {
     await openSettings(page, 'game');
     assert.equal(await page.locator('#sheetTabs').isVisible(), true); assert.equal(await page.locator('#wizardSteps').isVisible(), false);

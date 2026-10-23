@@ -85,7 +85,7 @@ class DeskAPI:
         return _ok(dict(tab=self.tab, game=presets.get(data.get('active_preset_id')) or data['config'].get('game', ''),
                         sessions=data.get('sessions', []), background_jobs=data.get('background_jobs', []),
                         busy=bool(data.get('activity', {}).get('busy')), recording=data.get('activity', {}).get('kind') == 'recording',
-                        insight=data.get('insight')))
+                        insight=data.get('insight'), app_dir=data.get('app_dir')))
 
     def session_detail(self, ident):
         """Quotes grouped by problem kind, the activities, and which insights cite this session."""

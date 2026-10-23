@@ -4,11 +4,11 @@ import sys
 from contextlib import contextmanager
 
 BRIDGE_METHODS = ('get_state', 'get_microphone_state', 'refresh_device_inventory', 'refresh_devices', 'save_settings', 'save_preset', 'save_general', 'select_preset', 'delete_preset', 'choose_directory',
-                  'import_hotwords', 'choose_hotword_files', 'open_dictionary_site', 'open_bailian_console', 'open_skill_guide',
+                  'import_hotwords', 'choose_hotword_files', 'open_dictionary_site', 'open_bailian_console', 'open_skill_guide', 'install_skills', 'layout_action',
                   'start_recording', 'stop_recording',
                   'process_session', 'open_review', 'open_insight', 'open_desk', 'rename_session', 'package_session', 'open_folder',
                   'open_raw', 'save_cloud_key', 'verify_cloud_key', 'recover_cloud_task',
-                  'model_action', 'update_action')
+                  'model_action', 'ocr_action', 'update_action')
 
 
 class DesktopAPI:

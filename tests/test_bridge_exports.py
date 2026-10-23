@@ -28,6 +28,8 @@ EXPECTED_EXPORTS = {
     'open_dictionary_site': [],
     'open_bailian_console': [],
     'open_skill_guide': [],
+    'install_skills': [],
+    'layout_action': ['action'],
     'start_recording': ['payload'],
     'stop_recording': [],
     'process_session': ['id'],
@@ -42,6 +44,7 @@ EXPECTED_EXPORTS = {
     'verify_cloud_key': [],
     'recover_cloud_task': ['id', 'task_id'],
     'model_action': ['action', 'path'],
+    'ocr_action': ['action'],
     'update_action': ['payload'],
 }
 

@@ -115,6 +115,15 @@ def main(argv=None):
     context_read.add_argument('--end', type=float)
     context_read.add_argument('--compact', action='store_true')
     context_read.add_argument('--output', help='读取 context-build --output 保存的情景轨道')
+    layout_apply = commands.add_parser('layout-apply', help='把随软件带的游戏版式规则写进资料库的界面目录（启用界面路径识别）；旧目录保留备份')
+    layout_apply.add_argument('vault', help='单个游戏的资料库文件夹')
+    layout_apply.add_argument('--game', help='游戏名，默认取资料库文件夹名')
+    layout_apply.add_argument('--dry-run', action='store_true', help='只检查，不写入')
+    context_rebuild = commands.add_parser('context-rebuild', help='按版式规则重建资料库各场的情景轨道；可中断后重跑，已重建的跳过；1 小时录像约 20–60 分钟')
+    context_rebuild.add_argument('vault', help='单个游戏的资料库文件夹')
+    context_rebuild.add_argument('--game', help='游戏名，默认取资料库文件夹名')
+    context_rebuild.add_argument('--workers', type=int, default=2, help='同时重建的场次数')
+    commands.add_parser('ocr-status', help='本地文字识别是否可用；缺识别组件时请用户在 设置 → 通用 里下载，不要自行下载')
     catalog_validate = commands.add_parser('catalog-validate', help='检查单游戏界面目录格式及重复编号')
     catalog_validate.add_argument('vault')
     catalog_validate.add_argument('game')
@@ -340,6 +349,22 @@ def main(argv=None):
             value = build(args.session, interval=args.interval, title_interval=args.title_interval,
                           full_interval=args.full_interval, start=args.start,
                           end=args.end, output=args.output, rematch=args.rematch)
+        elif name == 'layout-apply':
+            from game_catalog import apply_layout
+            value = apply_layout(args.vault, args.game, args.dry_run)
+        elif name == 'context-rebuild':
+            from context_track import rebuild
+            value = rebuild(args.vault, args.game, args.workers,
+                            progress=lambda line: print(line, file=sys.stderr, flush=True))
+        elif name == 'ocr-status':
+            import importlib.util
+            from ocr_component import MISSING, OcrComponent, ensure_importable
+            builtin = importlib.util.find_spec('rapidocr_onnxruntime') is not None
+            component = OcrComponent(Path(__file__).resolve().parent).status()
+            ready = ensure_importable()
+            value = dict(ready=ready, source='runtime' if builtin else 'component',
+                         component=dict(state=component['state'], id=component['revision'], path=component['path']),
+                         message=None if ready else MISSING)
         elif name == 'context-read':
             from context_track import read_track
             value = read_track(args.session, start=args.start, end=args.end,

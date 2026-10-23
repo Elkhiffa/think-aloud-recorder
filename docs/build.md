@@ -130,6 +130,8 @@ install packages globally on a user's working computer.
    Bold faces and the OFL text against fixed SHA256 values, and writes
    `ui/fonts/*.ttf`, `licenses/Sarasa-Gothic-OFL.txt` and
    `tools/fonts/provenance.json`. `--archive <zip>` reuses a full download.
+   The build checks the fonts against that record but does not ship it: updaters
+   before 0.9.0 refuse `tools/fonts/`, and nothing reads it at run time.
    It also downloads the pinned Noto Serif SC Bold (Simplified Chinese subset,
    noto-cjk tag `Serif2.003`, about 12 MB) and its OFL text for titles.
    Existing different files stop preparation. The packager checks the fonts

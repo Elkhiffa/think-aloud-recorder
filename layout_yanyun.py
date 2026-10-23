@@ -367,7 +367,12 @@ def validate(layout):
 
 def derive(image, full, items, layout):
     """Tabs (with _x/_y for layout_common to order levels), headings and focus of one full-OCR frame."""
-    import cv2
+    from ocr_component import MISSING, ensure_importable
+    ensure_importable()
+    try:
+        import cv2
+    except ImportError as error:
+        raise ValueError(MISSING) from error
     top, bottom = _game_rows(image)
     span = bottom - top
     lab = cv2.cvtColor(image.astype(np.float32) / 255, cv2.COLOR_BGR2Lab)

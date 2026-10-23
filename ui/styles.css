@@ -49,6 +49,7 @@ button:disabled{cursor:default;opacity:.5}
 .quiet:hover{background:var(--fill)}
 .link{color:var(--ink);border-bottom:1px solid currentColor;line-height:20px;padding:0}
 .button-row{display:flex;gap:var(--s2);align-items:center;flex-wrap:wrap}
+.skill-results{margin:0 0 var(--s3);padding-left:1.2em;display:grid;gap:var(--s2)}
 .inline-between{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3)}
 .badge{position:relative}
 .badge::after{content:"";position:absolute;top:4px;right:0;width:7px;height:7px;border-radius:50%;background:var(--dot)}

@@ -122,6 +122,56 @@ def load_catalog(vault, game):
     return data
 
 
+def layout_reference(game):
+    """The layout rules shipped for a game (docs/layouts/<game>.json), or None."""
+    catalog_path('.', game)  # same single-folder-name check
+    path = Path(__file__).resolve().parent / 'docs' / 'layouts' / f'{game}.json'
+    return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
+
+
+def layout_status(vault, game):
+    """Whether interface path recognition can be (or already is) switched on for this library."""
+    reference = layout_reference(game)
+    path = catalog_path(vault, game)
+    try:
+        current = json.loads(path.read_text(encoding='utf-8-sig')).get('layout')
+    except (OSError, ValueError):
+        current = None
+    return dict(available=reference is not None, catalog=path.is_file(), enabled=current is not None,
+                current=reference is not None and current == reference)
+
+
+def apply_layout(vault, game=None, dry_run=False):
+    """Put the shipped layout rules into a library's catalog; the old catalog is kept beside it.
+
+    The new catalog replaces the old one in one step, so a running recorder never reads a half-written file."""
+    import os
+    import shutil
+    import time
+    vault = Path(vault)
+    game = game or vault.resolve().name
+    layout = layout_reference(game)
+    if layout is None:
+        raise ValueError(f'没有这个游戏的版式规则：docs/layouts/{game}.json')
+    path = catalog_path(vault, game)
+    if not path.is_file():
+        raise ValueError(f'资料库里还没有这个游戏的界面目录：{path}')
+    data = json.loads(path.read_text(encoding='utf-8-sig'))
+    before = data.get('layout')
+    data.pop('active_tabs', None)  # the earlier, narrower rule set this layout replaces
+    data['layout'] = layout
+    validate_catalog(data)
+    report = dict(catalog=str(path), game=game, replaced=before is not None, unchanged=before == layout)
+    if dry_run or before == layout:
+        return report
+    backup = path.with_name(f"catalog.json.before-layout-{time.strftime('%Y%m%d-%H%M%S')}")
+    shutil.copy2(path, backup)
+    temp = path.with_name(path.name + '.layout-tmp')
+    temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    os.replace(temp, path)
+    return dict(report, backup=str(backup))
+
+
 def session_catalog(folder):
     folder = Path(folder).resolve()
     meta = json.loads((folder / 'session.json').read_text(encoding='utf-8-sig'))

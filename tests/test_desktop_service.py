@@ -46,6 +46,11 @@ class DesktopServiceTests(unittest.TestCase):
         self.model.resolve_model.return_value = None
         self.model.wait.return_value = True
         self.model.start_download.return_value = {'ok': True}
+        self.ocr = MagicMock()
+        self.ocr.status.return_value = dict(state='missing', model='ocr', path=None, downloaded_bytes=0,
+            total_bytes=68, error=None, source=None, revision='pinned-ocr')
+        self.ocr.wait.return_value = True
+        self.ocr.start_download.return_value = {'ok': True}
         self.updates = MagicMock()
         self.updates.snapshot.return_value = dict(current_version='0.6.0',state='idle',latest_version=None,
             release_url=None,notes='',downloaded_bytes=0,total_bytes=0,error=None,include_prerelease=False)
@@ -55,6 +60,7 @@ class DesktopServiceTests(unittest.TestCase):
             patch.dict('sys.modules',{'updater':SimpleNamespace(UpdateManager=MagicMock(return_value=self.updates))}),
             patch.object(bridge, 'load_settings', return_value=deepcopy(self.config)),
             patch.object(bridge, 'ModelManager', return_value=self.model),
+            patch.object(bridge, 'OcrComponent', return_value=self.ocr),
             patch.object(bridge.recorder, 'client', side_effect=ConnectionRefusedError('offline')),
             patch.object(bridge.secret_store, 'has_key', return_value=False),
             patch.object(bridge.DesktopService, '_monitor_loop', return_value=None),
@@ -1244,6 +1250,21 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertFalse(self.service.close_allowed())
         window.minimize.assert_not_called()  # Native shell owns asynchronous minimization.
         self.model.wait.return_value = True
+        self.assertTrue(self.service.close_allowed())
+
+    def test_ocr_download_reports_state_blocks_update_and_pauses_on_close(self):
+        # 路径 1：设置里下载识别组件；下载中点更新、关窗口。
+        self.assertEqual(self.service.ocr_action('download')['data']['state'], 'missing')
+        self.ocr.start_download.assert_called_once_with()
+        self.assertIn('builtin', self.service.get_state()['data']['ocr'])
+        self.assertEqual(self.service.ocr_action('delete')['error'], '识别组件操作无效。')
+        self.ocr.status.return_value['state'] = 'downloading'
+        self.assertIn('识别组件正在下载或安装，请先暂停并等待文件保存。',
+                      self.service.get_state()['data']['updates']['install_blockers'])
+        self.ocr.wait.return_value = False
+        self.assertFalse(self.service.close_allowed())
+        self.ocr.pause_download.assert_called()
+        self.ocr.wait.return_value = True
         self.assertTrue(self.service.close_allowed())
 
     def test_picker_and_hotword_import_do_not_save_settings(self):

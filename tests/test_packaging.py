@@ -10,7 +10,7 @@ from unittest.mock import patch
 import zipfile
 
 from scripts.build_portable import (ROOT_FILES, build, collect_files,
-                                    delivery_version, launcher_bytes, read_sources, sha256)
+                                    delivery_version, launcher_bytes, read_sources, sha256, write_app_update)
 from scripts.fetch_runtime import extract_webview_notices, supplement
 from scripts.verify_runtime_seed import seed_managed_path
 
@@ -32,6 +32,9 @@ class PackagingTests(unittest.TestCase):
                      'tools/obs/portable_mode.txt', 'tools/input/SDL2.dll',
                      'tools/input/provenance.json', 'licenses/SDL2-zlib.txt'):
             self.write(path, b'fixture dependency\n')
+        for path in ('skills/think-aloud-judgments/SKILL.md', 'skills/think-aloud-judgments/references/interface.md',
+                     'skills/think-aloud-insight/SKILL.md', 'docs/layouts/燕云十六声.json'):
+            self.write(path, b'fixture packaged tree\n')
         self.sources = self.root / 'build/dependency-sources'
         self.sources.mkdir(parents=True)
         source = self.sources / 'fixture-sources.tar.gz'
@@ -124,6 +127,44 @@ class PackagingTests(unittest.TestCase):
             self.assertIn('app/runtime/Lib/site-packages/fixture-1.dist-info/licenses/LICENSE', names)
             self.assertIn('app/runtime/Lib/site-packages/fixture/config.json', names)
             self.assertEqual(json.loads(archive.read('app/portable.json'))['models'], 'optional')
+
+    def test_every_packaged_path_is_installable_by_the_0_8_1_updater(self):
+        # 触发路径：用户在 0.8.x 里点更新 → 由已安装的旧版更新器逐条检查新包 → 任何一条不认，整个更新失败（0.9.0 的字体来源记录就是这样）。
+        import importlib.util
+        import update_installer
+        spec = importlib.util.spec_from_file_location('managed_path_v0_8_1', Path(__file__).parent / 'fixtures' / 'managed_path_v0_8_1.py')
+        old = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(old)
+        result = self.make()
+        with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
+            names = [name for name in archive.namelist() if not name.endswith('/')]
+        self.assertNotIn('app/tools/fonts/provenance.json', names)
+        # Skills, layouts and the OCR component manifest ship under docs/, which 0.8.1 accepts.
+        for name in ('app/docs/skills/think-aloud-judgments/references/interface.md', 'app/docs/skills/think-aloud-insight/SKILL.md',
+                     'app/docs/layouts/燕云十六声.json', 'app/docs/ocr-component.json', 'app/ocr_component.py', 'app/skill_install.py'):
+            self.assertIn(name, names)
+        self.assertEqual([name for name in names if not old.managed_path(name)], [])
+        self.assertEqual([name for name in names if not update_installer.managed_path(name)], [])
+
+    def test_one_changed_files_package_serves_every_listed_base(self):
+        # 触发路径：0.8.1 和 0.9.0 的用户都点更新 → 更新器只找一个增量包 → 它要带上相对任一基础版本变了的文件，两边才都不必下载完整包。
+        result = self.make()
+        stage = self.base / 'stage'
+        with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
+            archive.extractall(stage)
+        manifest = json.loads((stage / 'app' / 'package-manifest.json').read_text(encoding='utf-8'))
+        paths = sorted(item['path'] for item in manifest['files'] if item['path'].endswith('.py'))[:2]
+        bases = []
+        for changed in paths:
+            base = json.loads(json.dumps(manifest))
+            next(item for item in base['files'] if item['path'] == changed)['sha256'] = '0' * 64
+            bases.append(self.write(f'base-{len(bases)}.json', json.dumps(base).encode('utf-8')))
+        update = write_app_update(stage, bases, self.base / 'update.zip')
+        with zipfile.ZipFile(self.base / 'update.zip') as archive:
+            carried = set(archive.namelist())
+        self.assertTrue(set(paths) <= carried, (paths, sorted(carried)))
+        self.assertIn('app/package-manifest.json', carried)
+        self.assertEqual(update['filename'], 'update.zip')
 
     def test_only_fixed_bundled_vocabulary_is_packaged_with_exact_bytes(self):
         bundled = '用户体验\nUX\n交互设计\n'.encode('utf-8')
