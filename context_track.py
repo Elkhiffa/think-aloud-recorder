@@ -258,6 +258,120 @@ def _headings(image, lab, items, rules, gold, top, span, in_rows):
     return out
 
 
+def _focus_mask(image, rules, min_v):
+    import cv2
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    low, high = rules['hue'][0] / 2, rules['hue'][1] / 2          # OpenCV hue is 0-180
+    return ((hsv[..., 0] >= low) & (hsv[..., 0] <= high) & (hsv[..., 1] >= rules['min_s'] * 255)
+            & (hsv[..., 2] >= min_v * 255)).astype(np.uint8)
+
+
+def _focus_rings(image, rules, min_v):
+    """Hollow gold outlines on the 960-wide frame: (x, y, w, h)."""
+    import cv2
+    # 路径 2：960 宽下焦点框四角会断开 1–2 像素（拾音券），先补上。
+    mask = cv2.morphologyEx(_focus_mask(image, rules, min_v), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    rings = []
+    for i in range(1, count):
+        x, y, w, h, area = stats[i]
+        # 路径 2：焦点是细线框；发光的灯笼是厚实的亮块（平均线宽 = 面积 ÷ 周长）。
+        if min(w, h) < 10 or max(w, h) > 20 * min(w, h) or area / (2 * (w + h)) > 3.5:
+            continue
+        points = cv2.findNonZero((labels[y:y + h, x:x + w] == i).astype(np.uint8))
+        hull = cv2.contourArea(cv2.convexHull(points))
+        # 凸包占满框而像素很少 = 空心框；比找内孔更能容忍缺口（博物志的暗金圆环底部是断开的）。
+        if hull >= .5 * w * h and area <= .35 * hull:
+            rings.append((int(x), int(y), int(w), int(h)))
+    return rings
+
+
+def _focus_triangle(full, box, scale, rules, min_v):
+    """Share (0-10) of the gold near the top edge that sits in the centre: the downward triangle.
+    Big frames carry it above the edge line, small icon frames draw it down into the frame."""
+    x, y, w, h = [v * scale for v in box]
+    unit = full.shape[0] / 1080
+    band = _focus_mask(full[int(max(0, y - 6)):int(y + .2 * h + 6), int(x):int(x + w)], rules, min_v)
+    if band.size == 0:
+        return 0.0
+    cover = band.mean(axis=1)
+    edge = next((r for r, v in enumerate(cover) if v >= .5), None)
+    if edge is None:
+        return 0.0
+    end = edge
+    while end < len(cover) and cover[end] >= .5:
+        end += 1
+    width = band.shape[1]
+    lo = int(.15 * width)
+    best = 0.0
+    for part, offset in ((band[:edge], 0), (band[end:end + int(12 * unit), lo:width - lo], lo)):
+        pixels = np.argwhere(part)
+        if len(pixels) < 3:
+            continue
+        xs = pixels[:, 1] + offset
+        # 小三角宽约 16 像素（1080p）；比这宽的金色（灯笼的圆顶）不是。去掉两端 5% 的角落余光。
+        if np.percentile(xs, 95) - np.percentile(xs, 5) > max(.3 * width, 24 * unit):
+            continue
+        best = max(best, float((np.abs(xs - width / 2) <= .2 * width).mean() * 10))
+    return best
+
+
+def _focus_narrowing(full, box, scale, rules, min_v):
+    """Rows near the top centre whose gold width keeps shrinking: a downward triangle on a round frame,
+    whose own arc widens going down."""
+    x, y, w, h = [v * scale for v in box]
+    unit = full.shape[0] / 1080
+    half = max(14 * unit, .15 * w)
+    cx = x + w / 2
+    band = _focus_mask(full[int(max(0, y - 6 * unit)):int(y + min(.3 * h, 40 * unit)),
+                            int(cx - half):int(cx + half)], rules, min_v)
+    widths = band.sum(axis=1)
+    best = 0
+    for start in range(len(widths)):
+        if not 4 * unit <= widths[start] <= 2 * half * .95:
+            continue
+        end = start
+        while end + 1 < len(widths) and 0 < widths[end + 1] <= widths[end]:
+            end += 1
+        if end - start + 1 >= 3 and widths[end] <= .4 * widths[start]:
+            best = max(best, end - start + 1)
+    return best
+
+
+def _focus(image, full, items, rules):
+    """The gamepad focus frame (gold outline + small downward triangle), or None (keyboard and mouse)."""
+    scale = full.shape[1] / image.shape[1]
+    bright, dim = rules['levels'][0], rules['levels'][-1]
+    found, seen = [], []
+    for min_v in rules['levels']:
+        for box in _focus_rings(image, rules, min_v):
+            # 同一个框在两档亮度下都会找到：只按先找到的那一档判。
+            if any(abs(box[0] - b[0]) < 4 and abs(box[1] - b[1]) < 4 for b in seen):
+                continue
+            seen.append(box)
+            w, h = box[2], box[3]
+            # 暗金三角只在更低亮度下才显出来（博物志圆形焦点），多看一档。
+            probe = (min_v, min(dim, .24))
+            if min_v == bright:
+                # 路径 2：亮框要有居中的小三角；短边 < 16 像素的是江湖弈棋子。
+                score = max(_focus_triangle(full, box, scale, rules, v) for v in probe)
+                ok = score >= 8 and min(w, h) >= 16
+            else:
+                # 路径 2：暗框只收接近正圆、有倒三角的（圆形焦点）；放开暗方框会收进奖励卡和场景道具。
+                score = max(_focus_narrowing(full, box, scale, rules, v) for v in probe)
+                ok = .85 <= w / h <= 1.15 and score >= 3
+            if ok:
+                found.append((box, score))
+    if not found:
+        return None
+    (x, y, w, h), _ = max(found, key=lambda pair: pair[0][2] * pair[0][3])
+    inside = [item[2] for item in items if x <= item[0] <= x + w and y <= item[1] <= y + h + .3 * h]
+    focus = dict(box=[x, y, x + w, y + h])
+    if inside:
+        focus['text'] = ' '.join(inside)[:40]
+    return focus
+
+
 def _layout(image, full, items, layout):
     """Everything the catalog layout asks for on one full-OCR frame: tabs, headings, focus."""
     import cv2
@@ -279,6 +393,10 @@ def _layout(image, full, items, layout):
                 tabs.insert(0, dict(kind='icon', active=name, row=[name]))
     if tabs:
         out['tabs'] = tabs
+    if 'focus' in layout:
+        focus = _focus(image, full, items, layout['focus'])
+        if focus:
+            out['focus'] = focus
     return out
 
 

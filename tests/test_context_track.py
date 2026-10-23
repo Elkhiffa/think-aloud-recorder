@@ -235,8 +235,10 @@ class ActiveTabTests(unittest.TestCase):
         self.catalog.write_text(json.dumps(catalog, ensure_ascii=False), encoding='utf-8')
 
     def build(self, frames, ocr=True):
-        engine = Mock(side_effect=[(result, None) for _, result in frames])
-        samples = [(2.5 + 5 * index, image, image) for index, (image, _) in enumerate(frames)]
+        """frames: (960-wide image, OCR result) or (960-wide image, OCR result, source-size image)."""
+        engine = Mock(side_effect=[(frame[1], None) for frame in frames])
+        samples = [(2.5 + 5 * index, frame[0], frame[-1] if len(frame) == 3 else frame[0])
+                   for index, frame in enumerate(frames)]
         with patch.object(context, '_ocr_engine', return_value=engine), patch.object(
                 context, '_sample_frames', return_value=samples):
             summary = context.build(self.folder)
@@ -346,6 +348,25 @@ class ActiveTabTests(unittest.TestCase):
         frame = track['frames'][0]
         self.assertEqual(frame['headings']['side'], ['培养'])
         self.assertEqual(frame['tabs'][0], dict(kind='icon', active='培养', row=['培养']))
+
+    def test_focus_frame_needs_its_triangle(self):
+        """触发路径：agent 对手柄操作的场次运行 context-build，目录有 layout.focus → 记下带顶部小三角的金色焦点框和框里的字；没有小三角的金色品质边框不算焦点。"""
+        import cv2
+        full = np.full((1080, 1920, 3), 20, np.uint8)
+        gold = (60, 170, 230)                                   # BGR，色相约 38°
+        cv2.rectangle(full, (600, 400), (760, 560), gold, 4)
+        cv2.fillPoly(full, [np.array([[672, 390], [688, 390], [680, 399]])], gold)
+        cv2.rectangle(full, (1000, 380), (1220, 580), gold, 4)  # 更大的品质边框，没有小三角
+        image = cv2.resize(full, (960, 540), interpolation=cv2.INTER_AREA)
+        result = [[[[320, 250], [360, 250], [360, 266], [320, 266]], '铃铛', .9]]
+        self.write_rules(dict(LAYOUT, focus=dict(hue=[26, 44], min_s=.31, levels=[.59, .35])))
+        _, track = self.build([(image, result, full), (np.full((540, 960, 3), 20, np.uint8), [])])
+        self.assertEqual(track['frames'][0]['focus']['text'], '铃铛')
+        x0, y0, x1, y1 = track['frames'][0]['focus']['box']
+        self.assertTrue(295 <= x0 <= 305 and 375 <= x1 <= 385)
+        self.assertNotIn('focus', track['frames'][1])
+        self.assertEqual(context.read_track(self.folder)['frames'][0]['focus'], track['frames'][0]['focus'])
+        self.assertNotIn('focus', context.read_track(self.folder, compact=True)['frames'][0])
 
     def test_catalog_rejects_width_based_band(self):
         """触发路径：用户手填 layout 后运行 catalog-validate → 把像素或倒序区间写进高度带应报错，而不是静默不报任何页签。"""
