@@ -46,6 +46,8 @@ SUSPECT_STATES = {'录制中', '启动中', '保存中'}
 READINESS_MAX_AGE = 15
 # The two analysis skills' install steps; the in-app usage guide links here.
 SKILL_GUIDE = 'https://github.com/Elkhiffa/think-aloud-recorder/blob/main/docs/agent-integration.md#skill-安装与更新'
+# How a game's interface path recognition rules are written; linked from first-run setup and Settings > 游戏.
+LAYOUT_GUIDE = 'https://github.com/Elkhiffa/think-aloud-recorder/blob/main/docs/layouts/README.md'
 
 
 _CHIME = None
@@ -1660,6 +1662,15 @@ class DesktopService:
                 return ok(status)
             except Exception as error:
                 return self._error(error)
+
+    def open_layout_guide(self):
+        """Open only the fixed layout rules guide in the repository; never pass state."""
+        try:
+            if not webbrowser.open(LAYOUT_GUIDE):
+                raise RuntimeError('未能请求浏览器打开识别规则说明。')
+            return ok({'requested': True})
+        except Exception:
+            return self._error('未能请求浏览器打开识别规则说明。')
 
     def install_skills(self):
         """Copy the packaged analysis skills into the user's Claude Code / Codex skill folders."""

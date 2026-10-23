@@ -30,6 +30,7 @@ EXPECTED_EXPORTS = {
     'open_skill_guide': [],
     'install_skills': [],
     'layout_action': ['action'],
+    'open_layout_guide': [],
     'start_recording': ['payload'],
     'stop_recording': [],
     'process_session': ['id'],

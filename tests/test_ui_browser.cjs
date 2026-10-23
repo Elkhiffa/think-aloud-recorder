@@ -260,6 +260,10 @@ async function bridge(page, state = snapshot()) {
         if (args[0] === 'enable') Object.assign(status, { enabled: true, current: true });
         return { ok: true, data: { ...status } };
       }
+      if (method === 'install_skills') return { ok: true, data: { source: 'synthetic', results: [
+        { agent: 'Claude Code', skill: 'think-aloud-judgments', state: 'installed', backup: null, extra_files: [] },
+        { agent: 'Claude Code', skill: 'think-aloud-insight', state: 'updated', backup: 'D:\\synthetic-only\\backup', extra_files: [] }] } };
+      if (method === 'open_layout_guide') return { ok: true, data: { requested: true } };
       if (method === 'ocr_action') {
         Object.assign(fixture.snapshot.ocr, args[0] === 'pause' ? { state: 'paused' } : { state: 'downloading', downloaded_bytes: 21000000 });
         return { ok: true, data: { ...fixture.snapshot.ocr } };
@@ -974,7 +978,7 @@ async function newGameChecks(context, origin) {
   await page.close();
 }
 
-// ---------------------------------------------------------------- first launch ('first': 记录方法 → 设备与转写 → 游戏与窗口 → 保存位置)
+// ---------------------------------------------------------------- first launch ('first': 记录方法 → 准备分析 → 设备与转写 → 游戏与窗口 → 保存位置)
 function firstSnapshot(overrides = {}) {
   const state = snapshot({ presets: [], active_preset_id: null, sessions: [], background_jobs: [], capabilities: { cloud_key: false },
     readiness: { ready: false, checking: false, errors: [{ message: '请先完成设置' }] },
@@ -985,9 +989,9 @@ function firstSnapshot(overrides = {}) {
 async function firstUseChecks(context, origin) {
   const page = await mainPage(context, origin, firstSnapshot());
   await sheet(page).waitFor({ state: 'visible' });
-  await check('first launch automatically opens the four-step setup, starting with the recording method', async () => {
+  await check('first launch automatically opens the five-step setup, starting with the recording method', async () => {
     assert.equal(await page.locator('#sheetTitle').innerText(), '开始使用');
-    assert.deepEqual(await stepLabels(page), [{ text: '记录方法', on: true }, { text: '设备与转写', on: false }, { text: '游戏与窗口', on: false }, { text: '保存位置', on: false }]);
+    assert.deepEqual(await stepLabels(page), [{ text: '记录方法', on: true }, { text: '准备分析', on: false }, { text: '设备与转写', on: false }, { text: '游戏与窗口', on: false }, { text: '保存位置', on: false }]);
     assert.equal(await page.locator('#sheetTabs').isVisible(), false);
     assert.equal(await page.locator('.method-card:visible').count(), 4);
     const lead = await box(page, '#methodContent .method-part:first-child .method-lead'), grid = await box(page, '#methodContent .method-grid');
@@ -996,20 +1000,38 @@ async function firstUseChecks(context, origin) {
     assert.equal(await page.locator('#wizardNext').innerText(), '开始设置'); assert.equal(await page.locator('#wizardBack').isVisible(), false);
     await screen(page, 'first-method-720x520');
   });
+  await check('准备分析: nothing happens until the button; one click starts the OCR download and installs the skills; 燕云 is ticked by default', async () => {
+    await page.locator('#wizardNext').click();
+    assert.equal((await stepLabels(page))[1].on, true); assert.equal(await page.locator('#panelPrepare').isVisible(), true);
+    assert.equal(await page.locator('#prepareYanyun').isChecked(), true);
+    assert.match(await page.locator('#panelPrepare').innerText(), /识别规则需要每款游戏单独定制/);
+    assert.equal((await calls(page, 'ocr_action')).length + (await calls(page, 'install_skills')).length, 0);
+    await page.locator('#panelPrepare [data-open-layout-guide]').click();
+    assert.deepEqual((await calls(page, 'open_layout_guide')).map(call => call.args), [[]]);
+    await page.locator('#prepareAnalysis').click();
+    await page.waitForFunction(() => window.__syntheticFixture.calls.some(call => call.method === 'install_skills'));
+    assert.deepEqual((await calls(page, 'ocr_action')).map(call => call.args), [['download']]);
+    await page.locator('#prepareResults').waitFor({ state: 'visible' });
+    assert.match(await page.locator('#prepareResults').innerText(), /think-aloud-insight：已更新（旧版本已备份）/);
+    await pollNow(page); assert.match(await page.locator('#prepareStatus').innerText(), /识别组件下载中/);
+    await noHorizontalOverflow(page); await screen(page, 'first-prepare-720x520');
+    await page.locator('#prepareYanyun').uncheck(); // this walk-through names its own game; the ticked path is checked below
+    assert.equal((await calls(page, 'save_preset')).length, 0);
+  });
   await check('device and transcription step: shared settings only, validated before moving on', async () => {
     await page.locator('#wizardNext').click();
-    assert.equal((await stepLabels(page))[1].on, true);
+    assert.equal((await stepLabels(page))[2].on, true);
     assert.equal(await page.locator('#panelGeneral').isVisible(), true); assert.equal(await page.locator('#panelGame').isVisible(), false);
     for (const id of ['#libraryRoot', '#updateGroup', '#methodLink']) assert.equal(await page.locator(id).isVisible(), false, `${id} belongs to 设置 only`);
     assert.equal(await page.locator('#mic').isVisible(), true);
     await page.locator('#wizardNext').click();
-    assert.equal(await page.locator('#wizardError').innerText(), '请选择麦克风。'); assert.equal((await stepLabels(page))[1].on, true);
+    assert.equal(await page.locator('#wizardError').innerText(), '请选择麦克风。'); assert.equal((await stepLabels(page))[2].on, true);
     await page.locator('#mic').selectOption('synthetic-mic');
     assert.equal(await page.locator('#providerLocal').getAttribute('aria-selected'), 'true', 'local transcription is the default; nothing is uploaded unless chosen');
     await page.locator('#providerQwen').click(); await page.locator('#cloudKey').fill('synthetic-first-key');
     await screen(page, 'first-devices-720x520');
     await page.locator('#wizardNext').click();
-    assert.equal((await stepLabels(page))[2].on, true);
+    assert.equal((await stepLabels(page))[3].on, true);
   });
   await check('first-run setup visibly selects the bundled UI/UX words; preview is read-only and removable', async () => {
     await page.locator('#wizardBack').click(); // the shared vocabulary sits on 设备与转写
@@ -1029,14 +1051,14 @@ async function firstUseChecks(context, origin) {
       const container = node.closest('[data-in]'); return { field: container?.dataset.in, label: container?.querySelector('label')?.textContent, hint: container?.querySelector('.hint')?.textContent };
     });
     assert.equal(field.field, 'general-vocab', `bundled UI/UX vocabulary is listed under ${JSON.stringify(field)}`);
-    await page.locator('#wizardNext').click(); assert.equal((await stepLabels(page))[2].on, true);
+    await page.locator('#wizardNext').click(); assert.equal((await stepLabels(page))[3].on, true);
   });
   await check('game step validates the name and window; the location step requires confirming an existing library', async () => {
     await page.locator('#wizardNext').click();
     assert.equal(await page.locator('#wizardError').innerText(), '请填写游戏名称。');
     await page.locator('#game').fill('首次合成游戏'); await page.locator('#target').selectOption('synthetic-window');
     await page.locator('#wizardNext').click();
-    assert.equal((await stepLabels(page))[3].on, true);
+    assert.equal((await stepLabels(page))[4].on, true);
     assert.equal(await page.locator('#vault').inputValue(), 'D:\\synthetic-only\\think-aloud-database');
     assert.equal(await page.locator('#wizardNext').innerText(), '开始使用');
     assert.equal(await page.locator('#reuseVaultNotice').isVisible(), true);
@@ -1065,6 +1087,22 @@ async function firstUseChecks(context, origin) {
     assert.deepEqual((await calls(page, 'save_cloud_key')).at(-1).args, ['synthetic-first-key']);
   });
   await page.close();
+  await check('with 燕云十六声 ticked, the first game is named for it, uses the sibling library and gets its rules after saving', async () => {
+    const p = await mainPage(context, origin, firstSnapshot());
+    try {
+      await sheet(p).waitFor({ state: 'visible' });
+      await p.locator('#wizardNext').click(); await p.locator('#wizardNext').click();
+      await p.locator('#mic').selectOption('synthetic-mic'); await p.locator('#wizardNext').click();
+      assert.equal(await p.locator('#game').inputValue(), '燕云十六声');
+      await p.locator('#target').selectOption('synthetic-window'); await p.locator('#wizardNext').click();
+      assert.equal(await p.locator('#vault').inputValue(), 'D:\\synthetic-only\\think-aloud-database');
+      await p.locator('#reuseVault').click(); await p.locator('#wizardNext').click(); await sheet(p).waitFor({ state: 'hidden' });
+      assert.equal((await calls(p, 'save_preset')).at(-1).args[0].game, '燕云十六声');
+      const order = await p.evaluate(() => window.__syntheticFixture.calls.map(call => call.method).filter(name => ['save_preset', 'layout_action'].includes(name)));
+      assert.deepEqual(order, ['save_preset', 'layout_action']);
+      assert.deepEqual((await calls(p, 'layout_action')).at(-1).args, ['enable']);
+    } finally { await p.close(); }
+  });
   await check('cancelling the first launch saves nothing and leaves recording unavailable', async () => {
     const p = await mainPage(context, origin, firstSnapshot());
     try {
@@ -1075,7 +1113,8 @@ async function firstUseChecks(context, origin) {
       assert.equal(await p.locator('#gameTabs [data-game]').count(), 0); assert.equal(await p.locator('#gameTabs [data-game-add]').count(), 1);
       // Removing the bundled vocabulary is a draft change only.
       await p.locator('#settingsButton').click(); await sheet(p).waitFor({ state: 'visible' });
-      await p.locator('#wizardNext').click(); await p.locator('#mic').selectOption('synthetic-mic');
+      await p.locator('#wizardNext').click(); await p.locator('#wizardNext').click(); // 记录方法 → 准备分析 → 设备与转写
+      await p.locator('#mic').selectOption('synthetic-mic');
       await p.locator('[data-remove-vocabulary="bundled-uiux-browser-fixture"]').click();
       assert.equal(await p.locator('[data-view-vocabulary="bundled-uiux-browser-fixture"]').count(), 0);
       assert.equal(await p.evaluate(() => store.draft.hotword_files.length), 0);
@@ -1109,7 +1148,7 @@ async function deviceSetupChecks(context, origin) {
     await check('explicit device refresh changes only the draft and keeps manual choices', async () => {
       const original = await page.evaluate(() => JSON.stringify(window.__syntheticFixture.snapshot.config));
       await page.evaluate(value => { window.__syntheticFixture.refreshSnapshot = value; }, detected);
-      await page.locator('#wizardNext').click(); // → 设备与转写
+      await page.locator('#wizardNext').click(); await page.locator('#wizardNext').click(); // → 准备分析 → 设备与转写
       await page.waitForFunction(() => document.querySelector('#mic option[value="default"]'));
       await page.locator('#mic').selectOption('synthetic-physical-mic'); await page.locator('#providerLocal').click();
       await page.locator('#wizardNext').click(); // → 游戏与窗口
@@ -1136,7 +1175,7 @@ async function deviceSetupChecks(context, origin) {
     const page = await mainPage(context, origin, firstSnapshot({ devices: { window: [], monitor: [], mic: [] }, device_defaults: {} }));
     try {
       await sheet(page).waitFor({ state: 'visible' });
-      await page.locator('#wizardNext').click(); // → 设备与转写: the microphone must be chosen here
+      await page.locator('#wizardNext').click(); await page.locator('#wizardNext').click(); // → 准备分析 → 设备与转写: the microphone must be chosen here
       assert.equal(await page.locator('#mic').isVisible(), true);
       assert.deepEqual(await page.locator('#mic option').allInnerTexts(), ['请选择麦克风']);
       const visible = { refresh: await page.locator('#refreshDevices').isVisible(), feedback: await page.locator('#deviceFeedback').isVisible() };
@@ -1148,7 +1187,7 @@ async function deviceSetupChecks(context, origin) {
     const page = await mainPage(context, origin, firstSnapshot({ device_inventory: { id: 'synthetic-first', state: 'succeeded' } }));
     try {
       await sheet(page).waitFor({ state: 'visible' });
-      await page.locator('#wizardNext').click();
+      await page.locator('#wizardNext').click(); await page.locator('#wizardNext').click(); // → 准备分析 → 设备与转写
       await page.locator('#mic').selectOption('synthetic-mic'); await page.locator('#providerLocal').click();
       await page.locator('#source').selectOption('整个显示器');
       await page.locator('#wizardNext').click();

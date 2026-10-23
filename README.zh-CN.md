@@ -96,7 +96,7 @@ OBS 确认录像开始时会响一声短促柔和的提示音（约 0.2 秒）�
 
 分析由外部 agent（Codex 或 Claude）按仓库里的两份 skill 完成：单场整理 [`skills/think-aloud-judgments`](skills/think-aloud-judgments) 把一场录制整理成可追溯的判断实例；跨场次分析 [`skills/think-aloud-insight`](skills/think-aloud-insight) 把实例归到议题树，并按你确认的分析简报写洞察报告。
 
-**第一次用之前先安装**：两份 skill 随软件包，在 设置 → 通用 → 记录方法（首次设置第一步也有）点「安装分析 skill」，就装进这台电脑已有的 agent 技能目录（Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`），旧副本先备份。软件更新后再点一次即可同步。手动安装见 [Skill 安装与更新](docs/agent-integration.md#skill-安装与更新)。
+**第一次用之前先安装**：首次设置的“准备分析”一步，一次点击就下载识别组件并装好两份 skill，还可以直接创建燕云十六声项目并装好识别规则（默认勾选）。已经设置过的电脑，在 设置 → 通用 → 记录方法 点「安装分析 skill」，就装进这台电脑已有的 agent 技能目录（Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`），旧副本先备份。软件更新后再点一次即可同步。手动安装见 [Skill 安装与更新](docs/agent-integration.md#skill-安装与更新)。
 
 情景轨道和界面路径识别需要本地文字识别：在 设置 → 通用 下载一次「识别组件」（约 65 MB，固定版本，来自 files.pythonhosted.org），更新软件时保留。
 

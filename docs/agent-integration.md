@@ -210,7 +210,7 @@ catalog-hotwords VAULT GAME --output FILE
 - `focus:{box,text?}`（有 `layout.focus`）：手柄操作时的金色焦点框（方、菱、圆，顶部居中有向下的小三角），box 是 960 宽画面上的 [x0,y0,x1,y1]，text 是框内的字。键鼠操作时没有焦点框，不报；没有小三角的金色边框（品质框）不算。`--compact` 不带 focus（手柄操作时它每几秒就变）。
 没报（缺字段或少了某一排）表示“未定”，不表示没有。`context-read` 完整输出带这些字段；`--compact` 每段带 `tabs`（亮着的页签文字）和 `headings`（主标题在前），同一标题下亮着的页签变了就分成新的一段，没报的帧不算变化。
 
-在一个资料库上启用：设置 → 游戏 →「界面路径识别」→ 启用（软件带了这款游戏的 `docs/layouts/<游戏>.json` 才显示），等同 `agent_cli.py layout-apply VAULT [--game GAME] [--dry-run]`：把规则写进界面目录，旧目录以 `catalog.json.before-layout-<时间>` 留在旁边，一次替换完成。之后用 `agent_cli.py context-rebuild VAULT [--game GAME] [--workers 2]` 重建已有场次的轨道（设置里给出可复制的命令；两场并行，可中断后重跑，已按当前 layout 建好的跳过；每场一个日志在软件目录的 `state\logs\context-rebuild\`）。源码检出里的 `scripts\apply_layout.py`、`scripts\rebuild_context_tracks.py` 只是这两条命令的包装。
+软件带了这款游戏的 `docs/layouts/<游戏>.json` 时，资料库还没有界面目录的场次直接使用这套规则（`game_catalog.session_catalog` 返回只含规则、没有界面的目录）；首次设置勾选“创建燕云十六声项目”时会建好目录。规则写法见 [docs/layouts/README.md](layouts/README.md)。已有界面目录的资料库在 设置 → 游戏 →「界面路径识别」→ 启用，等同 `agent_cli.py layout-apply VAULT [--game GAME] [--dry-run]`：把规则写进界面目录，旧目录以 `catalog.json.before-layout-<时间>` 留在旁边，一次替换完成；没有目录时新建一份只带规则的目录。之后用 `agent_cli.py context-rebuild VAULT [--game GAME] [--workers 2]` 重建已有场次的轨道（设置里给出可复制的命令；两场并行，可中断后重跑，已按当前 layout 建好的跳过；每场一个日志在软件目录的 `state\logs\context-rebuild\`）。源码检出里的 `scripts\apply_layout.py`、`scripts\rebuild_context_tracks.py` 只是这两条命令的包装。
 
 文字识别：开发 runtime 自带 `rapidocr_onnxruntime`；安装版在 设置 → 通用 →「识别组件」下载（约 65 MB，固定版本的 wheel 来自 files.pythonhosted.org，逐个核对 SHA-256，解压到 `models\ocr\<编号>\site\`，更新软件时保留）。`agent_cli.py ocr-status` 报告是否可用；agent 发现缺组件时只提示用户去设置里下载，不自行安装。
 
