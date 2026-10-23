@@ -51,7 +51,10 @@ def scan(database, publish=False, include_test=False):
     return dict(version=protocol.VERSION, sessions=sessions, skipped=skipped)
 
 
-def frame(folder, at, output):
+def frame(folder, at, output, width=1280):
+    # Parallel agents stalled on 1920px PNGs (1-2 MB each); a 1280px JPEG (~150 KB) is the default, 1920 only on request.
+    if not isinstance(width, int) or not 320 <= width <= 1920:
+        raise ValueError('截图宽度需在 320–1920 之间。')
     meta, material, revision, _ = protocol._ready(folder)
     protocol._span(dict(start=at, end=at), material['duration'])
     output = Path(output).resolve()
@@ -65,7 +68,8 @@ def frame(folder, at, output):
         from recorder import FFMPEG, HIDDEN
         run = subprocess.run([str(FFMPEG), '-nostdin', '-hide_banner', '-loglevel', 'error',
                               '-ss', str(at), '-i', str(protocol._path(folder, '录像.mp4')),
-                              '-frames:v', '1', '-vf', 'scale=min(1920\\,iw):-2', '-y', str(tmp)],
+                              '-frames:v', '1', '-vf', f'scale=min({width}\\,iw):-2',
+                              *(['-q:v', '3'] if output.suffix.lower() == '.jpg' else []), '-y', str(tmp)],
                              capture_output=True, timeout=40, creationflags=HIDDEN)
         if run.returncode or not tmp.is_file():
             raise ValueError('无法在此时间提取画面，请检查录像。')
@@ -151,7 +155,8 @@ def main(argv=None):
             move_target.add_argument('--parent', help='挪到这个洞察或议题下')
             move_target.add_argument('--top', action='store_true', help='挪回顶层，成为洞察')
         elif action == 'update':
-            issue_command.add_argument('id')
+            issue_command.add_argument('id', nargs='?')
+            issue_command.add_argument('--file', help='批量修改 JSON（UTF-8）：[{id,title?,description?,status?}]；长说明用它，不经命令行参数')
             issue_command.add_argument('--title')
             issue_command.add_argument('--description')
             issue_command.add_argument('--status', choices=('candidate', 'confirmed'))
@@ -168,9 +173,27 @@ def main(argv=None):
             issue_command.add_argument('--reason', default='')
             issue_command.add_argument('--role', choices=('support', 'counter'), default='support')
         elif action == 'unlink':
-            issue_command.add_argument('issue')
-            issue_command.add_argument('--session', required=True)
-            issue_command.add_argument('--instance', required=True)
+            issue_command.add_argument('issue', nargs='?')
+            issue_command.add_argument('--file', help='批量撤下 JSON：[{issue,session_id,instance_id}]')
+            issue_command.add_argument('--session')
+            issue_command.add_argument('--instance')
+    fix_propose = commands.add_parser('transcript-fix-propose', help='提议转写修正（全库规则或单处），交用户确认；不改逐字稿')
+    fix_propose.add_argument('vault')
+    fix_propose.add_argument('--file', required=True, help='JSON（UTF-8）：[{from,to,basis,session_id?,ref?}]；不写 session_id/ref 即全库规则')
+    fix_propose.add_argument('--worker', required=True)
+    fix_list = commands.add_parser('transcript-fix-list', help='列出转写修正和它在逐字稿里的全部命中，供用户确认前逐条看')
+    fix_list.add_argument('vault')
+    fix_list.add_argument('--status', choices=('proposed', 'confirmed', 'rejected', 'all'), default='proposed')
+    fix_list.add_argument('--session')
+    for verb in ('confirm', 'reject'):
+        fix_decide = commands.add_parser('transcript-fix-' + verb, help='用户在对话里看过命中后' + ('确认' if verb == 'confirm' else '驳回') + '转写修正')
+        fix_decide.add_argument('vault')
+        fix_decide.add_argument('ids', nargs='+')
+    fix_exclude = commands.add_parser('transcript-fix-exclude', help='让全库规则跳过某一段（那里的转写本来就对）')
+    fix_exclude.add_argument('vault')
+    fix_exclude.add_argument('id')
+    fix_exclude.add_argument('--session', required=True)
+    fix_exclude.add_argument('--ref', required=True)
     tags_report = commands.add_parser('tags-report', help='列出系统/玩法标签的条数、没有标签的证据和没打标签的活动')
     tags_report.add_argument('vault')
     tags_write = commands.add_parser('tags-write', help='校验后整份写入 tags.json；用户设的封面保留')
@@ -289,7 +312,8 @@ def main(argv=None):
             command.add_argument('--limit', type=int, default=80, help='每页词数，1–200；默认 80')
         if name == 'frame':
             command.add_argument('--at', type=float, required=True)
-            command.add_argument('--output', required=True)
+            command.add_argument('--output', required=True, help='.jpg（推荐）或 .png，存到场次以外的工作目录')
+            command.add_argument('--width', type=int, default=1280, help='最大宽度，默认 1280；看小字时用 1920')
     args = parser.parse_args(argv)
     try:
         name = args.command
@@ -342,7 +366,12 @@ def main(argv=None):
             elif name == 'issues-add':
                 value = issues.add_issue(args.vault, args.title, args.id, args.status, args.parent)
             elif name == 'issues-update':
-                value = issues.update_issue(args.vault, args.id, args.title, args.description, args.status)
+                if bool(args.file) == bool(args.id):
+                    raise ValueError('issues-update 需要议题编号或 --file，二选一。')
+                if args.file:
+                    value = issues.update_issues(args.vault, json.loads(Path(args.file).read_text(encoding='utf-8-sig')))
+                else:
+                    value = issues.update_issue(args.vault, args.id, args.title, args.description, args.status)
             elif name == 'issues-move':
                 value = issues.move_issue(args.vault, args.id, None if args.top else args.parent)
             elif name == 'issues-merge':
@@ -356,8 +385,22 @@ def main(argv=None):
                     rows = [dict(issue=args.issue, session_id=args.session, instance_id=args.instance,
                                  reason=args.reason, role=args.role)]
                 value = issues.link_instances(args.vault, rows)
-            else:
+            elif args.file:
+                value = issues.unlink_instances(args.vault, json.loads(Path(args.file).read_text(encoding='utf-8-sig')))
+            elif args.issue and args.session and args.instance:
                 value = issues.unlink_instance(args.vault, args.issue, args.session, args.instance)
+            else:
+                raise ValueError('issues-unlink 需要 议题编号 --session --instance，或 --file。')
+        elif name.startswith('transcript-fix-'):
+            import transcript_corrections as fixes
+            if name == 'transcript-fix-propose':
+                value = fixes.propose(args.vault, json.loads(Path(args.file).read_text(encoding='utf-8-sig')), args.worker)
+            elif name == 'transcript-fix-list':
+                value = fixes.list_corrections(args.vault, args.status, args.session)
+            elif name == 'transcript-fix-exclude':
+                value = fixes.exclude(args.vault, args.id, args.session, args.ref)
+            else:
+                value = fixes.decide(args.vault, args.ids, 'confirmed' if name == 'transcript-fix-confirm' else 'rejected')
         elif name == 'tags-report':
             from evidence_tags import report
             value = report(args.vault)
@@ -441,7 +484,7 @@ def main(argv=None):
         elif name == 'fail':
             value = protocol.fail(args.session, args.token, args.reason)
         elif name == 'frame':
-            value = frame(args.session, args.at, args.output)
+            value = frame(args.session, args.at, args.output, args.width)
         elif name == 'inputs-summary':
             value = protocol.input_summary(args.session, args.start, args.end)
         elif name == 'name-activities':

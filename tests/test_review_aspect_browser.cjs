@@ -247,6 +247,8 @@ async function run(context) {
       for (const mode of ['collapsed', 'device', 'keys']) {
         await page.locator(`[data-input-mode="${mode}"]`).click(); await settle(page);
         const after = await geometry(page); fittedCheck(after);
+        // 设备图 grows the companion, so only it may shorten the slot; the fitted check above still holds.
+        if (mode === 'device') { assert.ok(after.slot.height < before.slot.height - 1, 'device mode gives the diagram room from the video'); continue; }
         for (const key of ['x','y','width','height']) close(before.slot[key], after.slot[key], `input mode ${mode} preserves slot.${key}`);
       }
       return samples;

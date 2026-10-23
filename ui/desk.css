@@ -60,7 +60,8 @@ button:disabled{cursor:default;opacity:.5}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:var(--s2);height:32px;padding:0 var(--s4);border:0;border-radius:var(--r);background:var(--fill);color:var(--ink);white-space:nowrap}
 .btn:hover{background:var(--fill2)}
 .btn.solid{background:var(--ink);color:var(--sheet)}
-.btn.on{background:var(--fill2)}
+/* 多选筛选有选中项时是墨色；分段（同时只选一个）选中是白色 */
+.btn.on,.btn.on:hover{background:var(--ink);color:var(--sheet)}
 .btn.sm{height:28px;padding:0 var(--s3);border-radius:var(--r-sm)}
 .btn svg{width:12px;height:12px;fill:currentColor}
 .sort select{height:32px;border:0;border-radius:var(--r);background:none;color:var(--muted);font:inherit;padding:0 var(--s2)}

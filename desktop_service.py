@@ -41,6 +41,40 @@ PRESET_KEYS = ('preset', 'source', 'window', 'monitor', 'mic', 'language', 'hotw
 GENERAL_KEYS = ('source', 'monitor', 'mic', 'preset', 'language', 'transcription_provider', 'record_inputs')
 SUSPECT_STATES = {'录制中', '启动中', '保存中'}
 READINESS_MAX_AGE = 15
+# The two analysis skills' install steps; the in-app usage guide links here.
+SKILL_GUIDE = 'https://github.com/Elkhiffa/think-aloud-recorder/blob/main/docs/agent-integration.md#skill-安装与更新'
+
+
+_CHIME = None
+
+
+def _start_chime():
+    """Two soft rising sine notes (about 0.2 s, low level) as an in-memory WAV."""
+    global _CHIME
+    if _CHIME is None:
+        import io
+        import math
+        import struct
+        import wave
+        rate, samples = 44100, []
+        for start, frequency, length in ((0.0, 659.25, .12), (.07, 880.0, .14)):
+            offset = int(start * rate)
+            for index in range(int(length * rate)):
+                t = index / rate
+                envelope = min(1.0, t / .012) * math.exp(-t / (length / 3.2))
+                value = .12 * envelope * math.sin(2 * math.pi * frequency * t)
+                while len(samples) <= offset + index:
+                    samples.append(0.0)
+                samples[offset + index] += value
+        buffer = io.BytesIO()
+        with wave.open(buffer, 'wb') as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(rate)
+            output.writeframes(b''.join(struct.pack('<h', int(max(-1.0, min(1.0, value)) * 32767))
+                                        for value in samples))
+        _CHIME = buffer.getvalue()
+    return _CHIME
 
 
 def ok(data=None):
@@ -74,6 +108,7 @@ class DesktopService:
         self._main_foreground_probe = lambda: False
         self._main_activation_generation = 0
         self._automatic_readiness = threading.local()
+        self._timing = threading.local()
         self._job = None
         self._background_jobs = {}
         self._background_history = {}
@@ -99,6 +134,10 @@ class DesktopService:
         self._device_inventory = dict(id=None, state='idle', error='', checked_at=None, window_selection=None)
         self._device_labels = {'mic': {}, 'window': {}, 'monitor': {}}
         self._readiness = dict(ready=False, checking=True, errors=[], checked_at=None)
+        self._warm_lock = threading.Lock()
+        self._warm_thread = None
+        self._warm_pending = []
+        self._warm_queued = set()
         self._cfg = load_settings(self.root)
         self._cfg.setdefault('transcription_provider', 'later')
         self._cfg.setdefault('record_inputs', False)
@@ -109,6 +148,11 @@ class DesktopService:
         self._model = ModelManager(self.root)
         from updater import UpdateManager
         self._updates = UpdateManager(self.root)
+        import agent_protocol
+        # Path 4: an upgraded app does not trust statuses checked by older validation rules.
+        self._status_store = agent_protocol.StatusStore(
+            self.root / 'state/preprocessing-status.json',
+            f"{agent_protocol.STATUS_CACHE_VERSION}:{self._updates.snapshot().get('current_version')}")
         self._activity = dict(busy=False, kind='idle', status='待开始', detail='',
                               active_id=None, elapsed_seconds=0)
         self._launch('recovery', self._startup, status='检查上次场次')
@@ -172,13 +216,39 @@ class DesktopService:
                     inventory_id = self._begin_device_inventory(automatic=True)
             if inventory_id:
                 self._read_device_inventory(inventory_id, automatic=True)
+                self._mark('inventory')
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
             self._initialize_obs_once()
+            self._mark('obs_initialize')
             return self._update_readiness(invalidate=invalidate)
         finally:
             self._automatic_readiness.foreground_only = False
             self._automatic_readiness.generation = None
+
+    def _mark(self, name):
+        timer = getattr(self._timing, 'timer', None)
+        if timer is not None:
+            timer.mark(name)
+
+    def _record_timing(self, kind, timer, **extra):
+        """Append one line of stage durations to state/timings.jsonl for latency diagnosis."""
+        import json
+        from datetime import datetime
+        line = json.dumps(dict(at=datetime.now().astimezone().isoformat(timespec='seconds'), kind=kind, **extra, **timer.summary()),
+                          ensure_ascii=False)
+        path = self.root / 'state/timings.jsonl'
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # Path 5: a long-running install keeps a bounded diagnostic file.
+            if path.is_file() and path.stat().st_size > 512 * 1024:
+                path.write_text(line + '\n', encoding='utf-8')
+            else:
+                with path.open('a', encoding='utf-8') as handle:
+                    handle.write(line + '\n')
+        except OSError:
+            # Path 5: an unwritable state folder never affects readiness or recording.
+            pass
 
     def _safe_text(self, value):
         text = str(value or '')
@@ -395,19 +465,23 @@ class DesktopService:
                 for ident, value in self._cfg.get('presets', {}).items()]
 
     def _session_paths(self):
-        vault = Path(self._cfg['vault']).resolve()
-        if self._first_default_vault(vault):
+        return {ident: path for ident, (path, _) in self._session_entries().items()}
+
+    def _session_entries(self, vault=None, first_default=None):
+        """Session folders with the metadata read while scanning them."""
+        vault = Path(self._cfg['vault'] if vault is None else vault).resolve()
+        if self._first_default_vault(vault) if first_default is None else first_default:
             # Merely proposing a shared sibling folder is not permission to
             # enumerate, recover or adopt another installation's sessions.
             return {}
-        base = vault / '场次'
+        base = (vault / '场次').resolve()
         result = {}
-        if base.resolve().parent != vault:
+        if base.parent != vault:
             return result
         for file in base.glob('*/session.json'):
             try:
                 directory = file.parent.resolve()
-                if directory.parent != base.resolve() or file.resolve().parent != directory:
+                if directory.parent != base or file.resolve().parent != directory:
                     continue
                 meta = recorder.read(file)
                 if not isinstance(meta, dict):
@@ -419,10 +493,10 @@ class DesktopService:
                     # Ambiguous IDs must not choose a different session by chance.
                     result[ident] = None
                 else:
-                    result[ident] = directory
+                    result[ident] = (directory, meta)
             except (OSError, ValueError, TypeError):
                 continue
-        return {ident: path for ident, path in result.items() if path is not None}
+        return {ident: entry for ident, entry in result.items() if entry is not None}
 
     def _session(self, ident):
         if not isinstance(ident, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', ident):
@@ -432,11 +506,12 @@ class DesktopService:
             raise ValueError('场次不存在、编号重复或不属于当前资料库。')
         return recorder.Session(path)
 
-    def _visible_session_paths(self):
+    def _visible_session_paths(self, paths=None, jobs=None):
         """Current vault plus trusted paths already admitted to this app's queue."""
-        paths = self._session_paths()
+        paths = self._session_paths() if paths is None else dict(paths)
+        jobs = [*self._background_jobs.values(), *self._background_history.values()] if jobs is None else jobs
         ambiguous = set()
-        for job in [*self._background_jobs.values(), *self._background_history.values()]:
+        for job in jobs:
             ident, path = job['session_id'], job['path']
             if ident in paths and paths[ident] != path:
                 ambiguous.add(ident)
@@ -481,35 +556,16 @@ class DesktopService:
 
     def get_state(self):
         try:
+            # Path 1: only in-memory state is read under the lock, so a slow
+            # library scan never delays stop, the microphone meter or health checks.
             with self._lock:
-                sessions = []
-                for ident, path in self._visible_session_paths().items():
-                    try:
-                        meta = recorder.read(path / 'session.json')
-                        media = meta.get('media', {})
-                        if not isinstance(media, dict):
-                            media = {}
-                        background = self._background_for(path)
-                        result = self._background_history.get(str(path))
-                        from agent_protocol import preprocessing_status
-                        from session_metadata import session_presentation
-                        sessions.append(dict(id=ident, game=meta.get('game', ''),
-                                             **session_presentation(meta),
-                                             preprocessing=preprocessing_status(path, meta),
-                                             can_review=(path / '录像.mp4').is_file() and (path / '录像.mp4').resolve().parent == path.resolve()
-                                                 and not bool(self._active and self._active.path.resolve() == path.resolve()),
-                                             created=meta.get('created', ''), state=meta.get('state', ''),
-                                             duration=media.get('duration', 0),
-                                             segments=meta.get('segments', 0),
-                                             warning=self._safe_text(meta.get('warning')),
-                                             error=self._safe_text(meta.get('error')),
-                                             path=str(path), test=bool(meta.get('test')),
-                                             in_current_vault=path.parent.parent == Path(self._cfg['vault']).resolve(),
-                                             background_job=self._job_summary(background) if background else None,
-                                             background_result=self._job_summary(result) if result else None))
-                    except (OSError, ValueError, TypeError):
-                        continue
-                sessions.sort(key=lambda item: item['created'], reverse=True)
+                vault = self._cfg['vault']
+                first_default = self._first_default_vault(vault)
+                jobs = {str(job['path']): self._job_summary(job) for job in self._background_jobs.values()}
+                job_paths = [dict(session_id=job['session_id'], path=job['path'])
+                             for job in [*self._background_jobs.values(), *self._background_history.values()]]
+                history = {key: self._job_summary(job) for key, job in self._background_history.items()}
+                active_path = self._active.path.resolve() if self._active else None
                 activity = dict(self._activity)
                 if self._active:
                     activity['active_id'] = self._active.meta['id']
@@ -520,23 +576,115 @@ class DesktopService:
                 model = {key: model.get(key) for key in ('state', 'model', 'path', 'downloaded_bytes',
                          'total_bytes', 'error', 'source', 'revision')}
                 model['error'] = self._safe_text(model.get('error'))
-                return ok(dict(config=self._public_config(), sessions=sessions, closing=self._exit_pending,
-                               insight=self._insight_summary(),
-                               updates=self._update_snapshot(model),
-                               default_vault=self._default_vault(),
-                               default_hotword_files=deepcopy(self._default_hotword_files),
-                               readiness=self._visible_readiness(),
-                               presets=self._preset_list(), active_preset_id=self._cfg.get('active_preset_id'),
-                               background_jobs=[self._job_summary(job) for job in self._background_jobs.values()],
-                               activity=activity, devices=deepcopy(self._devices), model=model,
-                               device_defaults=deepcopy(self._device_defaults),
-                               device_refresh=deepcopy(self._device_refresh),
-                               device_inventory=deepcopy(self._device_inventory),
-                               capabilities=dict(cloud_key=self._has_key(),
-                                   obs=(self.root / 'tools/obs/bin/64bit/obs64.exe').is_file(),
-                                   local_model=model['state'] == 'ready')))
+                state = dict(config=self._public_config(), closing=self._exit_pending,
+                             insight=self._insight_summary(),
+                             updates=self._update_snapshot(model),
+                             default_vault=self._default_vault(),
+                             default_hotword_files=deepcopy(self._default_hotword_files),
+                             readiness=self._visible_readiness(),
+                             presets=self._preset_list(), active_preset_id=self._cfg.get('active_preset_id'),
+                             background_jobs=list(jobs.values()),
+                             activity=activity, devices=deepcopy(self._devices), model=model,
+                             device_defaults=deepcopy(self._device_defaults),
+                             device_refresh=deepcopy(self._device_refresh),
+                             device_inventory=deepcopy(self._device_inventory))
+            from agent_protocol import list_status
+            from session_metadata import session_presentation
+            entries = self._session_entries(vault, first_default)
+            visible = self._visible_session_paths({ident: path for ident, (path, _) in entries.items()}, job_paths)
+            current_vault = Path(vault).resolve()
+            sessions, unchecked = [], set()
+            for ident, path in visible.items():
+                try:
+                    entry = entries.get(ident)
+                    meta = entry[1] if entry and entry[0] == path else recorder.read(path / 'session.json')
+                    media = meta.get('media', {})
+                    if not isinstance(media, dict):
+                        media = {}
+                    preprocessing, needs_check = list_status(path, meta, self._status_store)
+                    if needs_check:
+                        unchecked.add(str(path))
+                    video = path / '录像.mp4'
+                    sessions.append(dict(id=ident, game=meta.get('game', ''),
+                                         **session_presentation(meta),
+                                         preprocessing=preprocessing,
+                                         can_review=video.is_file() and video.resolve().parent == path
+                                             and active_path != path,
+                                         created=meta.get('created', ''), state=meta.get('state', ''),
+                                         duration=media.get('duration', 0),
+                                         segments=meta.get('segments', 0),
+                                         warning=self._safe_text(meta.get('warning')),
+                                         error=self._safe_text(meta.get('error')),
+                                         path=str(path), test=bool(meta.get('test')),
+                                         in_current_vault=path.parent.parent == current_vault,
+                                         background_job=jobs.get(str(path)),
+                                         background_result=history.get(str(path))))
+                except (OSError, ValueError, TypeError):
+                    continue
+            sessions.sort(key=lambda item: item['created'], reverse=True)
+            if unchecked:
+                self._warm_statuses([Path(item['path']) for item in sessions if item['path'] in unchecked])
+            state.update(sessions=sessions,
+                         capabilities=dict(cloud_key=self._has_key(),
+                             obs=(self.root / 'tools/obs/bin/64bit/obs64.exe').is_file(),
+                             local_model=model['state'] == 'ready'))
+            return ok(state)
         except Exception as error:
             return self._error(error)
+
+    def _warm_statuses(self, paths):
+        """Validate listed results on one background thread, newest first."""
+        with self._warm_lock:
+            for path in paths:
+                if path not in self._warm_queued:
+                    self._warm_queued.add(path)
+                    self._warm_pending.append(path)
+            if self._warm_thread is None and self._warm_pending and not self._closed.is_set():
+                self._warm_thread = threading.Thread(target=self._warm_loop, daemon=True, name='status-warmer')
+                self._warm_thread.start()
+
+    def _warm_paused(self):
+        # Path 1: startup recovery, readiness, recording start and saving keep
+        # the interpreter for OBS and input listeners; checking resumes after them.
+        with self._lock:
+            return self._active is not None or bool(self._activity.get('busy'))
+
+    def _warm_loop(self):
+        from agent_protocol import warm_status
+        checked = 0
+        try:
+            while not self._closed.is_set():
+                if self._warm_paused():
+                    self._closed.wait(.5)
+                    continue
+                with self._warm_lock:
+                    if not self._warm_pending:
+                        break
+                    path = self._warm_pending.pop(0)
+                try:
+                    warm_status(path, self._status_store)
+                except (OSError, ValueError, TypeError):
+                    # Path 5: a session moved or locked mid-check stays "checking"; the next poll queues it again.
+                    pass
+                finally:
+                    with self._warm_lock:
+                        self._warm_queued.discard(path)
+                checked += 1
+                if checked % 10 == 0:
+                    self._save_status_store()
+        finally:
+            with self._warm_lock:
+                self._warm_thread = None
+                self._warm_queued.difference_update(self._warm_pending)
+                self._warm_pending.clear()
+            self._save_status_store()
+
+    def _save_status_store(self):
+        try:
+            self._status_store.save()
+        except OSError:
+            # Path 5: an unwritable state folder only means the next launch checks again.
+            pass
 
     def _has_key(self):
         return secret_store.has_key(directory=self.root / 'state/secrets')
@@ -750,18 +898,22 @@ class DesktopService:
         client = None
         try:
             client = request(recorder.client, False, continue_if=self._automatic_probe_allowed)
+            self._mark('obs_connect')
             if request(client.get_record_status).output_active or request(client.get_stream_status).output_active:
                 return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
             if (request(client.get_profile_list).current_profile_name != 'Experience'
                     or request(client.get_scene_collection_list).current_scene_collection_name != 'Experience'):
                 return None, ('OBS_CONFIGURATION', 'OBS 当前不是记录器专用配置，请打开录制预设并重新连接录制引擎。')
+            self._mark('obs_status')
             import device_inventory
             with self._inventory_lock:
                 check()
                 result = device_inventory.devices(check=check)
+            self._mark('devices')
             if request(client.get_record_status).output_active or request(client.get_stream_status).output_active:
                 return None, ('OBS_BUSY', 'OBS 正在录制或推流，请先结束已有输出。')
             check()
+            self._mark('obs_status_again')
             return result, None
         except _ReadinessPaused as paused:
             return None, paused.args
@@ -771,6 +923,7 @@ class DesktopService:
             try:
                 if client is not None:
                     client.disconnect()
+                    self._mark('obs_disconnect')
             except Exception:
                 pass
 
@@ -820,6 +973,7 @@ class DesktopService:
                     if devices is not None:
                         if self._cache_devices(devices, expected_inventory=inventory_before_probe) is False:
                             return self._defer_readiness()
+                        self._mark('cache_devices')
                         source = 'window' if cfg.get('source') == '游戏窗口' else 'monitor'
                         for key in (source, 'mic'):
                             value = cfg.get(key)
@@ -851,6 +1005,7 @@ class DesktopService:
                 capture = capture_readiness(cfg, self.root)
                 if not capture['ready']:
                     error('INPUT_CAPTURE_UNAVAILABLE', capture['error'], 1)
+                self._mark('input_capture')
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
             if provider == 'local' and not self._model.resolve_model():
@@ -861,11 +1016,13 @@ class DesktopService:
                       '本机保存的云端密钥无法读取或解密，请重新填写密钥。' if exists else '已选云端转写，但尚未保存本机 API Key。', 2)
             elif provider not in ('later', 'local', 'qwen'):
                 error('TRANSCRIPTION_INVALID', '请选择有效转写方式并保存设置。', 2)
+            self._mark('transcription')
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
             if has_setup:
                 try:
                     free = self._probe_location(cfg.get('vault', ''))
+                    self._mark('location')
                     if free < 5 * 1024 ** 3:
                         error('OUTPUT_SPACE_LOW', f'保存位置剩余 {free / 1024 ** 3:.1f} GB，不足录制所需的 5 GB。', 3)
                 except Exception:
@@ -896,17 +1053,26 @@ class DesktopService:
                 return False
             self._mark_readiness_checking(invalidate)
             generation = self._main_activation_generation
+            timer = recorder.StageTimer()
             def work():
+                self._timing.timer = timer
                 try:
                     with self._operation_lock:
+                        timer.mark('queued')
                         with self._lock:
                             if (self._closed.is_set() or self._exit_pending or self._active is not None
                                     or self._activity['busy'] or not self._main_is_foreground()
                                     or generation != self._main_activation_generation):
                                 self._readiness.update(ready=False, checking=False)
                                 return
-                        self._run_automatic_readiness(invalidate=invalidate, generation=generation)
+                        result = self._run_automatic_readiness(invalidate=invalidate, generation=generation)
+                        # Routine 5 s refreshes would push start/stop history out of the bounded file;
+                        # only checks the user waits for (return, save, after stop) are recorded.
+                        if invalidate:
+                            self._record_timing('readiness', timer, ready=bool(result and result.get('ready')),
+                                                errors=[item['code'] for item in (result or {}).get('errors', [])])
                 finally:
+                    self._timing.timer = None
                     with self._lock:
                         pending = self._readiness_pending
                         self._readiness_pending = False
@@ -1427,6 +1593,15 @@ class DesktopService:
         except Exception:
             return self._error('未能请求浏览器打开百炼控制台。')
 
+    def open_skill_guide(self):
+        """Open only the fixed skill install guide in the repository; never pass state."""
+        try:
+            if not webbrowser.open(SKILL_GUIDE):
+                raise RuntimeError('未能请求浏览器打开 skill 安装说明。')
+            return ok({'requested': True})
+        except Exception:
+            return self._error('未能请求浏览器打开 skill 安装说明。')
+
     def _require_transcription(self, cfg, allow_later=False):
         provider = cfg.get('transcription_provider', 'later')
         if provider == 'later':
@@ -1449,9 +1624,25 @@ class DesktopService:
             }
             self._progress(details.get(stage, stage), status=stage)
 
+        timer = recorder.StageTimer()
+
         def work():
+            self._timing.timer = timer
+            timer.mark('queued')
+            try:
+                started = start()
+            except Exception:
+                self._record_timing('start', timer, ok=False)
+                raise
+            finally:
+                self._timing.timer = None
+            self._record_timing('start', timer, ok=True)
+            return started
+
+        def start():
             self._progress('正在确认保存的预设、设备和保存位置。', status='正在检查录制条件')
             readiness = self._update_readiness()
+            timer.mark('readiness')
             if not readiness['ready']:
                 raise RuntimeError('\n'.join(item['message'] for item in readiness['errors']))
             selection = readiness.get('window_selection')
@@ -1460,7 +1651,8 @@ class DesktopService:
                     raise RuntimeError('录制预设已变化，请重新开始录制。')
                 cfg['window'] = selection['resolved']
             try:
-                session = recorder.Session.start(cfg, progress=progress)
+                session = recorder.Session.start(cfg, progress=progress, mark=timer.mark,
+                                                 confirmed=lambda _: self._play_start_chime())
                 with self._lock:
                     self._active = session
                 self._report_recording_state(session, '录像已开始。')
@@ -1490,6 +1682,17 @@ class DesktopService:
             except Exception as error:
                 return self._error(error)
 
+    def _play_start_chime(self):
+        """A short, soft cue the moment OBS confirms the video started, so the user can turn back to the game."""
+        def play():
+            try:
+                import winsound
+                winsound.PlaySound(_start_chime(), winsound.SND_MEMORY | winsound.SND_NODEFAULT)
+            except Exception:
+                # Path 5: no audio device or a muted/disabled sound service never affects the recording.
+                pass
+        threading.Thread(target=play, daemon=True, name='start-chime').start()
+
     def _report_recording_state(self, session, detail):
         meta = session.meta
         if meta.get('settings', {}).get('record_inputs') and meta.get('input_state') != 'recording':
@@ -1505,11 +1708,15 @@ class DesktopService:
                 return self._error('当前没有本应用接管的录制。')
             session = self._active
             cfg = deepcopy(session.meta['settings'])
+        timer = recorder.StageTimer()
 
         def work():
+            timer.mark('queued')
             try:
-                session.stop()
+                session.stop(mark=timer.mark)
+                self._record_timing('stop', timer, ok=True)
             except Exception:
+                self._record_timing('stop', timer, ok=False)
                 # Keep the active handle unless OBS proves this recording ended.
                 session.finish_inputs(interrupted=True,error='停止录制时连接中断，操作采集已停止。')
                 try:

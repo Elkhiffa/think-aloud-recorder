@@ -23,7 +23,8 @@ from update_installer import (HIDDEN, MAX_ARCHIVE, MAX_ENTRIES, MAX_EXPANDED,
                               UpdateError, assemble_package, extract_package, reject_reparse,
                               safe_name, sha256)
 from updater import REPOSITORY, SemVer, app_update_asset, release_assets, tag_version
-from scripts.build_portable import ROOT_FILES
+from scripts.build_portable import ROOT_FILES, UI_FONTS
+from scripts import fetch_fonts
 from app_paths import application_root, installation_root, manifest_path
 from scripts.verify_runtime_seed import verify_runtime_seed
 from media_runtime import MEDIA_DIRECTORY, verify_media
@@ -185,6 +186,13 @@ def verify_commit(repo, commit):
     return actual
 
 
+def font_pins():
+    """The bundled UI fonts are downloaded by scripts/fetch_fonts.py, never committed; their hashes are."""
+    pins = {'ui/fonts/' + name: face[2] for name, face in fetch_fonts.FACES.items()}
+    pins.update({'ui/fonts/' + name: value[1] for name, value in fetch_fonts.SERIF.items()})
+    return pins
+
+
 def verify_commit_files(repo, commit, stage):
     records = []
     tracked = {}
@@ -208,6 +216,18 @@ def verify_commit_files(repo, commit, stage):
                 or '/' not in name and name.endswith('.py')):
             names.add(name)
     names = sorted(names)
+    # Path 3 (release build): build_portable packages the fetched fonts beside the committed ui/ files;
+    # without this they read as unreviewed sources and every public build is blocked.
+    pins = font_pins()
+    for name in [item for item in names if item in UI_FONTS and item not in tracked]:
+        path = application_root(stage) / name
+        if not path.is_file():
+            raise ValueError('Key application file missing from package: ' + name)
+        value = hashlib.sha256(path.read_bytes()).hexdigest()
+        if value != pins.get(name):
+            raise ValueError('Packaged UI font differs from its pinned download: ' + name)
+        records.append({'path': name, 'comparison': 'pinned_font', 'package_sha256': value, 'pinned_sha256': value})
+        names.remove(name)
     for name in names:
         path = (installation_root(stage) if name.startswith('vocabularies/') else application_root(stage)) / name
         if not path.is_file():

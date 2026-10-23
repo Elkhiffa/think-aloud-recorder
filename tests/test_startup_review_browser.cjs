@@ -33,7 +33,8 @@ const position=page=>page.locator('video').evaluate(v=>({time:v.currentTime,paus
  browser=await chromium.launch({channel:'msedge',headless:true});
  await check('open at calibrated preparation end, stay paused and retain real focus gap',async()=>{
   const {page}=await pageFor();await loaded(page);assert.deepEqual(await position(page),{time:2,paused:true});
-  assert.match(await page.locator('#status').textContent(),/准备完成/);
+  // c4ae8e8 (2026-10-04) dropped the status line on opening at the preparation end; the position above is what this checks.
+  assert.equal(await page.locator('#status').textContent(),'');
   assert.equal(await page.locator('.timeline-gap.preparation').textContent(),'录制准备');
   assert.equal(await page.locator('.timeline-gap.preparation').evaluate(el=>getComputedStyle(el).backgroundImage),'none');
   assert.match(await page.locator('#timelineState').textContent(),/2 处缺口/);

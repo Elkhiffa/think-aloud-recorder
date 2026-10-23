@@ -763,6 +763,71 @@ class AgentProtocolTests(unittest.TestCase):
         with patch.object(Path,'read_text',side_effect=AssertionError('no reads on cached status')):
             self.assertEqual(agent.preprocessing_status(self.folder,self.meta)['state'],'complete')
 
+    def test_list_shows_checking_until_background_check_then_reuses_saved_status(self):
+        """触发路径：用户 → 打开主窗口场次列表 → 有已提交但本次运行尚未核对的整理结果 → 列表先显示“核对中”，后台核对后显示事件数，下次启动直接读本机缓存 → 不修会让列表冷启动等待逐场完整校验约 20 秒。"""
+        self.complete()
+        agent._CACHE.clear()
+        cache = self.root / 'state' / 'preprocessing-status.json'
+        store = agent.StatusStore(cache, 'v1')
+        value, needs_check = agent.list_status(self.folder, self.meta, store)
+        self.assertEqual((value['state'], needs_check), ('checking', True))
+        with patch.object(agent, 'validate_result', side_effect=AssertionError('the list never validates')):
+            self.assertEqual(agent.list_status(self.folder, self.meta, store)[0]['state'], 'checking')
+        agent.warm_status(self.folder, store)
+        value, needs_check = agent.list_status(self.folder, self.meta, store)
+        self.assertEqual((value['state'], value['events'], needs_check), ('complete', 1, False))
+        self.assertNotIn('result', value)
+        store.save()
+        agent._CACHE.clear()
+        with patch.object(agent, '_status', side_effect=AssertionError('saved status is reused')):
+            value, needs_check = agent.list_status(self.folder, self.meta, agent.StatusStore(cache, 'v1'))
+        self.assertEqual((value['state'], value['events'], needs_check), ('complete', 1, False))
+
+    def test_saved_status_from_older_app_version_is_checked_again(self):
+        """触发路径：用户 → 升级后首次打开主窗口 → 本机缓存由旧版本的校验规则写入 → 列表重新核对，不沿用旧结论 → 不修会把新规则拒绝的结果仍显示为已完成。"""
+        self.complete()
+        cache = self.root / 'state' / 'preprocessing-status.json'
+        store = agent.StatusStore(cache, 'old')
+        agent.warm_status(self.folder, store)
+        store.save()
+        value, needs_check = agent.list_status(self.folder, self.meta, agent.StatusStore(cache, 'new'))
+        self.assertEqual((value['state'], needs_check), ('checking', True))
+
+    def test_damaged_saved_status_entries_are_dropped_and_saving_still_works(self):
+        """触发路径：操作系统 → 同步盘或断电留下内容损坏但版本号仍匹配的本机缓存 → 应用启动后列表核对并保存 → 损坏条目被丢弃、保存照常 → 不修后台核对线程每次保存都会出错，缓存永远写不进去。"""
+        self.complete()
+        cache = self.root / 'state' / 'preprocessing-status.json'
+        cache.parent.mkdir(parents=True)
+        cache.write_text(json.dumps(dict(version='v1', entries={'broken': 'x', 'short': [1]})), encoding='utf-8')
+        store = agent.StatusStore(cache, 'v1')
+        agent.warm_status(self.folder, store)
+        store.save()
+        saved = json.loads(cache.read_text(encoding='utf-8'))['entries']
+        self.assertEqual(set(saved), {str(self.folder)})
+
+    def test_issue_registry_change_rechecks_cached_status(self):
+        """触发路径：外部 agent → 用 agent_cli 修改资料库 issues.json → 已缓存的整理状态引用的议题可能已删除 → 状态重新核对 → 不修会继续显示议题已失效的结果为已完成。"""
+        self.complete()
+        store = agent.StatusStore(self.root / 'state' / 'cache.json', 'v1')
+        agent.warm_status(self.folder, store)
+        self.assertFalse(agent.list_status(self.folder, self.meta, store)[1])
+        recorder.write(self.folder.parent.parent / 'issues.json', dict(version=1, issues=[]))
+        self.assertTrue(agent.list_status(self.folder, self.meta, store)[1])
+        with patch.object(agent, '_status', wraps=agent._status) as status:
+            agent.preprocessing_status(self.folder, self.meta)
+        status.assert_called_once()
+
+    def test_invalid_status_is_not_revalidated_every_poll(self):
+        """触发路径：用户 → 主窗口每秒刷新场次列表 → 某场整理结果格式无效且未再改动 → 不重复读取校验 → 不修会每轮重读该场全部素材。"""
+        self.complete()
+        result = json.loads((self.folder / agent.RESULT).read_text(encoding='utf-8'))
+        result['events'][0]['evidence'] = [dict(kind='quote', ref='missing')]
+        recorder.write(self.folder / agent.RESULT, result)
+        self.assertEqual(agent.preprocessing_status(self.folder, self.meta)['state'], 'invalid')
+        with patch.object(agent, '_status', wraps=agent._status) as status:
+            self.assertEqual(agent.preprocessing_status(self.folder, self.meta)['state'], 'invalid')
+        status.assert_not_called()
+
     def test_export_contains_optional_result_but_no_worker_leases(self):
         self.complete()
         with zipfile.ZipFile(recorder.Session(self.folder).package()) as archive:

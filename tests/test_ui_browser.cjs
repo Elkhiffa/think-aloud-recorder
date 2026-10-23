@@ -318,6 +318,9 @@ async function homeChecks(context, origin) {
     // The running background job is shown where the last session sits, not as a blocker.
     assert.deepEqual(await page.locator('#lastSession .steps li').allInnerTexts(), ['已保存', '转写中', '待整理']);
     assert.equal(await page.locator('#lastSession .steps li.now').first().innerText(), '转写中');
+    // Only the step in progress takes the width; the finished and the not-yet steps stay as narrow as their labels.
+    const stepWidths = await page.locator('#lastSession .steps li').evaluateAll(items => items.map(item => item.getBoundingClientRect().width));
+    assert.ok(stepWidths[1] > 2 * Math.max(stepWidths[0], stepWidths[2]), JSON.stringify(stepWidths));
     assert.equal(await page.locator('#queueBrief').innerText(), '1 段转写中', 'background work is summarised under 全部场次');
     assert.equal((await calls(page, 'start_recording')).length, 0);
   });
@@ -596,6 +599,10 @@ async function homeChecks(context, origin) {
     assert.equal(await page.locator('#openVault').isVisible(), false);
     await page.locator('#methodButton').click(); await page.locator('#actionDialog[open]').waitFor();
     assert.equal(await page.locator('#actionBody .method-card').count(), 4);
+    await noHorizontalOverflow(page); await screen(page, 'method-dialog-720x520');
+    // 触发路径：用户 → 记录方法 → 查看 skill 安装方法 → 只请求打开固定的安装说明页。
+    await page.locator('#actionBody [data-open-skill-guide]').click();
+    assert.deepEqual((await calls(page, 'open_skill_guide')).map(call => call.args), [[]]);
     await page.locator('#actionFooter button').first().click();
     await openSettings(page, 'game');
     await page.locator('#openVault').click();
@@ -928,7 +935,9 @@ async function firstUseChecks(context, origin) {
     assert.deepEqual(await stepLabels(page), [{ text: '记录方法', on: true }, { text: '设备与转写', on: false }, { text: '游戏与窗口', on: false }, { text: '保存位置', on: false }]);
     assert.equal(await page.locator('#sheetTabs').isVisible(), false);
     assert.equal(await page.locator('.method-card:visible').count(), 4);
-    assert.ok((await box(page, '#methodContent .method-lead')).y < (await box(page, '#methodContent .method-grid')).y, 'core method precedes all examples and supporting copy');
+    const lead = await box(page, '#methodContent .method-part:first-child .method-lead'), grid = await box(page, '#methodContent .method-grid');
+    assert.ok(lead.x + lead.width <= grid.x || lead.y < grid.y, 'core method precedes all examples and supporting copy');
+    assert.equal(await page.locator('#panelMethod [data-open-skill-guide]').isVisible(), true, 'first launch also points at the skill install guide');
     assert.equal(await page.locator('#wizardNext').innerText(), '开始设置'); assert.equal(await page.locator('#wizardBack').isVisible(), false);
     await screen(page, 'first-method-720x520');
   });
@@ -1393,6 +1402,16 @@ async function deskChecks(context, origin) {
     assert.deepEqual((await page.evaluate(() => window.__deskFixture.calls.map(call => call.method))).filter(name => name.startsWith('win_')), ['win_minimize', 'win_toggle_maximize', 'win_close']);
   });
   await page.close();
+  await check('a session whose result is still being checked reads 核对中 and counts as neither organized nor waiting', async () => {
+    // 触发路径：用户 → 打开资料台 → 场次列表先返回、结果在后台核对（state=checking）→ 状态列“核对中” → 不修会被算进“待整理”。
+    const sessions = deskSessions().map(row => row.id === 'd1' ? { ...row, preprocessing: { state: 'checking', label: '核对中' } } : row);
+    const p = await deskPage(context, origin, deskState({ sessions }));
+    try {
+      assert.equal(await p.locator('#sessionScroll [data-session="d1"] .c-st').innerText(), '核对中');
+      assert.equal(await p.locator('#sessionScroll [data-session="d1"] .pc b').count(), 0, 'no problem count before the result is validated');
+      assert.deepEqual(await p.locator('#stateChips button').evaluateAll(n => n.map(x => x.textContent)), ['全部 5', '已整理 2', '待整理 0', '转写中 1', '失败 1']);
+    } finally { await p.close(); }
+  });
   await check('desk opens on the requested tab and fits its 960×600 minimum', async () => {
     const p = await deskPage(context, origin, deskState({ tab: 'insight' }), { width: 960, height: 600 });
     try {

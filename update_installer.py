@@ -91,7 +91,7 @@ def managed_path(name):
         return lower.endswith('.py') or lower in {'think aloud.exe', 'experiencerecorder.exe', 'portable.json',
             'package-manifest.json', 'dependency-source-manifest.json', 'model-manifest.json',
             'requirements-lock.txt', 'license', 'third_party_notices.md', 'readme.md', 'player.html'}
-    return lower.startswith(('runtime/', 'ui/', 'licenses/', 'docs/', 'scripts/', 'tools/input/',
+    return lower.startswith(('runtime/', 'ui/', 'licenses/', 'docs/', 'scripts/', 'tools/input/', 'tools/fonts/',
                              'tools/obs/bin/', 'tools/obs/data/', 'tools/obs/obs-plugins/')) or lower == 'tools/obs/portable_mode.txt'
 
 

@@ -4,11 +4,19 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 没有 agent 时，完成的场次照常显示“可回看”。领取、预处理失败、过期或损坏均不会改变录制/转写状态。只有当前素材版本的有效结果才显示“体验事件”页签；事件及证据可定位原始录像。问题无需回答即可完成预处理。
 
-## 手动发起一次预处理
+## 手动发起一次整理
 
 默认由用户控制发起时机：结束一段录制，并等转写和文件整理完成后，把该场次文件夹路径交给外部会话。单次任务完成即结束，不需要定时检查资料库。录制中的场次或仅视频先就绪的场次不应进入预处理。
 
-将源码中的整个 `skills/think-aloud-preprocess` 目录安装到所用 agent 的技能目录后，可使用下面的提示词。软件更新不会同步这个独立副本，更新方法见下方“Skill 安装与更新”。回看顶部复制按钮的下拉菜单提供「复制场次文件夹路径」。这里的路径应指向包含 `session.json`、录像和逐字稿的具体场次文件夹，而不是整个资料库；接口会检查真实整理状态和当前素材版本。
+将源码中的单场整理 skill `skills/think-aloud-judgments` 整个目录安装到所用 agent 的技能目录后，可使用下面的提示词；它就是主窗口“上一场”和资料台场次详情里「复制整理指令」复制出来的内容。软件更新不会同步这个独立副本，更新方法见下方“Skill 安装与更新”。回看顶部复制按钮的下拉菜单提供「复制场次文件夹路径」。这里的路径应指向包含 `session.json`、录像和逐字稿的具体场次文件夹，而不是整个资料库；接口会检查真实整理状态和当前素材版本。
+
+```text
+请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。
+场次文件夹：【粘贴当前场次文件夹路径】
+只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。
+```
+
+跨场次的议题归类和报告用 `skills/think-aloud-insight`，由用户确认分析简报后另行发起。旧的 `think-aloud-preprocess`（体验事件、想法和可选问题）已由这两份 skill 取代；它的场次命名接口说明仍在源码 `skills/think-aloud-preprocess/references/activity-naming.md`。下面是旧预处理提示词，只用于对照旧结果：
 
 ```text
 使用 $think-aloud-preprocess，对这个 Think Aloud 场次做一次预处理：
@@ -28,9 +36,26 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 ## Skill 安装与更新
 
+**第一次安装**：
+
+1. 在 [Releases](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) 下载与所装应用同一版本的 **Source code (zip)**，完整解压。skill 不在应用安装包里。
+2. 把解压出的 `skills\think-aloud-judgments` 和 `skills\think-aloud-insight` 两个文件夹整个复制到 agent 的技能目录：Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`。两个都用就两处都复制。也可以在 PowerShell 里运行（把第一行换成实际解压位置）：
+
+   ```powershell
+   $src = "D:\Downloads\think-aloud-recorder-0.9.0\skills"
+   foreach ($dest in "$env:USERPROFILE\.claude\skills", "$env:USERPROFILE\.codex\skills") {
+     New-Item -ItemType Directory -Force $dest | Out-Null
+     Copy-Item -Recurse "$src\think-aloud-judgments", "$src\think-aloud-insight" $dest
+   }
+   ```
+
+3. 新开一个 agent 会话，skill 就可以用了。场次转写完成后，在主窗口或资料台点「复制整理指令」，粘贴给 agent。
+
+以前装过旧版 `think-aloud-preprocess` 的，可以把它从技能目录移走；它已由这两份 skill 取代。**以后更新**时目录里已有同名文件夹，按下面的步骤先备份、再比较、再替换，不要直接覆盖。
+
 应用、仓库中的方法文档和 agent 已安装的 Skill 是三个独立对象。安装包升级成功，不表示 Skill 副本已更新；仓库文档可能在应用版本不变时继续澄清方法。不要仅用相同的软件版本号判断它们是否一致。
 
-1. 确定源码提交，取得该提交的整个 `skills/think-aloud-preprocess` 目录；使用 Skill 安装器时指定固定的 `ref`。已安装的目录先复制备份到技能目录之外，避免把备份也作为第二份 Skill 加载。先比较原副本与来源：存在本地定制时保留并审阅，不直接覆盖。
+1. 确定源码提交，取得该提交的 `skills/think-aloud-judgments` 和 `skills/think-aloud-insight` 两个完整目录；使用 Skill 安装器时指定固定的 `ref`。已安装的目录先复制备份到技能目录之外，避免把备份也作为第二份 Skill 加载。先比较原副本与来源：存在本地定制时保留并审阅，不直接覆盖。
 2. 一并同步 `SKILL.md`、`references/protocol.md` 和 `agents/openai.yaml`，以及未来由该 Skill 引用的其他资源。只更新主文档可能继续引用旧协议。不要替换无关 Skill、修改 agent 配置或删除用户添加的文件。
 3. 保存来源提交、旧副本备份位置和安装前后逐文件 SHA256；与实际取得的来源文件核对。用目标应用的 `app/agent_cli.py --help` 确认文档所需入口，必要时再检查子命令。比如 `quote_words` 需要应用 0.6.10，追加预算及高清请求需要 0.6.9；缺少入口时先升级应用，不修改原始素材来绕过兼容限制。
 4. 新副本在后续轮次中可用；正在进行的会话若要采用新方法，应明确读取更新后的主文档及引用资源，并记下实际采用的来源提交。磁盘文件一致、会话读过文档、按规则执行和分析效果达标分别验收，不能互相替代。不因安装 Skill 而重做已有结果。
@@ -106,10 +131,12 @@ v2 保留 v1 的 session_id、revision、summary、coverage、events、questions
 issues-list VAULT
 issues-add VAULT --title TITLE [--id ID] [--status candidate|confirmed] [--parent ID]
 issues-update VAULT ID [--title TITLE] [--description TEXT] [--status candidate|confirmed]
+issues-update VAULT --file UPDATES.json   # [{id,title?,description?,status?}]，整批校验通过才写入
 issues-merge VAULT FROM_ID INTO_ID
 issues-dismiss VAULT ID
 issues-link VAULT --file LINKS.json | --issue ID --session SESSION --instance INSTANCE [--reason TEXT] [--role support|counter]
 issues-unlink VAULT ID --session SESSION --instance INSTANCE
+issues-unlink VAULT --file UNLINKS.json   # [{issue,session_id,instance_id}]，任何一条不存在整批都不写
 instances-query VAULT [--issue ID]... [--screen ID] [--element ID] [--kind KIND] [--session ID]
 bug-hits VAULT
 insight-validate VAULT REPORT
@@ -120,7 +147,43 @@ catalog-confirm VAULT GAME --proposed NAME (--new ID [--name NAME] | --into ID)
 
 资料库根目录的 `tags.json` 是洞察窗口“界面库”的标签：`{version:1, groups:[{id,name}], tags:[{id,name,group,keywords:[],cover?:{session_id,at}}], activities:{"场次/活动编号":[标签]}, assignments:{"场次/实例":{add:[],remove:[]}}}`。一条证据的标签 = 所在活动的标签 ∪ 关键词命中（只看证据所在界面：目录里有的看正式编号，旧写法只用于对应；目录里没有的看原始写法；跳转路径不参与）∪ add − remove。`tags-report VAULT` 列出各标签条数、没有标签的证据和没打标签的活动，`tags-write VAULT --file F` 校验后整份写入；封面由用户在洞察窗口右键证据卡设置。`feedback-list VAULT [--open]` 读出用户在洞察窗口留下的反馈（资料库根目录 `feedback.json`，每条有 `id`、`target`（`{kind:"issue",id}`、`{kind:"instance",session_id,instance_id,issue?}` 或 `{kind:"tag",id}`）、`text`、`status` 和处理说明），`feedback-resolve VAULT ID --note TEXT` 标记已处理。`issues-dismiss` 只用于候选议题（没有下级、没有场次结果直接带这个标签）：移除该议题及其全部对应，场次结果不变。`bug-hits` 列出记录者本人原话中含 “bug”、“Cocos”、“引擎”、“报错”、“闪退”、“重叠”、“裁切”、“适配”、“歪了”、“偏了”、“偶现”、“不显示”、“没显示”、“超框”、“看不全”、“悬空”、“标错”（不分大小写；只是候选，是否算 bug 由 agent 判断）的转写段落；有说话人标注时只认记录者，没有标注时整段视为记录者。每条按原话引用对上实例，state 为 linked（实例已挂 BUG 或其子议题）、instance（成了实例但未挂）或 raw（没有成为实例）。
 
-洞察报告由跨场次分析 agent 写入资料库根目录的 `洞察/*.md`（单个不超过 1 MB）；工具不撰写报告，只在洞察窗口展示并核对引用。实例引用写作 `[0924 i72](i:SESSION_ID/i72#TA-04.5)`，`#` 后可选写明证据所属议题；议题引用写作 `[TA-04.5](issue:TA-04.5)`。`insight-validate` 返回引用总数和找不到的引用（实例不存在、场次未完成整理或议题不存在）。
+洞察报告由跨场次分析 agent 写入资料库根目录的 `洞察/*.md`（单个不超过 1 MB）；工具不撰写报告，只在洞察窗口展示并核对引用。实例引用写作 `[0924 i72](i:SESSION_ID/i72#TA-04.5)`，`#` 后可选写明证据所属议题；议题引用写作 `[TA-04.5](issue:TA-04.5)`。`insight-validate` 返回以下几项：
+- `citations`：引用总数；
+- `unresolved`：找不到的引用（实例不存在、场次未完成整理或议题不存在）；
+- `quotes_checked`：核对过的原话条数；
+- `quotes_unverified`：对不上的原话。
+- `anchors_unlinked`：`#` 后写的议题上并没有挂这条证据，洞察窗口会落到这条证据的其他卡片上。
+
+原话核对的范围和规则（几段连写在同一个引用前面的原话都核对）：
+- 只核对紧跟在实例引用前面的“……”原话，并和该实例的转写原文比对；
+- 可以用省略号节选，标点和空白不比；
+- 和资料库里用户确认过的转写修正（见下文“转写修正”）一致的，算一致；
+- 报告附录“转写修正”表（标题里有“转写修正”四个字；表头 `| 原文 | 改成 | 依据 | 引用 |`）里登记过的改字，套用到原文上之后算一致；
+- 仍对不上的，列进 `quotes_unverified`。
+
+`unresolved`、`quotes_unverified`、`anchors_unlinked` 都为空才算通过；命令本身照常返回 ok。洞察窗口只认这两种链接，`#锚点` 式的页内链接会显示成普通文字。报告的写法（按分析简报从上往下写、结构写回议题树）见 `skills/think-aloud-insight/`。
+
+跨场次分析 skill `skills/think-aloud-insight` 和单场次整理 skill `skills/think-aloud-judgments` 按上文“Skill 安装与更新”安装：把整个目录复制到所用 agent 的技能目录。软件更新不会同步这些副本。
+
+### 转写修正
+
+agent 从上下文认出误转写（如 `左交`→`走焦`），提议修正，用户在对话里看过命中后确认。逐字稿从不改写；确认后，结果和证据里的原话在 `text`（转写原文）旁多一个 `corrected_text`（修正后的字），场次的素材版本不变，已有整理结果不会因此失效。
+
+资料库根目录的 `transcript-corrections.json` 保存 `{version:1, corrections:[{id, from, to, basis, status, proposed_by, proposed_at, decided_at?, session_id?, ref?, exclude?}]}`：
+
+- 带 `session_id` 和 `ref`（如 `t000123`）的是单处修正，只改这一段；不带的是全库规则，改所有场次里出现的这个词，`exclude` 列出它要跳过的段；
+- 全库规则的门槛（用户 2026-10-22 定）：同一个误转写出现多处、每处都按上下文核对过，而且原文不是常用词（“限时”“上传”“人影”“连续冲刺”这类日常词不行）；规则只是候选：确认前，把 `transcript-fix-list` 列出的每一处命中都结合上下文（拿不准就截图看画面）核对，不该改的用 `transcript-fix-exclude` 排除，剩下的都对了才确认。整理新场次时，也用 `transcript-fix-list VAULT --status confirmed --session <场次 id>` 核对已确认规则在这一场的命中，不该改的同样排除。
+- `status` 是 `proposed`（待确认，不生效）、`confirmed` 或 `rejected`；同一个原文不能有两条改法不同的已确认全库规则。
+
+```text
+transcript-fix-propose VAULT --file FIXES.json --worker NAME   # [{from,to,basis,session_id?,ref?}]；每条都要在逐字稿里有命中，整批校验通过才写入
+transcript-fix-list VAULT [--status proposed|confirmed|rejected|all] [--session ID]   # 每条修正连同它的全部命中（场次、段号、时间、原文、改后）
+transcript-fix-confirm VAULT ID [ID ...]
+transcript-fix-reject VAULT ID [ID ...]
+transcript-fix-exclude VAULT ID --session SESSION --ref REF   # 让全库规则跳过这一段
+```
+
+单场整理 agent 只能通过 `transcript-fix-propose` 写这个文件；确认和驳回由用户在对话里决定后执行。回看窗口里的确认入口还没做，以后读同一个文件。
 
 ### 本地情景轨道与界面目录
 
@@ -160,7 +223,7 @@ catalog-hotwords VAULT GAME --output FILE
 - 操作证据通过与回看相同的撤销/缺口逻辑读取，应用同步偏移并保留原时间、后台状态。异常/缺失输入不构成“没有操作”的证据。
 - UI 只读取本地校验结果，不执行生成的 HTML、脚本或链接。导出保留验证后的事件和静态回看，不携带任务领取令牌、就绪文件或本机处理历史。
 
-可维护的预处理 skill 位于源码 `skills/think-aloud-preprocess`，包括方法和具体结果格式。它可单独复制到另一台电脑的 Codex skills 目录；软件包不携带用户技能配置。持续监控由用户明确授权的外部会话承担，本接口不会自行创建会话、定时任务或云端上传。
+整理方法在源码 `skills/think-aloud-judgments`（单场）和 `skills/think-aloud-insight`（跨场次），安装见上文“Skill 安装与更新”；软件包不携带用户技能配置。`skills/think-aloud-preprocess` 已停用，只用于读懂旧版 v1 结果。持续监控由用户明确授权的外部会话承担，本接口不会自行创建会话、定时任务或云端上传。
 
 0.7.1 支持在回看中校准体验事件的起止时间、名称、概述、问题与感受、备注。原 agent 结果保持不变，手动修正独立保存在 `experience-event-edits.json`。下次整理读取 `evidence.manual_corrections` 的字段差异和 diff，并提交当前 `corrections_review` 采纳说明；漏读或并发新修改会阻止覆盖。事件阅读顺序为概述、具体问题、弱化备注、默认收起的证据。
 ## 词库衔接

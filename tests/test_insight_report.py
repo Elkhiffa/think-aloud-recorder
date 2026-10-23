@@ -34,6 +34,57 @@ class InsightReportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '报告不存在'):
             insight.read_report(self.vault, '../issues.json')
 
+    def write_report(self, body):
+        folder = self.vault / insight.REPORTS
+        folder.mkdir(exist_ok=True)
+        (folder / 'q.md').write_text(body, encoding='utf-8')
+        return insight.validate_report(self.vault, 'q.md')
+
+    def test_verbatim_quote_before_citation_passes(self):
+        """触发路径：agent 按简报写完报告后运行 insight-validate → 引号里照抄转写原文（可省略号节选、标点不同）不报错，没跟引用的引号不核对。"""
+        self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [],
+                          segments=[dict(start=2, end=4, text='这个焦点老是会跑到下面来，为什么？', speaker_id=0)])
+        checked = self.write_report(
+            '他说“这个焦点老是会跑到下面来……为什么”[1008 i1](i:20261008-120000-aaaaaa/i1)。'
+            '规则名‘焦点落点规则’和“没有引用的引号”都不核对。')
+        self.assertEqual((checked['quotes_checked'], checked['quotes_unverified']), (1, []))
+
+    def test_corrected_quote_passes_when_registered(self):
+        """触发路径：agent 按上下文改正了引号里的转写错字，并登记在附录“转写修正”表 → insight-validate 套用登记的改字后认为一致。"""
+        self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [],
+                          segments=[dict(start=2, end=4, text='焦点又左交出去了。', speaker_id=0)])
+        checked = self.write_report(
+            '“焦点又走焦出去了。”[1008 i1](i:20261008-120000-aaaaaa/i1)\n\n'
+            '## 转写修正\n\n| 原文 | 改成 | 依据 | 引用 |\n|---|---|---|---|\n'
+            '| 左交 | 走焦 | 上下文在讲手柄焦点 | [1008 i1](i:20261008-120000-aaaaaa/i1) |\n')
+        self.assertEqual((checked['quotes_checked'], checked['quotes_unverified']), (1, []))
+
+    def test_unregistered_quote_change_is_listed(self):
+        """触发路径：引号里改了字却没登记、或把原话没有的字加进引号 → insight-validate 在 quotes_unverified 里逐条列出，引用本身仍算解析成功。"""
+        self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [],
+                          segments=[dict(start=2, end=4, text='焦点又左交出去了。', speaker_id=0)])
+        checked = self.write_report('“焦点又走焦出去了。”[1008 i1](i:20261008-120000-aaaaaa/i1)；'
+                                    '“焦点又左交出去了，真烦”[1008 i1](i:20261008-120000-aaaaaa/i1)')
+        self.assertEqual(checked['unresolved'], [])
+        self.assertEqual(checked['quotes_checked'], 2)
+        self.assertEqual([row['quote'] for row in checked['quotes_unverified']],
+                         ['焦点又走焦出去了。', '焦点又左交出去了，真烦'])
+        self.assertEqual(checked['quotes_unverified'][0]['instance_id'], 'i1')
+
+    def test_consecutive_quotes_prefixed_heading_and_unlinked_anchor(self):
+        """触发路径：报告里两段原话连写在同一个引用前、附录标题写成“### E. 转写修正”、引用的 # 议题并没挂着这条证据 → insight-validate 都要核到并列出。"""
+        self.make_session('20261008-120000-aaaaaa', '2026-10-08T12:00:00+08:00', [],
+                          segments=[dict(start=2, end=4, text='焦点又左交出去了。', speaker_id=0)])
+        issues.link_instances(self.vault, [dict(issue='TA-01', session_id='20261008-120000-aaaaaa', instance_id='i1',
+                                                reason='焦点', role='support')])
+        cite = '[1008 i1](i:20261008-120000-aaaaaa/i1#{})'
+        checked = self.write_report(
+            '“焦点又走焦”和“编造的话”' + cite.format('TA-01') + '；“焦点又走焦出去了”' + cite.format('BUG') +
+            '\n\n### E. 转写修正\n\n| 原文 | 改成 | 依据 | 引用 |\n|---|---|---|---|\n| 左交 | 走焦 | 上下文 | |\n')
+        self.assertEqual(checked['quotes_checked'], 3)
+        self.assertEqual([row['quote'] for row in checked['quotes_unverified']], ['编造的话'])
+        self.assertEqual([row['issue'] for row in checked['anchors_unlinked']], ['BUG'])
+
     def test_bug_hits_only_recorder_and_mark_unorganized(self):
         """触发路径：记录者说“这是 bug”后，洞察界面的 BUG 栏要列出每一处：已挂 BUG 的、成了实例但没挂的、没成实例的；另一位说话人的不算。"""
         segments = [dict(start=2, end=4, text='这是个 BUG。', speaker_id=0),

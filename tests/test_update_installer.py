@@ -420,6 +420,13 @@ class CompactInstallerTests(unittest.TestCase):
         with self.assertRaisesRegex(UpdateError,'独立迁移入口'):build_plan(self.root,flat,self.work)
         self.assertFalse((self.work/'job.json').exists())
 
+    def test_bundled_font_record_is_an_installable_path(self):
+        # 触发路径：用户 → 设置里下载新版本 → 安装助手解包 → 包里带 build_portable 打进去的字体来源记录 → 不修整个更新包被拒收。
+        from update_installer import managed_path
+        for name in ('app/tools/fonts/provenance.json','tools/fonts/provenance.json'):
+            with self.subTest(name=name):self.assertTrue(managed_path(name))
+        self.assertFalse(managed_path('app/tools/obs/config/global.ini'))
+
     def test_protected_inner_paths_and_mixed_layout_cannot_enter_manifest(self):
         from update_installer import managed_path
         protected=('app/config.json','app/state/webview/data','app/state/secrets/key.dpapi',
