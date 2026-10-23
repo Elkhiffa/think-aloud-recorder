@@ -46,7 +46,7 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 2. 把解压出的 `skills\think-aloud-judgments` 和 `skills\think-aloud-insight` 两个文件夹整个复制到 agent 的技能目录：Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`。两个都用就两处都复制。也可以在 PowerShell 里运行（把第一行换成实际解压位置）：
 
    ```powershell
-   $src = "D:\Downloads\think-aloud-recorder-0.9.0\skills"
+   $src = "D:\Downloads\think-aloud-recorder-0.10.0\skills"
    foreach ($dest in "$env:USERPROFILE\.claude\skills", "$env:USERPROFILE\.codex\skills") {
      New-Item -ItemType Directory -Force $dest | Out-Null
      Copy-Item -Recurse "$src\think-aloud-judgments", "$src\think-aloud-insight" $dest
