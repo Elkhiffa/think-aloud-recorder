@@ -106,7 +106,7 @@ def _tab_rows(items, min_height):
             continue
         xs, ys = [point[0] for point in item[3]], [point[1] for point in item[3]]
         box = dict(i=index, text=item[2], x0=min(xs), x1=max(xs), cx=(min(xs) + max(xs)) / 2,
-                   cy=(min(ys) + max(ys)) / 2, h=max(ys) - min(ys))
+                   y0=min(ys), y1=max(ys), cy=(min(ys) + max(ys)) / 2, h=max(ys) - min(ys))
         if box['h'] > min_height:
             boxes.append(box)
     rows = {}
@@ -181,8 +181,7 @@ def _active_tabs(image, lab, rows, rules, top, span):
         texts = [box['text'] for box in members]
         if y < rules['top_max_y']:
             kind = 'top'
-        elif any(low <= y <= high for low, high in rules['text_bands']) or any(
-                len(set(texts) & set(group['tabs'])) >= 2 for group in rules.get('groups', ())):
+        elif any(low <= y <= high for low, high in rules['text_bands']):
             kind = 'text'
         else:
             # 路径 2：带外的金色字多是按钮、角标和卡片标题（2026-10 随机 80 帧里带外 16 排全是）。
@@ -191,8 +190,137 @@ def _active_tabs(image, lab, rows, rules, top, span):
         gold = [index for index, ink in enumerate(inks) if ink is not None and _gold(ink, rules)]
         # 路径 2：两个金色（商店“和鸣”推广字）或没有金色时不报，宁缺勿错。
         if len(gold) == 1:
-            tabs.append(dict(kind=kind, active=texts[gold[0]], row=texts))
+            tabs.append(dict(kind=kind, active=texts[gold[0]], row=texts, _x=members[0]['x0'],
+                             _y=members[0]['y0'], _ids={box['i'] for box in members}))
     return tabs
+
+
+def _tab_columns(items, min_height):
+    """Short texts stacked in one column (left-aligned or centred under icons), >= 2 of them."""
+    boxes = [b for b in _text_boxes(items) if _tab_text(b['text']) and b['h'] > min_height]
+    columns, used = [], set()
+    for anchor in sorted(boxes, key=lambda b: b['cy']):
+        if anchor['i'] in used:
+            continue
+        h = anchor['h']
+        same = sorted((b for b in boxes if b['i'] not in used
+                       and (abs(b['cx'] - anchor['cx']) < .9 * max(b['h'], h)
+                            or abs(b['x0'] - anchor['x0']) < .5 * max(b['h'], h))
+                       and max(b['h'], h) / min(b['h'], h) < _ROW_HEIGHTS), key=lambda b: b['cy'])
+        start = same.index(anchor)
+        end = start
+        # 路径 2：图文页签的字之间隔着一个图标（约 2 个字高），列表项之间隔一行底条。
+        while end + 1 < len(same) and -.3 * h < same[end + 1]['y0'] - same[end]['y1'] <= _ROW_GAP * h:
+            end += 1
+        members = same[start:end + 1]
+        if len(members) >= 2:
+            used |= {b['i'] for b in members}
+            columns.append(members)
+    return columns
+
+
+def _region_l(lab, x0, y0, x1, y1):
+    height, width = lab.shape[:2]
+    x0, x1 = max(0, int(x0)), min(width, int(x1))
+    y0, y1 = max(0, int(y0)), min(height, int(y1))
+    return float(np.median(lab[y0:y1, x0:x1, 0])) if x1 > x0 and y1 > y0 else None
+
+
+def _selected(image, lab, members, gold, focus):
+    """Index of the selected member of a confirmed tab group, or None.
+
+    Order (2026-10 on 71 labelled left columns: 49 right, 6 wrong, 16 silent): a focus frame around the
+    icon square above the label; else exactly one gold label; else the strongest backdrop, either the icon
+    square (read at its four inner corners: the glyph fills the centre) or the list bar beside the label,
+    when it leads the runner-up by 1.5x (spec: the selected tab has the strongest backdrop)."""
+    import cv2
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV) if focus else None
+    framed, golds, strength = [], [], []
+    for index, b in enumerate(members):
+        h, cx = b['h'], b['cx']
+        s = 2.0 * h
+        sq = (cx - s / 2, b['y0'] - .25 * h - s, cx + s / 2, b['y0'] - .25 * h)
+        c, inset = .18 * s, .12 * s
+        corners = [v for v in (
+            _region_l(lab, sq[0] + inset, sq[1] + inset, sq[0] + inset + c, sq[1] + inset + c),
+            _region_l(lab, sq[2] - inset - c, sq[1] + inset, sq[2] - inset, sq[1] + inset + c),
+            _region_l(lab, sq[0] + inset, sq[3] - inset - c, sq[0] + inset + c, sq[3] - inset),
+            _region_l(lab, sq[2] - inset - c, sq[3] - inset - c, sq[2] - inset, sq[3] - inset)) if v is not None]
+        p = .2 * s
+        ring = [v for v in (
+            _region_l(lab, sq[0] - .15 * s - p, sq[1] - .15 * s - p, sq[2] + .15 * s + p, sq[1] - .15 * s),
+            _region_l(lab, sq[0] - .15 * s - p, sq[3] + .15 * s, sq[2] + .15 * s + p, sq[3] + .15 * s + p),
+            _region_l(lab, sq[0] - .15 * s - p, sq[1] - .15 * s, sq[0] - .15 * s, sq[3] + .15 * s),
+            _region_l(lab, sq[2] + .15 * s, sq[1] - .15 * s, sq[2] + .15 * s + p, sq[3] + .15 * s)) if v is not None]
+        icon = abs(float(np.median(corners)) - float(np.median(ring))) if corners and ring else 0.0
+        side = [v for v in (_region_l(lab, b['x0'] - 1.2 * h, b['y0'], b['x0'] - .3 * h, b['y1']),
+                            _region_l(lab, b['x1'] + .3 * h, b['y0'], b['x1'] + 1.2 * h, b['y1'])) if v is not None]
+        around = [v for v in (_region_l(lab, b['x0'] - h, b['y0'] - 1.4 * h, b['x1'] + h, b['y0'] - .7 * h),
+                              _region_l(lab, b['x0'] - h, b['y1'] + .7 * h, b['x1'] + h, b['y1'] + 1.4 * h)) if v is not None]
+        bar = abs(float(np.median(side)) - float(np.median(around))) if side and around else 0.0
+        strength.append(max(icon, bar))
+        if focus is not None:
+            band = []
+            for a, t, z, d in ((sq[0] - .12 * s, sq[1] - .12 * s, sq[2] + .12 * s, sq[1] + .08 * s),
+                               (sq[0] - .12 * s, sq[3] - .08 * s, sq[2] + .12 * s, sq[3] + .12 * s),
+                               (sq[0] - .12 * s, sq[1], sq[0] + .08 * s, sq[3]),
+                               (sq[2] - .08 * s, sq[1], sq[2] + .12 * s, sq[3])):
+                a, z = max(0, int(a)), min(image.shape[1], int(z))
+                t, d = max(0, int(t)), min(image.shape[0], int(d))
+                if z > a and d > t:
+                    band.append(hsv[t:d, a:z].reshape(-1, 3))
+            band = np.vstack(band) if band else np.zeros((1, 3), np.uint8)
+            hit = ((band[:, 0] >= focus['hue'][0] / 2) & (band[:, 0] <= focus['hue'][1] / 2)
+                   & (band[:, 1] >= focus['min_s'] * 255) & (band[:, 2] >= focus['levels'][0] * 255))
+            if hit.mean() >= .15:
+                framed.append(index)
+        ink = _ink(image, lab, b) if gold else None
+        if ink is not None and _gold(ink, gold):
+            golds.append(index)
+    if len(framed) == 1:
+        return framed[0]
+    if len(golds) == 1:
+        return golds[0]
+    order = sorted(range(len(strength)), key=lambda i: -strength[i])
+    if len(order) > 1 and strength[order[0]] >= 1.5 * max(strength[order[1]], 1.0):
+        return order[0]
+    return None
+
+
+def _same_tab(text, tab):
+    """OCR spelling of a confirmed tab: equal, one wrong character (装备宝理), or one extra leading
+    character (an icon read as a glyph)."""
+    if text == tab:
+        return True
+    if len(text) == len(tab) >= 3 and sum(a != b for a, b in zip(text, tab)) == 1:
+        return True
+    return len(text) == len(tab) + 1 and text[1:] == tab
+
+
+def _groups(image, lab, items, rules, focus, span, taken):
+    """Columns and rows whose labels belong to a user-confirmed tab group, with the selected one."""
+    found = []
+    candidates = _tab_columns(items, _TAB_MIN_H * span) + _tab_rows(items, _TAB_MIN_H * span)
+    for members in candidates:
+        if {b['i'] for b in members} & taken:
+            continue
+        for group in rules.get('groups', ()):
+            spelled = [next((tab for tab in group['tabs'] if _same_tab(re.sub(r'\s', '', b['text']), tab)), None)
+                       for b in members]
+            order = [group['tabs'].index(t) for t in spelled if t is not None]
+            # 路径 2：主菜单图标格里的“商店”“任务”会碰上“奖励/任务/商店/限时商店”：要求顺序与确认的
+            # 一致，四个以上的组至少对上三个（2026-10 新抽 300 帧里唯一的误报）。
+            if len(order) < (3 if len(group['tabs']) >= 4 else 2) or order != sorted(order):
+                continue
+            # 路径 2：同列里混进的非页签字（价格、按键提示）不参与判选中。
+            inside = [(b, t) for b, t in zip(members, spelled) if t is not None]
+            pick = _selected(image, lab, [b for b, _ in inside], rules, focus)
+            if pick is not None:
+                found.append(dict(kind='group', active=inside[pick][1], row=[t for _, t in inside],
+                                  _x=min(b['x0'] for b, _ in inside), _y=min(b['y0'] for b, _ in inside)))
+            taken |= {b['i'] for b in members}
+            break
+    return found
 
 
 def _text_boxes(items):
@@ -391,8 +519,20 @@ def _layout(image, full, items, layout):
         for name in headings.get('side', ()):
             if name in layout['headings'].get('icon_tabs', ()):
                 tabs.insert(0, dict(kind='icon', active=name, row=[name]))
+    if tab_rules and tab_rules.get('groups'):
+        taken = set().union(*(tab.get('_ids', set()) for tab in tabs))
+        tabs += _groups(image, lab, items, tab_rules, layout.get('focus'), span, taken)
     if tabs:
-        out['tabs'] = tabs
+        # 层级按版式（用户 2026-10-23）：顶部页签和纯图标页签是一级；其余按从左到右、从上到下依次是下一级
+        # （二级纵列在左、三级在它右侧顶部；二级横排在上、三级在它下方）。不看界面编号里第几段。
+        first = [tab for tab in tabs if tab['kind'] in ('top', 'icon')]
+        rest = sorted((tab for tab in tabs if tab['kind'] not in ('top', 'icon')),
+                      key=lambda tab: (tab['_x'], tab['_y']))
+        for tab in first:
+            tab['level'] = 1
+        for number, tab in enumerate(rest, 2 if first else 1):
+            tab['level'] = number
+        out['tabs'] = [{k: v for k, v in tab.items() if not k.startswith('_')} for tab in first + rest]
     if 'focus' in layout:
         focus = _focus(image, full, items, layout['focus'])
         if focus:

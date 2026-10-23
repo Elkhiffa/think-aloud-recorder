@@ -258,8 +258,8 @@ class ActiveTabTests(unittest.TestCase):
         _, track = self.build([self.shop()])
         frame = track['frames'][0]
         self.assertEqual(frame['tabs'], [
-            dict(kind='top', active='商店', row=['背包', '商店', '任务']),
-            dict(kind='text', active='精选', row=['精选', '月卡'])])
+            dict(kind='top', active='商店', row=['背包', '商店', '任务'], level=1),
+            dict(kind='text', active='精选', row=['精选', '月卡'], level=2)])
         self.assertEqual(len(frame['items'][0]), 4)
         self.assertEqual(track['layout'], LAYOUT)
         read = context.read_track(self.folder)['frames'][0]
@@ -270,7 +270,7 @@ class ActiveTabTests(unittest.TestCase):
         """触发路径：用户在目录 layout.tabs.groups 声明某界面不在高度带内的横向页签 → context-build 应报出它，未声明的带外金色字仍不报。"""
         self.write_rules(dict(tabs=dict(RULES, groups=[dict(screen='流派指引/流派推荐', tabs=['简介', '教学'])])))
         _, track = self.build([self.shop()])
-        self.assertIn(dict(kind='text', active='教学', row=['简介', '教学']), track['frames'][0]['tabs'])
+        self.assertIn('教学', [tab['active'] for tab in track['frames'][0]['tabs'] if tab['kind'] == 'group'])
         self.assertNotIn('开始匹配', [tab['active'] for tab in track['frames'][0]['tabs']])
 
     def test_rule_change_recomputes_tabs_without_ocr(self):
@@ -347,7 +347,7 @@ class ActiveTabTests(unittest.TestCase):
         _, track = self.build([self.menu(side_title='简培养')])
         frame = track['frames'][0]
         self.assertEqual(frame['headings']['side'], ['培养'])
-        self.assertEqual(frame['tabs'][0], dict(kind='icon', active='培养', row=['培养']))
+        self.assertEqual(frame['tabs'][0], dict(kind='icon', active='培养', row=['培养'], level=1))
 
     def test_focus_frame_needs_its_triangle(self):
         """触发路径：agent 对手柄操作的场次运行 context-build，目录有 layout.focus → 记下带顶部小三角的金色焦点框和框里的字；没有小三角的金色品质边框不算焦点。"""
@@ -367,6 +367,32 @@ class ActiveTabTests(unittest.TestCase):
         self.assertNotIn('focus', track['frames'][1])
         self.assertEqual(context.read_track(self.folder)['frames'][0]['focus'], track['frames'][0]['focus'])
         self.assertNotIn('focus', context.read_track(self.folder, compact=True)['frames'][0])
+
+    def test_confirmed_group_column_reports_the_strongest_backdrop(self):
+        """触发路径：agent 对商店场次运行 context-build，目录 layout.tabs.groups 有用户确认的“礼包/道具/外观”→ 左侧图文页签列按图标底块最亮的那个报出，层级排在顶部页签之后；没确认过的同样一列字不报。"""
+        image = np.full((540, 960, 3), 20, np.uint8)
+        result = []
+
+        def label(x, y, word, backdrop):
+            image[y - 37:y - 5, x:x + 32] = backdrop              # icon square (2 text heights) above the label
+            image[y:y + 16, x:x + 32:2] = GREY
+            result.append([[[x, y], [x + 32, y], [x + 32, y + 16], [x, y + 16]], word, .9])
+        for row, (word, backdrop) in enumerate((('礼包', 28), ('道具', 230), ('外观', 28))):
+            label(40, 120 + 70 * row, word, backdrop)
+        for row, word in enumerate(('攻略', '图鉴', '排行')):
+            label(700, 120 + 70 * row, word, 230 if row == 0 else 28)
+        # 主菜单图标格：“道具”在“礼包”上方，顺序与确认的相反，不是这组页签。
+        for row, word in enumerate(('道具', '礼包')):
+            label(450, 120 + 70 * row, word, 230 if row == 0 else 28)
+        image[20:36, 100:140:2] = GREY
+        image[20:36, 170:210:2] = GOLD
+        result += [[[[100, 20], [140, 20], [140, 36], [100, 36]], '推荐', .9],
+                   [[[170, 20], [210, 20], [210, 36], [170, 36]], '精选', .9]]
+        self.write_rules(dict(tabs=dict(RULES, groups=[dict(screen='商店/精选', tabs=['礼包', '道具', '外观'])])))
+        _, track = self.build([(image, result)])
+        self.assertEqual(track['frames'][0]['tabs'], [
+            dict(kind='top', active='精选', row=['推荐', '精选'], level=1),
+            dict(kind='group', active='道具', row=['礼包', '道具', '外观'], level=2)])
 
     def test_catalog_rejects_width_based_band(self):
         """触发路径：用户手填 layout 后运行 catalog-validate → 把像素或倒序区间写进高度带应报错，而不是静默不报任何页签。"""
