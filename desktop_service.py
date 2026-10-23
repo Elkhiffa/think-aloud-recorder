@@ -194,7 +194,10 @@ class DesktopService:
         with self._lock:
             if self._inventory_automatic:
                 self._invalidate_device_inventory()
-            self._readiness.update(ready=False, checking=False, checked_at=None)
+            # Path 1: idle OBS checks pause while the main window is not in front (lock-time OBS crash, da48e73).
+            # The last verified result stays as it was, marked deferred; returning to the window checks again and
+            # Start always runs its own full check, so a deferred "ready" never starts a recording by itself.
+            self._readiness.update(checking=False, deferred=True)
             return deepcopy(self._readiness)
 
     def _run_automatic_readiness(self, *, invalidate=True, generation=None):
@@ -752,6 +755,10 @@ class DesktopService:
 
     def _visible_readiness(self):
         result = deepcopy(self._readiness)
+        if result.pop('deferred', False) and not result['checking']:
+            # The game is in front: show the last check as it was, not as expired.
+            result['deferred'] = True
+            return result
         if result['ready'] and not self._readiness_is_fresh():
             result['ready'] = False
             result['checking'] = bool(self._readiness_thread and self._readiness_thread.is_alive())
@@ -760,6 +767,7 @@ class DesktopService:
         return result
 
     def _mark_readiness_checking(self, invalidate):
+        self._readiness.pop('deferred', None)
         if invalidate or not self._readiness_is_fresh():
             self._readiness.update(ready=False, checking=True)
         # A routine refresh keeps a fresh verified success usable. Its worker is

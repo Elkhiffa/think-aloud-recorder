@@ -121,6 +121,8 @@ function renderHome(){
  else if(store.requestPending)label='正在处理请求…';
  else if(checking)label='正在检查录制条件';
  else if(r.ready)label='已就绪';
+ // The game is in front and idle checks pause; nothing has been verified yet, which is not "not ready".
+ else if(r.deferred&&!errors.length)label='切回这里时检查录制条件';
  else if(store.activeId)label='录制条件尚未满足';
  if(closing){label='正在安全关闭';button='正在安全关闭…';}
  const cancelPending=store.snapshot?.updates?.cancel_pending===true;

@@ -32,7 +32,7 @@ button:disabled{cursor:default;opacity:.5}
 .app-drag a,.app-drag button,.app-drag input,.app-drag select{app-region:no-drag}
 .app{display:flex;flex-direction:column;height:100%;position:relative}
 .tb{height:40px;flex:none;display:flex;align-items:center;gap:var(--s2);padding-left:var(--s4)}
-.brand{width:10px;height:10px;border-radius:2px;background:var(--rec)}
+.brand{flex:none;width:16px;height:16px;color:var(--rec)}
 .tb-name{font-size:var(--t1);color:var(--muted)}
 .tb-space{flex:1;align-self:stretch}
 .win{display:flex;align-self:stretch;flex:none}
@@ -66,6 +66,13 @@ button:disabled{cursor:default;opacity:.5}
 .job-detail{padding:0 var(--s5) var(--s5);font-size:var(--t1);color:var(--rec-soft)}
 .tile.off{background:var(--fill);color:var(--ink)}
 .tile.off .rec{opacity:1}
+/* 没在录制时整块都是开始按钮：下方的录制条件也能点；可点时悬停变深、按下更深 */
+.tile:not(.recording) .rec::after{content:"";position:absolute;inset:0}
+.tile:not(.recording) .rec:enabled{cursor:pointer}
+.tile{transition:background-color .12s}
+.tile:not(.recording):has(.rec:enabled:hover){background:color-mix(in srgb,var(--rec) 88%,#000)}
+.tile:not(.recording):has(.rec:enabled:active){background:color-mix(in srgb,var(--rec) 78%,#000)}
+.tile:not(.recording):has(.rec:focus-visible){outline:2px solid var(--ink);outline-offset:2px}
 .tile.off .rec-game,.tile.off .checks,.tile.off .job-detail{color:var(--muted)}
 .tile.off .rec-icon{color:var(--faint)}
 /* 录制中：块里只有“正在录制”、计时、麦克风和结束键 */

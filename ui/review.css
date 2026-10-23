@@ -425,7 +425,7 @@ button:focus-visible,input:focus-visible,#lines:focus-visible{outline-color:var(
 .review-header{app-region:drag;background:var(--paper);border-bottom:0;padding:var(--s3) var(--s5) var(--s2);gap:var(--s5);align-items:flex-start}
 .review-header button,.review-header input,.review-header a,.review-header form,.review-header .copy-split{app-region:no-drag}
 .review-brand{gap:var(--s3);align-items:baseline}
-.review-brand>.brand{flex:none;width:10px;height:10px;border-radius:2px;background:var(--rec);align-self:flex-start;margin-top:var(--s3)}
+.review-brand>.brand{flex:none;width:16px;height:16px;color:var(--rec);align-self:flex-start;margin-top:var(--s2)}
 h1,.review-header h1{font:700 22px/1.35 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif;color:var(--ink)}
 .session-title-row{align-items:baseline}
 .rename-session{align-self:center;border-radius:var(--r-sm);background:none;color:var(--faint)}

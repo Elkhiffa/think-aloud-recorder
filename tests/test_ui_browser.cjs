@@ -324,6 +324,22 @@ async function homeChecks(context, origin) {
     assert.equal(await page.locator('#queueBrief').innerText(), '1 段转写中', 'background work is summarised under 全部场次');
     assert.equal((await calls(page, 'start_recording')).length, 0);
   });
+  await pageCheck(page, 'the whole record block is the Start button and darkens on hover', async () => {
+    // 触发路径：用户把鼠标放在录制块下方的录制条件上点 → 也是开始录制；悬停时整块变深，表示可点。
+    const status = await box(page, '#homeStatus');
+    const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x, y)?.closest('#recordButton')?.id || null,
+      [status.x + status.width / 2, status.y + status.height / 2]);
+    assert.equal(hit, 'recordButton', 'the readiness lines under the button are part of the button');
+    const color = () => page.locator('#capturePanel').evaluate(node => getComputedStyle(node).backgroundColor);
+    const idle = await color();
+    await page.mouse.move(status.x + status.width / 2, status.y + status.height / 2);
+    await page.waitForTimeout(200);
+    const hovered = await color();
+    assert.notEqual(hovered, idle, 'hover feedback on the record block');
+    assert.equal(await page.locator('#recordButton').evaluate(node => getComputedStyle(node).cursor), 'pointer');
+    await page.mouse.move(700, 500); await page.waitForTimeout(200);
+    assert.equal(await color(), idle);
+  });
   await pageCheck(page, '720×520 main window: full-height record block, the right column and the window buttons without overflow', async () => {
     await screen(page, 'home-720x520');
     await noHorizontalOverflow(page);
