@@ -845,8 +845,13 @@ def submit(folder, token, value):
         if len(json.dumps(result, ensure_ascii=False).encode('utf-8')) > MAX_RESULT:
             raise ValueError('展开证据后的结果超过 2 MB，请减少重复引用。')
         _write(folder, RESULT, result)
-        return dict(state='complete', revision=revision, events=len(result['events']),
-                    questions=len(result['questions']), ideas=len(result['ideas']), instances=len(result.get('instances', [])))
+    summary = dict(state='complete', revision=revision, events=len(result['events']),
+                   questions=len(result['questions']), ideas=len(result['ideas']), instances=len(result.get('instances', [])))
+    if result.get('instances'):
+        # 路径 3：提交写入后在锁外核对界面编号与画面上亮着的页签（每刻约 2 秒识别），只提醒不拦截。
+        from context_track import check_screens
+        summary['screen_check'] = check_screens(folder, result['instances'])
+    return summary
 
 
 def _activity_name_source(folder):
