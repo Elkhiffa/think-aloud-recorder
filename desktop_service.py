@@ -8,6 +8,7 @@ owns per-session processing and never writes foreground recording activity.
 from copy import deepcopy
 from pathlib import Path
 from app_paths import installation_root, vocabulary_dir
+import json
 import os
 import re
 import shutil
@@ -177,7 +178,9 @@ class DesktopService:
         with self._lock:
             self._main_activation_generation += 1
         if self._main_is_foreground():
-            self._request_readiness(invalidate=True)
+            # Coming back from the game re-checks quietly: the record block keeps the last completed check until
+            # this one ends, so returning to the window never flashes "cannot record".
+            self._request_readiness(invalidate=True, quiet=True)
         else:
             self._defer_readiness()
 
@@ -195,10 +198,19 @@ class DesktopService:
             if self._inventory_automatic:
                 self._invalidate_device_inventory()
             # Path 1: idle OBS checks pause while the main window is not in front (lock-time OBS crash, da48e73).
-            # The last verified result stays as it was, marked deferred; returning to the window checks again and
-            # Start always runs its own full check, so a deferred "ready" never starts a recording by itself.
-            self._readiness.update(checking=False, deferred=True)
+            # When that is why, the home page keeps the last completed check (a check cut short by the focus
+            # change does not replace it), unless the settings it checked have changed since. Any other
+            # cancellation (a device refresh, a newer check) still leaves no result. Returning to the window
+            # checks again and Start always runs its own full check, so a deferred "ready" never starts a recording.
+            settings, last = getattr(self, '_last_readiness', (None, None))
+            if last is not None and settings == self._settings_key() and not self._main_is_foreground():
+                self._readiness = dict(deepcopy(last), checking=False, deferred=True)
+            else:
+                self._readiness = dict(ready=False, checking=False, errors=[], checked_at=None, deferred=True)
             return deepcopy(self._readiness)
+
+    def _settings_key(self):
+        return json.dumps(self._cfg, sort_keys=True, ensure_ascii=False, default=str)
 
     def _run_automatic_readiness(self, *, invalidate=True, generation=None):
         if generation is None:
@@ -755,10 +767,15 @@ class DesktopService:
 
     def _visible_readiness(self):
         result = deepcopy(self._readiness)
+        quiet = result.pop('quiet', False)
         if result.pop('deferred', False) and not result['checking']:
             # The game is in front: show the last check as it was, not as expired.
             result['deferred'] = True
             return result
+        settings, last = getattr(self, '_last_readiness', (None, None))
+        if quiet and result['checking'] and last is not None and settings == self._settings_key():
+            # Back from the game, the re-check runs quietly; the block keeps the last completed check meanwhile.
+            return dict(deepcopy(last), checking=False)
         if result['ready'] and not self._readiness_is_fresh():
             result['ready'] = False
             result['checking'] = bool(self._readiness_thread and self._readiness_thread.is_alive())
@@ -766,8 +783,9 @@ class DesktopService:
                 message='录制条件检查结果已过期，请等待自动确认，或打开录制预设并重新检查录制条件。')]
         return result
 
-    def _mark_readiness_checking(self, invalidate):
+    def _mark_readiness_checking(self, invalidate, quiet=False):
         self._readiness.pop('deferred', None)
+        self._readiness['quiet'] = quiet
         if invalidate or not self._readiness_is_fresh():
             self._readiness.update(ready=False, checking=True)
         # A routine refresh keeps a fresh verified success usable. Its worker is
@@ -1046,9 +1064,11 @@ class DesktopService:
                 return self._defer_readiness()
             self._readiness = dict(ready=not errors, checking=False, errors=errors, checked_at=time.time(),
                                    window_selection=window_selection)
+            # The last completed check, for the settings it checked; shown while the game is in front.
+            self._last_readiness = (self._settings_key(), deepcopy(self._readiness))
             return deepcopy(self._readiness)
 
-    def _request_readiness(self, *, invalidate=False):
+    def _request_readiness(self, *, invalidate=False, quiet=False):
         if not self._main_is_foreground():
             return False
         with self._lock:
@@ -1057,9 +1077,9 @@ class DesktopService:
             if self._readiness_thread and self._readiness_thread.is_alive():
                 self._readiness_pending |= invalidate
                 if invalidate:
-                    self._mark_readiness_checking(True)
+                    self._mark_readiness_checking(True, quiet)
                 return False
-            self._mark_readiness_checking(invalidate)
+            self._mark_readiness_checking(invalidate, quiet)
             generation = self._main_activation_generation
             timer = recorder.StageTimer()
             def work():
@@ -1500,7 +1520,8 @@ class DesktopService:
         def work():
             try:
                 with self._lock:
-                    self._readiness.update(ready=False, checking=True)
+                    # A check the user asked for shows as checking, never quietly.
+                    self._readiness.update(ready=False, checking=True, quiet=False)
                 self._recover()
                 if self._active is not None:
                     self._update_readiness()

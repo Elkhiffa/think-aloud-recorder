@@ -537,13 +537,15 @@ test('pending requests and device refresh never advertise ready above a disabled
   assert.equal(f.elements.get('statusSlot').classList.contains('hidden'),true);
 });
 
-test('with the game in front, the last check stays and an unchecked state is not called unmet',async()=>{
-  // 触发路径：用户切到游戏窗口 → 记录器暂停空闲检查 → 主页仍显示上次的“已就绪”；还没检查过时写“切回这里时检查”，不说条件未满足。
+test('with the game in front, the record block keeps the last check and only the line changes',async()=>{
+  // 触发路径：用户切到游戏窗口 → 记录器暂停空闲检查 → 录制块保持上次检查的样子（就绪就仍可点），只有那一行写“切回这里时检查”。
   const f=await fixture(snapshot({readiness:{ready:true,checking:false,errors:[],deferred:true}}));
-  assert.match(f.elements.get('homeStatus').innerHTML,/^<span>已就绪<\/span>/);
+  assert.match(f.elements.get('homeStatus').innerHTML,/^<span>切回这里时检查录制条件<\/span>/);
   assert.equal(f.elements.get('recordButton').disabled,false);
+  assert.equal(f.elements.get('capturePanel').classList.contains('off'),false);
   f.data.snapshot.readiness={ready:false,checking:false,errors:[],deferred:true};await f.run('poll()');
   assert.equal(f.elements.get('homeStatus').textContent,'切回这里时检查录制条件');
+  assert.equal(f.elements.get('recordButton').disabled,true);
   assert.equal(f.elements.get('statusSlot').classList.contains('hidden'),true);
 });
 
