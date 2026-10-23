@@ -206,6 +206,8 @@ catalog-hotwords VAULT GAME --output FILE
 - `focus:{box,text?}`（有 `layout.focus`）：手柄操作时的金色焦点框（方、菱、圆，顶部居中有向下的小三角），box 是 960 宽画面上的 [x0,y0,x1,y1]，text 是框内的字。键鼠操作时没有焦点框，不报；没有小三角的金色边框（品质框）不算。`--compact` 不带 focus（手柄操作时它每几秒就变）。
 没报（缺字段或少了某一排）表示“未定”，不表示没有。`context-read` 完整输出带这些字段；`--compact` 每段带 `tabs`（亮着的页签文字）和 `headings`（主标题在前），同一标题下亮着的页签变了就分成新的一段，没报的帧不算变化。
 
+在一个资料库上启用：先 `runtime\python.exe -B -X utf8 scripts\apply_layout.py "<资料库>\燕云十六声"`（加 `--dry-run` 只检查），把 `docs/layouts/<游戏>.json` 写进界面目录，旧目录留在旁边；再用 `scripts\rebuild_context_tracks.py "<资料库>\燕云十六声"` 重建已有场次的轨道（两场并行，可中断后重跑，已按当前 layout 建好的跳过）。两步都要在带 OCR 模型的开发 runtime 里跑。
+
 目录有 `title_regions` 时改为两层模式，轨道 version 为 2：每 `--title-interval` 秒（默认 2，可选 1–10）只识别各标题区裁图，每 `--full-interval` 秒（默认 10，不小于标题间隔、不超过 60）在同一格点上做一次整屏识别。每帧带 `titles:[{region,text,x}]`（x 为裁图左边界的归一化坐标），只有整屏帧带 items；顶层另有 title_interval、full_interval 和所用 title_regions，interval 等于标题间隔。没有目录或目录没有 `title_regions` 时保持单层 version 1，只用 `--interval`；两种版本的轨道都可读取。
 
 同视频及同采样参数复用（两层模式还要求标题区坐标相同）；转写或记录者变化不会重跑 OCR。`--compact` 按标题前 10 字合并相邻帧，两层轨道优先按标题区文字合并，只有标题区且无字的帧略过；每段文字最多 120 字。`--output` 将生成和读取定位到外置工作目录，真实素材冒烟须使用该参数。`--rematch` 只重算 screens，保留帧。目录的 layout 改了而采样参数没变时，轨道有角点就只重新解码画面重算这些字段（不重跑 OCR，返回 `recomputed:true`）；旧轨道没有角点则整段重跑。
