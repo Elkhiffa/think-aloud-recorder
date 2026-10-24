@@ -421,7 +421,7 @@ async function homeChecks(context, origin) {
   await pageCheck(page, 'game tabs: the current game is marked, others switch through select_preset, ＋ opens a new game', async () => {
     assert.deepEqual(await page.locator('#gameTabs [data-game]').evaluateAll(nodes => nodes.map(n => [n.dataset.game, n.classList.contains('on'), n.getAttribute('aria-current')])), [['synthetic-one', true, 'page'], ['synthetic-two', false, null]]);
     assert.equal(await page.locator('#gameTabs .g.on').innerText(), snapshot().config.game);
-    assert.equal(await page.locator('#recordGame').innerText(), snapshot().config.game, 'the record block names the game it records');
+    assert.doesNotMatch(await page.locator('#recordButton').innerText(), new RegExp(snapshot().config.game), 'the game tab names the game; the record block does not repeat it');
     const order = await page.locator('#gameTabs [data-game]').evaluateAll(nodes => nodes.map(n => n.dataset.game));
     await clickGame(page, '[data-game="synthetic-two"]');
     await page.waitForFunction(() => document.querySelector('#gameTabs .g.on')?.dataset.game === 'synthetic-two');
@@ -1192,7 +1192,8 @@ async function deviceSetupChecks(context, origin) {
       assert.equal(await page.locator('#target').inputValue(), 'synthetic-other-window');
       assert.equal(await page.evaluate(() => store.draft.mic), 'synthetic-physical-mic');
       assert.equal(await page.evaluate(() => store.draft.source), '游戏窗口', 'a refresh never rewrites the chosen recording range');
-      assert.match(await page.locator('#deviceFeedback').innerText(), /已识别当前选择的游戏窗口和麦克风/);
+      assert.equal(await page.locator('#deviceFeedback').innerText(), '', 'found devices need no message');
+      assert.equal(await page.locator('#deviceBar').evaluate(n => n.classList.contains('quiet')), true);
       assert.equal(await page.evaluate(() => JSON.stringify(window.__syntheticFixture.snapshot.config)), original, 'setup changes only the draft');
       assert.equal((await calls(page, 'save_preset')).length, 0);
       assert.equal((await calls(page, 'refresh_devices')).length, 0, 'reading devices never restarts the recording engine');
@@ -1422,8 +1423,8 @@ async function deskChecks(context, origin) {
     assert.equal(await page.locator('#sessionDetail .d-meta').innerText(), '9月22日 周二 · 10:30–11:32 · 1:02:05');
     assert.deepEqual(await page.locator('#sessionDetail [data-dview]').allInnerTexts(), ['问题 3', '体验事件 2']);
     assert.deepEqual(await page.locator('#sessionDetail .fd-view>.fd-group .fd-gh').evaluateAll(n => n.map(x => x.querySelector('.fd-name').textContent + x.querySelector('small').textContent)), ['困惑1', '阻碍2', '其他2']);
-    assert.equal(await page.locator('#sessionDetail .d-sum .total').innerText(), '3 个问题', 'the four problem kinds only');
-    assert.deepEqual(await page.locator('#sessionDetail .d-sum .kleg span').allInnerTexts(), ['1 困惑', '2 阻碍']);
+    assert.equal(await page.locator('#sessionDetail .d-sum').count(), 0, 'the tabs and kind chips carry the distribution once');
+    assert.deepEqual(await page.locator('#sessionDetail .fd-chip').evaluateAll(n => n.map(x => x.dataset.filter)), ['confusion', 'obstacle', 'other'], 'kinds with nothing to show have no chip');
     assert.deepEqual(await page.locator('#sessionDetail .ln.ins').evaluateAll(n => n.map(x => [x.querySelector('.tx').textContent, x.querySelector('.ct').textContent])), [['目标明确仍有摩擦', '2']]);
     assert.equal(await page.locator('[data-act="handoff"]').count(), 0, 'organized sessions need no hand-off');
     await page.locator('#sessionDetail .fd-at[data-seek="30"]').click();

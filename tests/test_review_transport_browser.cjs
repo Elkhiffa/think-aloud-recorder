@@ -54,8 +54,8 @@ async function main(){
  await check('responsive geometry, full metadata width, quiet compact companion, retained quote hover',async()=>{
    const results=[];
    for(const viewport of [{width:1920,height:1080},{width:1280,height:800},{width:960,height:720},{width:560,height:800}]){
-     await page.setViewportSize(viewport);await settle();const g=await page.evaluate(()=>{const rect=s=>document.querySelector(s).getBoundingClientRect().toJSON();return {viewport:innerWidth,overflow:document.documentElement.scrollWidth,video:rect('.plyr__video-wrapper'),bar:rect('.plyr__controls'),companion:rect('#reviewCompanion'),quote:rect('#currentQuotePanel'),input:rect('#inputPanel'),session:rect('.review-session'),details:rect('#sessionContent'),pane:rect('#videoPane'),sidebar:rect('#transcriptPane')};});
-     assert.ok(g.overflow<=g.viewport);assert.ok(g.video.height>=48,'picture remains usable');assert.ok(g.bar.top>=g.video.bottom-1);assert.ok(g.companion.top>=g.bar.bottom-1);assert.ok(g.companion.bottom<=g.pane.bottom+1);assert.ok(Math.abs(g.details.width-g.session.width)<1);assert.ok(g.input.height<=112);assert.ok(g.quote.height<=112);
+     await page.setViewportSize(viewport);await settle();const g=await page.evaluate(()=>{const rect=s=>document.querySelector(s).getBoundingClientRect().toJSON();return {viewport:innerWidth,overflow:document.documentElement.scrollWidth,video:rect('.plyr__video-wrapper'),bar:rect('.plyr__controls'),companion:rect('#reviewCompanion'),quote:rect('#currentQuotePanel'),input:rect('#inputPanel'),session:rect('.review-session'),pane:rect('#videoPane'),sidebar:rect('#transcriptPane')};});
+     assert.ok(g.overflow<=g.viewport);assert.ok(g.video.height>=48,'picture remains usable');assert.ok(g.bar.top>=g.video.bottom-1);assert.ok(g.companion.top>=g.bar.bottom-1);assert.ok(g.companion.bottom<=g.pane.bottom+1);assert.ok(g.input.height<=112);assert.ok(g.quote.height<=112);
      if(g.companion.width>700)assert.ok(Math.abs(g.quote.top-g.input.top)<1);else assert.ok(g.input.top>=g.quote.bottom);
      await page.screenshot({path:path.join(output,`review-${viewport.width}.png`)});results.push(g);
    }

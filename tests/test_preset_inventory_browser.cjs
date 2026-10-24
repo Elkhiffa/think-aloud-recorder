@@ -101,7 +101,7 @@ async function main(){
     await check('unique live window match uses inventory evidence even with engine readiness blocked, and changes no saved choice',async()=>{
       await complete(page);
       assert.equal(await page.locator('#target').inputValue(),live);assert.match(await page.locator('#target option:checked').innerText(),/已匹配当前窗口/);
-      assert.match(await page.locator('#deviceFeedback').innerText(),/已识别当前选择的游戏窗口和麦克风/);assert.doesNotMatch(await page.locator('#deviceFeedback').innerText(),/打开游戏/);
+      assert.equal(await page.locator('#deviceFeedback').innerText(),'','a matched window needs no message');
       assert.equal(await page.locator('#refreshDevices').isEnabled(),true);assert.equal(await page.locator('#refreshDevices').innerText(),'刷新设备');
       assert.equal(await choices(page),original);assert.equal(await page.evaluate(()=>window.syntheticInventory.snapshot.config.window),saved);
       assert.equal(await page.locator('#recordButton').isDisabled(),true);assert.equal(await page.locator('#reconnectEngine').isVisible(),true);

@@ -83,6 +83,7 @@ test('wizard explains input capture boundary and does not enable it while select
   assert.equal(toggle.disabled,true);assert.equal(toggle.checked,false);
   assert.match(f.elements.get('inputRecordingHint').textContent,/“游戏窗口”.*操作记录/);
   source.value='游戏窗口';source.listeners.change();assert.equal(toggle.disabled,false);assert.equal(toggle.checked,false);
+  assert.equal(f.elements.get('inputRecordingHint').textContent,'','an available switch needs no explanation');
   assert.equal(f.calls.some(call=>call.name==='start_recording'),false);
 });
 

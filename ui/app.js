@@ -472,7 +472,7 @@ function renderInputRecording(locked=false){
  const d=store.draft,available=d?.source==='游戏窗口';
  $('#recordInputs').checked=!!d?.record_inputs;
  $('#recordInputs').disabled=locked||!available;
- setText('inputRecordingHint',available?'':'录制范围是“游戏窗口”时才能记录操作。');
+ setText('inputRecordingHint',available?'':'录制范围是“游戏窗口”时才能开启操作记录。');
 }
 $('#recordInputs').onchange=()=>{if(store.draft&&store.draft.source==='游戏窗口'){store.updateDraft('record_inputs',$('#recordInputs').checked);renderSummary();}};
 function engineRecovery(){
