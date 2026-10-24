@@ -388,6 +388,17 @@ async function homeChecks(context, origin) {
     assert.ok(status.y >= button.y + button.height - 1 && status.y + status.height <= tile.y + tile.height + 1, 'ready status sits under the record button, inside the block');
     return numbers;
   });
+  await pageCheck(page, 'transcription not ready yet: recording stays available and the block says it can be transcribed later', async () => {
+    // 用户 2026-10-24 定：没配好转写也能录，录完再补转写（模型或密钥缺失只是提示）。
+    const notice = '本地模型未就绪 · 录完可补转写';
+    try {
+      await patchSnapshot(page, { readiness: { ...snapshot().readiness, notices: [{ code: 'LOCAL_MODEL_MISSING', message: notice }] } });
+      await pollNow(page);
+      assert.equal(await page.locator('#recordButton').isEnabled(), true);
+      assert.deepEqual(await page.locator('#homeStatus span').allInnerTexts(), ['已就绪', '游戏窗口 · 示例游戏窗口（合成测试）', '麦克风', notice]);
+      await screen(page, 'home-transcription-not-ready-720x520');
+    } finally { await patchSnapshot(page, { readiness: snapshot().readiness }); await pollNow(page); }
+  });
   await pageCheck(page, 'game tabs: the current game is marked, others switch through select_preset, ＋ opens a new game', async () => {
     assert.deepEqual(await page.locator('#gameTabs [data-game]').evaluateAll(nodes => nodes.map(n => [n.dataset.game, n.classList.contains('on'), n.getAttribute('aria-current')])), [['synthetic-one', true, 'page'], ['synthetic-two', false, null]]);
     assert.equal(await page.locator('#gameTabs .g.on').innerText(), snapshot().config.game);

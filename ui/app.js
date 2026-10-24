@@ -101,7 +101,7 @@ $('#updateCheck').onclick=()=>updateAction('check');$('#updateDownload').onclick
 function render(){renderHome();renderGames();renderLast();renderInsight();if(store.draft){completeDeviceSetup();renderDeviceOptions();renderResources();renderVaultChoice();renderVocabulary();}renderControls();const a=store.activity;const signature=JSON.stringify([a.kind,a.status,a.detail]);if(signature!==lastActivitySignature){lastActivitySignature=signature;if(sheetOpen()&&a.status==='操作未完成'&&a.detail)wizardError(a.detail);else if(!sheetOpen()&&store.readiness.ready&&a.status==='操作未完成'&&a.detail)notify('上次操作未完成：'+a.detail);if(sheetOpen()&&actionContext==='verify'&&a.kind==='idle'&&a.detail)setText('cloudFeedback',a.detail);}
  if(!firstSetupHandled&&store.snapshot){firstSetupHandled=true;if(!store.presets.length&&!store.recording)openSheet('first');}}
 // What the ready record block lists under 已就绪: the target and the microphone (with input capture when on).
-function readyLines(){const c=store.saved;return [c.source==='整个显示器'?'整个显示器 · '+deviceLabel('monitor',c.monitor):'游戏窗口 · '+deviceLabel('window',c.window),'麦克风'+(c.record_inputs?' · 操作记录':'')];}
+function readyLines(){const c=store.saved;const notices=(store.readiness?.notices||[]).map(n=>n.message).filter(Boolean);return [c.source==='整个显示器'?'整个显示器 · '+deviceLabel('monitor',c.monitor):'游戏窗口 · '+deviceLabel('window',c.window),'麦克风'+(c.record_inputs?' · 操作记录':''),...notices];}
 function liveSummary(){const c=store.saved;return [c.source==='整个显示器'?'录整个显示器':'只录游戏窗口',String(c.preset||'').split(' ').pop(),c.record_inputs?'操作记录中':'',providerNames[c.transcription_provider]||''].filter(Boolean).join('　');}
 function renderHome(){
  const a=store.activity,r=store.readiness,recording=store.recording;

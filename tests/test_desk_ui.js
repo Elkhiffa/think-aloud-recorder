@@ -20,6 +20,7 @@ function fakeDOM() {
     querySelectorAll(){return [];}
     querySelector(){return null;}
     focus(){document.activeElement=this;}
+    select(){}
     showModal(){this.open=true;}
     close(){this.open=false;}
     replaceChildren(){this.children=[];}
@@ -43,7 +44,7 @@ function findTag(el,attr,value){
     const attrs=match[2],hit=new RegExp(`(?:^|\\s)${attr}(?:="([^"]*)")?(?=[\\s>/]|$)`).exec(attrs);
     if(!hit||value!==undefined&&decode(hit[1]??'')!==value)continue;
     const dataset={};for(const data of attrs.matchAll(/(?:^|\s)data-([\w-]+)(?:="([^"]*)")?/g))dataset[data[1].replace(/-(\w)/g,(_,c)=>c.toUpperCase())]=decode(data[2]??'');
-    return {dataset,attrs,disabled:/(?:^|\s)disabled(?=[\s>/]|$)/.test(attrs)};
+    return {dataset,attrs,disabled:/(?:^|\s)disabled(?=[\s>/]|$)/.test(attrs),closest:()=>null};
   }
   return null;
 }
@@ -86,9 +87,10 @@ test('playable processing session allows review and naming but keeps reprocessin
   for(const name of FREE)assert.equal(f.act(name).disabled,false,`${name} stays available while transcribing`);
   await click(f.el('sessionDetail'),'data-act','review');
   assert.deepEqual(plain(f.calls.filter(c=>c.name==='review_session').map(c=>c.args)),[['pending-text']]);
-  click(f.el('sessionDetail'),'data-act','rename');assert.equal(f.el('deskDialog').open,true);
+  // Since the redesign the name is edited in place in the detail title; Enter saves.
+  click(f.el('sessionDetail'),'data-act','rename');
   assert.equal(f.el('renameInput').value,'Door <attempt>');f.el('renameInput').value=' Door 2 ';
-  await f.el('deskDialogFoot').children.find(button=>button.textContent==='保存').onclick();
+  f.el('renameInput').onkeydown({key:'Enter',preventDefault(){}});await settle();
   assert.deepEqual(plain(f.calls.filter(c=>c.name==='rename_session').map(c=>c.args)),[['pending-text','Door 2']]);
   await f.select('no-video');
   assert.equal(f.act('review').disabled,true);assert.equal(f.act('process').disabled,true);
@@ -102,7 +104,7 @@ test('external preprocessing badges never change recording state or disable revi
     game:'原始名称',state:'可回看',can_review:true,preprocessing:{state,...(state==='none'?{}:{label:'外部 <整理>',reason:'保留原始素材'})}}));
   const f=await fixture({sessions});
   for(const s of sessions)f.data.details[s.id]={...emptyDetail(s.id),state:s.preprocessing.state,label:s.preprocessing.label||''};
-  const titles=[...f.el('sessionScroll').innerHTML.matchAll(/<h4>(.*?)<\/h4>/g)].map(match=>match[1]);
+  const titles=[...f.el('sessionScroll').innerHTML.matchAll(/<span class="nm[^"]*" title="[^"]*">(.*?)<\/span>/g)].map(match=>match[1]);
   assert.equal(titles.length,5);assert.equal(new Set(titles).size,1,'the external label never replaces the session title');
   assert.doesNotMatch(f.el('sessionScroll').innerHTML,/外部|<整理>/);
   for(const s of sessions){
@@ -119,19 +121,20 @@ test('an unfinished external preprocessing run reads 整理未完成, never 转�
   const sessions=['failed','stale','complete'].map(state=>({id:'pre-'+state,game:'Game',state:'可回看',can_review:true,preprocessing:{state}}));
   const f=await fixture({sessions});
   const rows=f.el('sessionScroll').innerHTML,row=id=>rows.slice(rows.indexOf(`data-session="${id}"`)).split('data-session=')[1];
-  for(const id of ['pre-failed','pre-stale']){assert.match(row(id),/<span class="st">整理未完成<\/span>/);assert.doesNotMatch(row(id),/转写失败|待整理/);}
-  assert.doesNotMatch(row('pre-complete'),/<span class="st">/,'a finished session carries no status badge');
+  for(const id of ['pre-failed','pre-stale']){assert.match(row(id),/<span class="c-st[^"]*">整理未完成<\/span>/);assert.doesNotMatch(row(id),/转写失败|待整理/);}
+  assert.doesNotMatch(row('pre-complete'),/<span class="c-st[^"]*">[^<]+<\/span>/,'a finished session carries no status text');
 });
 
 test('session dates use local minute precision and never leak raw or invalid values',async()=>{
   const timestamp='2026-09-20T17:26:53.973896+08:00',local=new Date(timestamp),pad=n=>String(n).padStart(2,'0');
   const f=await fixture({sessions:[{id:'dated',game:'Dated session',created:timestamp,duration:3725,state:'待整理'},{id:'undated',game:'Undated',created:'未记录时间',duration:10,state:'待整理'}]});
   const list=f.el('sessionScroll').innerHTML,detail=f.el('sessionDetail').innerHTML,week='日一二三四五六'[local.getDay()],hm=`${pad(local.getHours())}:${pad(local.getMinutes())}`;
-  assert.ok(list.includes(`<div class="d">${local.getDate()}</div>`));assert.ok(list.includes(`周${week}`));assert.ok(list.includes(`${hm} · 1:02:05`));
-  assert.ok(detail.includes(`${local.getFullYear()} 年 ${local.getMonth()+1} 月 ${local.getDate()} 日 周${week} · ${hm} 开始 · 时长 1:02:05`));
+  assert.ok(list.includes(`<span class="day">${pad(local.getMonth()+1)}/${pad(local.getDate())}</span>`));assert.ok(list.includes(`<span class="c-start">${hm}</span><span class="dur">1:02:05</span>`));
+  const end=new Date(local.getTime()+3725000);
+  assert.ok(detail.includes(`${local.getMonth()+1}月${local.getDate()}日 周${week} · ${hm}–${pad(end.getHours())}:${pad(end.getMinutes())} · 1:02:05`));
   for(const html of [list,detail]){assert.ok(!html.includes(timestamp));assert.ok(!html.includes(`${hm}:${pad(local.getSeconds())}`));}
   await f.select('undated');
-  assert.doesNotMatch(f.el('sessionDetail').innerHTML,/NaN|Invalid Date|undefined/);assert.match(f.el('sessionDetail').innerHTML,/时长 0:00:10/);
+  assert.doesNotMatch(f.el('sessionDetail').innerHTML,/NaN|Invalid Date|undefined/);assert.match(f.el('sessionDetail').innerHTML,/0:00:10/);
   assert.doesNotMatch(f.el('sessionScroll').innerHTML,/NaN|Invalid Date|undefined/,'an undated session must not produce a garbage month header');
 });
 
@@ -169,6 +172,6 @@ test('background progress and failures stay on their session',async()=>{
   assert.match(f.el('sessionDetail').innerHTML,/Cloud &lt;failure&gt;/);assert.doesNotMatch(f.el('sessionDetail').innerHTML,/Waiting for cloud/);
   assert.equal(f.act('process').disabled,false,'a failed session can be retried');
   const rows=f.el('sessionScroll').innerHTML;
-  assert.match(rows,/data-session="a"[\s\S]*?<span class="st">转写失败<\/span>/);
+  assert.match(rows,/data-session="a"[\s\S]*?<span class="c-st[^"]*">转写失败<\/span>/);
   assert.doesNotMatch(rows.slice(rows.indexOf('data-session="b"')),/失败/);
 });

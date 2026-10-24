@@ -207,6 +207,9 @@ def review_payload(folder, meta, segments, *, desktop=False):
             (meta.get('transcription_state') is None and meta.get('state') == '可回看')):
         transcription_state='failed'
         transcription_error='已完成的逐字稿文件缺失，请恢复文件或重新转写；录像仍可回看。'
+    if transcription_state == 'pending' and meta.get('state') == '待整理' and not meta.get('background_processing'):
+        # 路径 1（QA F1）：仅录制或转写未就绪时录的场次，停在“待整理”、没有排队：不是“转写中”。
+        transcription_state = 'not_started'
     from speaker_roles import speaker_payload
     from agent_protocol import preprocessing_status
     narration = None

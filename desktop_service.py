@@ -986,6 +986,7 @@ class DesktopService:
             blocked = self._active is not None or self._obs_uncertain or bool(self._uncertain_ids)
             self._mark_readiness_checking(invalidate or blocked)
         errors = []
+        notices = []  # Shown under 已就绪; never block recording.
         window_selection = None
         def error(code, message, step):
             errors.append(dict(code=code, message=self._safe_text(message), step=step))
@@ -1045,12 +1046,15 @@ class DesktopService:
                 self._mark('input_capture')
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
+            # 路径 1：用户 2026-10-24 定：没配好转写也能录制（至少留下带操作记录的回看），录完再补转写。
+            # 模型或密钥缺失只是提示，不拦录制；录完的场次停在“待整理”。
             if provider == 'local' and not self._model.resolve_model():
-                error('LOCAL_MODEL_MISSING', '已选本地转写，但模型缺失、已移动或校验失效；请导入 / 下载模型，或改用 Qwen 转写。', 2)
+                notices.append(dict(code='LOCAL_MODEL_MISSING', message='本地模型未就绪 · 录完可补转写'))
             elif provider == 'qwen' and not self._has_key():
                 exists = (self.root / 'state/secrets/dashscope-beijing.dpapi').exists()
-                error('CLOUD_KEY_UNREADABLE' if exists else 'CLOUD_KEY_MISSING',
-                      '本机保存的云端密钥无法读取或解密，请重新填写密钥。' if exists else '已选云端转写，但尚未保存本机 API Key。', 2)
+                notices.append(dict(code='CLOUD_KEY_UNREADABLE' if exists else 'CLOUD_KEY_MISSING',
+                                    message='API Key 无法读取 · 录完可补转写' if exists
+                                    else 'API Key 未保存 · 录完可补转写'))
             elif provider not in ('later', 'local', 'qwen'):
                 error('TRANSCRIPTION_INVALID', '请选择有效转写方式并保存设置。', 2)
             self._mark('transcription')
@@ -1074,7 +1078,7 @@ class DesktopService:
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
             self._readiness = dict(ready=not errors, checking=False, errors=errors, checked_at=time.time(),
-                                   window_selection=window_selection)
+                                   window_selection=window_selection, notices=notices)
             # The last completed check, for the settings it checked; shown while the game is in front.
             self._last_readiness = (self._settings_key(), deepcopy(self._readiness))
             return deepcopy(self._readiness)
@@ -1817,7 +1821,13 @@ class DesktopService:
                 self._progress('录像已保存。可选择转写方式后再整理。', status='待整理')
                 return
             session.update(state='待整理')
-            self._require_transcription(cfg)
+            try:
+                self._require_transcription(cfg)
+            except RuntimeError as error:
+                # 转写还没准备好（没模型或没密钥）：录像照常保存，等准备好后在场次里开始转写。
+                self._progress('录像已保存。转写还没准备好：' + str(error).split('。')[0] + '；准备好后在场次里开始转写。',
+                               status='待整理')
+                return
             self._enqueue_processing(session, cfg)
             self._progress('录像已保存，已加入后台整理队列。可以开始下一段录制。', status='待开始')
         with self._lock:

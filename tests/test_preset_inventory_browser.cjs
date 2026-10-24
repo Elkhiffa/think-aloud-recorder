@@ -74,7 +74,7 @@ async function choices(page){return page.evaluate(()=>JSON.stringify([store.draf
 async function calls(page,name){return page.evaluate(name=>window.syntheticInventory.calls.filter(c=>c.method===name),name);}
 async function screenshot(page,name){await page.screenshot({path:path.join(output,name+'.png')});report.screenshots.push(name+'.png');}
 const sheetOpen=page=>page.locator('#sheet').isVisible();
-async function toGeneralStep(page){await page.locator('#sheet').waitFor({state:'visible'});assert.equal(await page.locator('#sheetTitle').innerText(),'开始使用');await page.locator('#wizardNext').click();assert.equal(await page.locator('#panelGeneral').isVisible(),true);}
+async function toGeneralStep(page){await page.locator('#sheet').waitFor({state:'visible'});assert.equal(await page.locator('#sheetTitle').innerText(),'开始使用');await page.locator('#wizardNext').click();assert.equal(await page.locator('#panelPrepare').isVisible(),true);await page.locator('#wizardNext').click();assert.equal(await page.locator('#panelGeneral').isVisible(),true);}
 async function check(name,fn){try{await fn();report.checks.push({name,pass:true});}catch(error){report.checks.push({name,pass:false,error:error.stack});console.error(name+'\n'+error.stack);}}
 
 async function main(){
