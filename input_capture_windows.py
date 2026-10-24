@@ -531,7 +531,6 @@ class WindowsInputSource:
         self._buttons = ButtonStateReconciler()
         self._button_probe = None
         self._button_sample_at = 0.
-        self._button_access = None
         self._raised = False  # the window in front withholds keyboard/mouse input from this process
 
     def start(self, callback):
@@ -593,7 +592,9 @@ class WindowsInputSource:
         if not self.capture_all and not self._foreground():
             self._focus()
             return
-        self._resume_keyboard()
+        # 路径 1/5：启动或回到游戏时，Windows 可能遗留 F4 的按住状态。
+        # Only Raw Input starts keyboard/mouse presses; a state snapshot cannot
+        # establish that a press happened. Controller snapshots are independent.
         if self._controllers and (self.capture_all or self._foreground()):
             self._controllers.resume()
 
@@ -616,24 +617,6 @@ class WindowsInputSource:
         self._pending.append(dict(event, foreground=True))
         self._buttons.observe(event)
 
-    def _resume_keyboard(self):
-        # Resume only where physical state can be queried. In all-input mode
-        # this is independent of whether the target game is foreground.
-        if self._button_probe is not None and not self._button_probe.available():
-            return
-        for vk, code in KEY_NAMES.items():
-            if not self.capture_all and not self._foreground():
-                return
-            if self.user.GetAsyncKeyState(vk) & 0x8000:
-                self._emit({'type': 'button', 'device': 'keyboard', 'code': code,
-                               'down': True, 'timestamp': self.clock(), 'foreground': True, 'resumed': True})
-        for vk, code in MOUSE_KEYS.items():
-            if not self.capture_all and not self._foreground():
-                return
-            if self.user.GetAsyncKeyState(vk) & 0x8000:
-                self._emit({'type': 'button', 'device': 'mouse', 'code': code,
-                               'down': True, 'timestamp': self.clock(), 'foreground': True, 'resumed': True})
-
     def _reconcile_buttons(self, queue_drained=True):
         now = self.clock()
         # A queued release owns its original timestamp. Never let polling get
@@ -648,9 +631,8 @@ class WindowsInputSource:
             self._raised = raised
             self._pending.append({'type': 'blocked', 'timestamp': now, 'blocked': raised})
         available = self._button_probe.available()
-        if available and self._button_access is False:
-            self._resume_keyboard()
-        self._button_access = available
+        # 路径 5：恢复访问权限也不能把遗留系统状态补成新的按下。
+        # Poll only presses already observed through Raw Input to bound missed ups.
         read = (lambda vk: bool(self.user.GetAsyncKeyState(vk) & 0x8000)) if available else (lambda vk: None)
         for event in self._buttons.sample(now, read):
             self._emit(event)
@@ -699,7 +681,7 @@ class WindowsInputSource:
         for event in ready:
             if event['type'] == 'focus' and event.get('foreground'):
                 # A missed focus notification may recover after the polling
-                # gate already resumed. Re-sample held controls after the new
+                # gate already resumed. Re-sample controller state after the new
                 # validated boundary instead of losing an entire long hold.
                 self._resume_due = self.clock() + .064
             if event['type'] in ('focus', 'connect', 'disconnect', 'coverage_gap', 'blocked') or self._observer.ledger.authorized(event['timestamp']):
