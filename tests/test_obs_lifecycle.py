@@ -61,6 +61,13 @@ class ObsLifecycleTests(unittest.TestCase):
         self.req.side_effect = None
         return recorder._owned_obs[self.root]
 
+    def test_bundled_obs_starts_without_its_own_updater(self):
+        # 路径 1：家里每次启动都弹 OBS 更新提示；点了更新会改写随包的 tools/obs，和安装清单对不上。
+        self.launch()
+        args = self.popen.call_args.args[0]
+        self.assertIn('--disable-updater', args)
+        self.assertIn('--portable', args)
+
     def test_cancelled_first_connection_never_launches_obs_after_failure(self):
         allowed = {'value': True}
         def connect(**kwargs):

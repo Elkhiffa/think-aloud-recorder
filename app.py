@@ -23,15 +23,24 @@ class DesktopAPI:
 
 
 @contextmanager
-def instance_lock(root):
-    """A second window must never race the first window's OBS ownership."""
+def instance_lock(root, wait=10):
+    """A second window must never race the first window's OBS ownership.
+
+    A window closed a moment ago still holds the lock while it stops OBS and background work, so a reopen waits up
+    to `wait` seconds for it before reporting that the recorder is already running."""
     import msvcrt
+    import time
     with (root / 'app.lock').open('a+b') as handle:
-        handle.seek(0)
-        try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError as error:
-            raise RuntimeError('记录器已经运行，请打开任务栏中的窗口。') from error
+        deadline = time.monotonic() + wait
+        while True:
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                break
+            except OSError as error:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('记录器已经运行，请打开任务栏中的窗口。') from error
+                time.sleep(.25)
         try:
             yield
         finally:

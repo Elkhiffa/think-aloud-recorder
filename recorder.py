@@ -229,7 +229,8 @@ def _connect_obs(launch,progress,*,continue_if=None):
             progress('正在启动录制引擎，请稍候…')
             exe=ROOT/'tools/obs/bin/64bit/obs64.exe'
             _check_obs_continuation(continue_if)
-            process=subprocess.Popen([str(exe),'--portable','--multi','--profile','Experience','--collection','Experience','--minimize-to-tray','--disable-shutdown-check'],cwd=exe.parent,creationflags=HIDDEN)
+            # The bundled OBS must never update itself: its files are part of the package manifest.
+            process=subprocess.Popen([str(exe),'--portable','--multi','--profile','Experience','--collection','Experience','--minimize-to-tray','--disable-shutdown-check','--disable-updater'],cwd=exe.parent,creationflags=HIDDEN)
             try:
                 owned=dict(process=process,exe=exe.resolve(),port=c['port'],password=c['password'],
                            created=psutil.Process(process.pid).create_time(),parent_pid=os.getpid())

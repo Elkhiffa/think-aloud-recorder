@@ -8,7 +8,7 @@ A think-aloud recorder for game UX research on Windows: record gameplay with you
 
 English | [简体中文](https://github.com/Elkhiffa/think-aloud-recorder/blob/main/README.zh-CN.md)
 
-[Download](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [Install the analysis skills](docs/agent-integration.md#skill-安装与更新) · [Changes in 0.10.0](docs/changes-2026-10-24.md)
+[Download](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [Install the analysis skills](docs/agent-integration.md#skill-安装与更新) · [Changes in 0.10.1](docs/changes-2026-10-24.md)
 
 </div>
 
