@@ -82,6 +82,13 @@ def project(folder, result, digest):
 
 def save(folder, request):
     import agent_protocol as p
+    status = _save(folder, request)
+    p.refresh_standalone(folder)
+    return status
+
+
+def _save(folder, request):
+    import agent_protocol as p
     from session_metadata import metadata_lock
     if not isinstance(request, dict):
         raise ValueError('事件修改格式无效。')

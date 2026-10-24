@@ -159,3 +159,10 @@ button:disabled{cursor:default;opacity:.5}
 
 
 *{scrollbar-width:thin;scrollbar-color:var(--rule) transparent}
+
+/* 详情里的整理结果：与回看相同的「问题 / 体验事件」两个视图（ui/findings.css），页签同标题栏的下划线页签 */
+.d-tabs{display:flex;gap:var(--s5);margin-top:var(--s5);border-bottom:1px solid var(--rule)}
+.d-tabs button{border:0;background:none;padding:var(--s2) 0;margin-bottom:-1px;border-bottom:2px solid transparent;color:var(--muted);font-size:var(--t2)}
+.d-tabs button:hover{color:var(--ink)}
+.d-tabs button.on{color:var(--ink);font-weight:700;border-bottom-color:var(--ink)}
+.d-findings{margin-bottom:var(--s5)}

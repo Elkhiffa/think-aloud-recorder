@@ -266,3 +266,7 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible,.p
 .menu button{height:32px;border-radius:var(--r-sm)}
 .menu button:hover:not([disabled]),.menu button:focus-visible{background:var(--fill)}
 @media (max-width:900px){.left-col{border:0}.right-col{min-height:0}}
+
+/* 吸底的“下一个”按原来的行画：同样的层级底色、字号和缩进，只是不吸顶 */
+.next-bar .row,.next-bar .lib-toggle{position:static}
+.next-bar .pin.nested{padding-left:var(--s3)}

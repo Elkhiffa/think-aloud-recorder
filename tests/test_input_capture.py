@@ -477,19 +477,23 @@ class JournalAndFocusRegressionTests(unittest.TestCase):
             thread.join(2)
             self.assertFalse(thread.is_alive())
 
-    def test_resuming_samples_recheck_actual_focus_before_emitting(self):
+    def test_resuming_controllers_rechecks_actual_focus_before_emitting(self):
+        """触发路径：用户 → 回到游戏后马上切走 → 恢复手柄采集 → 不能把后台状态当作前台输入。"""
         from input_capture_windows import WindowsInputSource, TargetWindow
         from types import SimpleNamespace
         from unittest.mock import Mock
         source = WindowsInputSource(TargetWindow(0, 0, 0, 'test'), 'unused', self.clock)
         source._eligible = True
         source._eligible_since = 99
-        source._foreground = Mock(side_effect=[True, False, False])
+        source._foreground = Mock(side_effect=[True, False])
+        source._resume_due = self.clock()
+        source._controllers = SimpleNamespace(resume=Mock())
         source.user = SimpleNamespace(GetAsyncKeyState=Mock(return_value=0x8000))
         source.callback = Mock()
-        source._resume_keyboard()
+        source._resume_if_stable()
         self.assertEqual(source._pending, [])
-        self.assertEqual(source.user.GetAsyncKeyState.call_count, 1)
+        source.user.GetAsyncKeyState.assert_not_called()
+        source._controllers.resume.assert_not_called()
         source.callback.assert_not_called()
 
     def test_away_and_back_while_capture_blocked_does_not_authorize_queued_input(self):

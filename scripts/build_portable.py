@@ -146,7 +146,7 @@ def collect_files(root):
             if file.is_symlink() or not file.resolve().is_relative_to(installation_root(root)):
                 raise ValueError('Symlink/path escape in package input: ' + file.relative_to(root).as_posix())
             entries[target + '/' + file.relative_to(base).as_posix()] = file
-    for required in ('ui/index.html', 'ui/review.js', 'ui/review.css', 'ui/visual-nodes.html',
+    for required in ('ui/index.html', 'ui/review.js', 'ui/review.css', 'ui/findings.js', 'ui/findings.css', 'ui/visual-nodes.html',
                      'ui/vendor/plyr/plyr.min.js', 'ui/vendor/plyr/plyr.css', 'ui/vendor/plyr/plyr.svg',
                      'licenses/Plyr-MIT.txt', 'runtime/python.exe', 'runtime/pythonw.exe',
                      'runtime/python312._pth', 'tools/obs/bin/64bit/obs64.exe',

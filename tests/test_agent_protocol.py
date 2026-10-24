@@ -504,6 +504,30 @@ class AgentProtocolTests(unittest.TestCase):
                     worker='synthetic-classifier', title='进城探索与角色培养',
                     activities=[dict(name=name, event_ids=['e1']) for name in ('任务', '探索', '养成', '战斗')])
 
+    def test_review_and_desk_get_activities_only_for_the_result_they_name(self):
+        """触发路径：用户打开回看或资料库详情 → 体验事件按活动打标签；活动命名属于旧结果时不能挂到新结果的事件上。"""
+        self.complete()
+        self.assertEqual(agent.preprocessing_status(self.folder,include_result=True)['activities'],[])
+        candidate=self.activity_candidate()
+        agent.name_activities(self.folder,candidate,apply=True)
+        self.assertEqual(agent.preprocessing_status(self.folder,include_result=True)['activities'],candidate['activities'])
+        self.assertNotIn('activities',agent.preprocessing_status(self.folder))
+        meta=recorder.read(self.folder/'session.json');meta['activity_naming']['result_sha256']='0'*64
+        recorder.write(self.folder/'session.json',meta)
+        self.assertEqual(agent.preprocessing_status(self.folder,include_result=True)['activities'],[])
+
+    def test_submitted_result_and_calibration_reach_the_offline_page(self):
+        """触发路径：agent 提交整理结果、用户在回看里校准事件 → 双击场次里的“独立回看.html”离线查看，应看到最新结果。"""
+        from event_edits import save
+        job=agent.claim(self.folder,'synthetic-worker')
+        summary=agent.submit(self.folder,job['token'],self.candidate())
+        self.assertEqual(summary['standalone_page'],'updated')
+        page=(self.folder/'独立回看.html').read_text(encoding='utf-8')
+        self.assertIn('"state": "complete"',page)
+        request=self.edit_request();request['fields']['title']='离线页上的校准标题'
+        save(self.folder,request)
+        self.assertIn('离线页上的校准标题',(self.folder/'独立回看.html').read_text(encoding='utf-8'))
+
     def test_activity_naming_preview_apply_replay_and_source_preservation(self):
         self.complete()
         protected = {p.name:p.read_bytes() for p in self.folder.iterdir() if p.is_file() and p.name!='.metadata.lock'}
@@ -519,8 +543,10 @@ class AgentProtocolTests(unittest.TestCase):
         self.assertEqual(meta['activity_naming']['activities'],candidate['activities'])
         self.assertEqual(meta['settings'],self.meta['settings'])
         self.assertEqual(agent.publish_ready(self.folder)['revision'],self.manifest['revision'])
+        # Path 3: only the metadata and the derived offline page change; sources, result and marker stay byte-identical.
         for name,raw in protected.items():
-            if name!='session.json':self.assertEqual((self.folder/name).read_bytes(),raw)
+            if name not in ('session.json','独立回看.html'):self.assertEqual((self.folder/name).read_bytes(),raw)
+        self.assertIn('进城探索与角色培养',(self.folder/'独立回看.html').read_text(encoding='utf-8'))
         committed=(self.folder/'session.json').read_bytes()
         self.assertTrue(agent.name_activities(self.folder,candidate,apply=True)['replayed'])
         self.assertEqual((self.folder/'session.json').read_bytes(),committed)

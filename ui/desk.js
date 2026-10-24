@@ -4,15 +4,13 @@
   const $=id=>document.getElementById(id);
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   // The four problem types; a session's 问题数 counts only these.
-  const KIND={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
-  const OTHER=['expectation','suggestion','positive','observation','self_correction'];
+  const Findings=globalThis.ThinkAloudFindings,KIND=Findings.PROBLEM;
   const WEEK='日一二三四五六';
   const STATES=[['all','全部'],['done','已整理'],['todo','待整理'],['running','转写中'],['failed','失败']];
-  const SHOWN=3;
-  const state={sessions:[],jobs:[],busy:false,game:'',filter:'all',kinds:new Set(),sort:'time',search:'',selected:null,detail:null,signature:'',open:new Set(),editing:false};
+  const state={sessions:[],jobs:[],busy:false,game:'',filter:'all',kinds:new Set(),sort:'time',search:'',selected:null,detail:null,signature:'',findings:{view:'problems'},editing:false};
   let api=null,toastTimer=null;
   const PLAY='<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg>';
-  const GO='<span class="go" aria-hidden="true">→</span>',CHEV='<svg class="chev" viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6z"/></svg>';
+  const GO='<span class="go" aria-hidden="true">→</span>';
   const PENCIL='<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.8 2.6a1.3 1.3 0 0 1 1.8 0l.8.8a1.3 1.3 0 0 1 0 1.8L6 12.6l-2.9.6.6-2.9z"/></svg>';
 
   // ---- window ----
@@ -49,7 +47,7 @@
     if(st==='failed')return '转写失败';
     if(st==='running')return jobFor(s)?.state==='queued'?'等待转写':'转写中';
     if(st==='checking')return '核对中';
-    if(st==='todo')return preFailed(s)?'整理未完成':/待转写/.test(String(s.state||''))?'待转写':'待整理';
+    if(st==='todo')return s.preprocessing?.state==='processing'?'整理中':preFailed(s)?'整理未完成':/待转写/.test(String(s.state||''))?'待转写':'待整理';
     return '';
   }
   function title(s){const named=s.session_name||(s.title&&s.title!==s.game?s.title:'');if(named)return {named:true,text:named};const titles=(s.preprocessing?.event_titles||[]).filter(Boolean);const d=new Date(s.created);return {named:false,text:titles.length?titles.join('、'):(Number.isNaN(d.getTime())?'未命名的记录':pad(d.getHours())+':'+pad(d.getMinutes())+' 开始的记录')};}
@@ -93,40 +91,43 @@
 
   // ---- detail ----
   async function select(id){
-    state.selected=id;state.open.clear();state.editing=false;renderList();const s=state.sessions.find(row=>row.id===id);if(!s)return;
+    state.selected=id;state.findings={view:'problems'};state.editing=false;renderList();const s=state.sessions.find(row=>row.id===id);if(!s)return;
     renderDetail(s,null);
     try{const detail=await call('session_detail',id);if(state.selected===id){state.detail=detail;renderDetail(s,detail);}}
     catch(error){if(state.selected===id)$('sessionDetail').insertAdjacentHTML('beforeend',`<p class="d-note">${escape(error.message)}</p>`);}
   }
-  const quoteLine=(k,q)=>`<li><button class="ln k-${k}" data-at="${q.at}" title="在回看中打开这一刻"><span class="at">${short(q.at)}</span><span class="tx">${escape(q.text)}</span>${GO}</button></li>`;
   function renderDetail(s,detail){
     const d=new Date(s.created),valid=!Number.isNaN(d.getTime()),t=title(s),job=jobFor(s);
     const locked=state.busy||!!job,done=status(s)==='done';
     const end=valid?new Date(d.getTime()+(Number(s.duration)||0)*1000):null;
-    const meta=[valid?`${d.getMonth()+1}月${d.getDate()}日 周${WEEK[d.getDay()]}`:'',valid?`${pad(d.getHours())}:${pad(d.getMinutes())}–${pad(end.getHours())}:${pad(end.getMinutes())}`:'',clock(s.duration),detail?.events?.length?`${detail.events.length} 个体验事件`:''].filter(Boolean).join(' · ');
+    const meta=[valid?`${d.getMonth()+1}月${d.getDate()}日 周${WEEK[d.getDay()]}`:'',valid?`${pad(d.getHours())}:${pad(d.getMinutes())}–${pad(end.getHours())}:${pad(end.getMinutes())}`:'',clock(s.duration)].filter(Boolean).join(' · ');
     const actions=`<div class="d-acts"><button class="btn solid" data-act="review"${s.can_review===false?' disabled':''}>${PLAY}回看</button>${done?'':`<button class="btn sm" data-act="handoff">复制整理指令</button>`}`
       +`<button class="btn sm" data-act="copy" id="copyPath">复制资料库路径</button>`
       +`<span class="pop"><button class="btn sm" data-act="more" aria-haspopup="true" aria-expanded="false">更多</button><span class="pop-menu right hidden" id="moreMenu"><button data-act="folder">打开资料文件夹</button><button data-act="process"${locked?' disabled':''}>重新整理</button><button data-act="export"${locked?' disabled':''}>导出</button><button data-act="raw">原始录像</button><button data-act="recover"${locked?' disabled':''}>恢复云端任务</button></span></span></div>`;
     let body='';
     if(!detail)body='<p class="d-note">正在读取这一场的整理结果…</p>';
-    else if(detail.state!=='complete')body=`<p class="d-note">${escape(detail.label||'这一场还没有整理结果。')} 复制整理指令，粘贴给 Codex 或 Claude 整理后，原话和问题分布会出现在这里。</p>`;
+    else if(detail.state!=='complete'||!detail.result)body=`<p class="d-note">${escape(detail.label||'这一场还没有整理结果。')} 复制整理指令，粘贴给 Codex 或 Claude 整理后，原话和问题分布会出现在这里。</p>`;
     else{
-      const kinds=detail.kinds||{},total=Object.keys(KIND).reduce((n,k)=>n+(kinds[k]||0),0),other=OTHER.reduce((n,k)=>n+(kinds[k]||0),0);
+      const kinds=detail.kinds||{},total=Object.keys(KIND).reduce((n,k)=>n+(kinds[k]||0),0),version2=Findings.isVersion2(detail.result);
       const legend=Object.entries(KIND).filter(([k])=>kinds[k]).map(([k,label])=>`<span class="k-${k}"><b>${kinds[k]}</b> ${label}</span>`).join('');
-      const groups=Object.entries(KIND).map(([k,label])=>{const rows=detail.quotes[k]||[];if(!rows.length)return '';const fit=rows.filter(q=>q.text.length>=6&&q.text.length<=40);
-        const more=rows.length>SHOWN,open=more&&state.open.has(k),list=open?rows:(fit.length?fit:rows).slice(0,SHOWN);
-        const head=`<span class="name">${label}</span><small>${rows.length}</small><span class="sp"></span>${more?CHEV:''}`;
-        return `<section class="kq k-${k}">${more?`<button class="gh" data-fold="${k}" aria-expanded="${open}" title="${open?'收起，只看前 3 条':'展开全部 '+rows.length+' 条'}">${head}</button>`:`<div class="gh">${head}</div>`}<ul class="lns">${list.map(q=>quoteLine(k,q)).join('')}</ul></section>`;}).join('');
+      if(!version2)state.findings.view='events';
+      // The same two views as review (ui/findings.js); a click opens review on the matching tab.
+      const view=state.findings.view,tab=(name,label)=>`<button type="button" role="tab" data-dview="${name}" aria-selected="${view===name}" class="${view===name?'on':''}">${label}</button>`;
+      const tabs=`<div class="d-tabs" role="tablist" aria-label="整理结果">${version2?tab('problems',`问题 ${total}`):''}${tab('events',`体验事件 ${detail.result.events.length}`)}</div>`;
       const ins=detail.insights.length?`<ul class="lns">${detail.insights.slice(0,8).map(i=>`<li><button class="ln ins" data-issue="${escape(i.id)}" title="在洞察里查看"><span class="tx">${escape(i.title)}</span><span class="ct">${i.count}</span>${GO}</button></li>`).join('')}</ul>`:'<p class="note">这一场的证据还没有挂到洞察下。</p>';
-      const evs=detail.events.map(e=>`<li><button class="ln" data-at="${e.start}" title="在回看中打开这段活动"><span class="at">${short(e.start)}</span><span class="tx">${escape(e.title)}</span>${GO}</button></li>`).join('');
-      body=`<div class="d-sum">${bar(kinds,true)}<div class="d-sum-row"><span class="total"><b>${total}</b> 个问题</span><span class="kleg">${legend}</span></div>${other?`<p class="note">另有 ${other} 条期待、建议、观察和正面评价</p>`:''}</div>`
-        +(groups?`<div class="kqs">${groups}</div>`:'<p class="d-note">这一场没有整理出问题。</p>')
-        +`<section class="grp"><div class="gh"><span class="name">关联洞察</span></div>${ins}</section>`
-        +(evs?`<section class="grp"><div class="gh"><span class="name">体验事件</span><small>${detail.events.length}</small></div><ul class="lns">${evs}</ul></section>`:'');
+      body=(version2?`<div class="d-sum">${bar(kinds,true)}<div class="d-sum-row"><span class="total"><b>${total}</b> 个问题</span><span class="kleg">${legend}</span></div></div>`:'')
+        +`${tabs}<div id="deskFindings" class="d-findings"></div>`
+        +`<section class="grp"><div class="gh"><span class="name">关联洞察</span></div>${ins}</section>`;
     }
     const notes=(job?`<p class="d-note">${escape(job.state==='queued'?'等待转写，前面的场次完成后继续。':job.detail||'正在转写，可以继续录制。')}</p>`:'')+(s.error?`<p class="d-note warn">${escape(s.error)}</p>`:'');
     $('sessionDetail').innerHTML=`<div class="d-head"><p class="d-meta">${escape(meta)}</p><h1 id="detailTitle"><span class="tt">${escape(t.text)}</span><button class="edit" data-act="rename" title="重命名" aria-label="重命名">${PENCIL}</button></h1>${actions}${notes}</div>${body}`;
     sizes($('sessionDetail'));
+    if(detail?.state==='complete'&&detail.result){
+      const findings=Findings.create($('deskFindings'),{state:state.findings,clock:short,scroller:$('sessionDetail'),
+        onView:view=>document.querySelectorAll('#sessionDetail [data-dview]').forEach(button=>{const on=button.dataset.dview===view;button.classList.toggle('on',on);button.setAttribute('aria-selected',String(on));}),
+        onSeek:(time,where)=>call('open_review',s.id,time,where.view,where.view==='events'?where.event:'').catch(error=>toast(error.message))});
+      findings.update({result:detail.result,activities:detail.activities||[]});
+    }
   }
   function dialog(titleText,html,buttons){
     $('deskDialogBody').innerHTML=`<h2>${escape(titleText)}</h2>${html}`;$('deskDialogFoot').replaceChildren();
@@ -180,8 +181,7 @@
     const button=event.target.closest('[data-act]');
     if(button?.dataset.act==='more'){toggleMenu(button,$('moreMenu'));return;}
     if(button){if(button.closest('#moreMenu'))toggleMenu(document.querySelector('[data-act="more"]'),$('moreMenu'),false);act(button.dataset.act,s);return;}
-    const at=event.target.closest('[data-at]');if(at){call('open_review',s.id,Number(at.dataset.at)).catch(error=>toast(error.message));return;}
-    const fold=event.target.closest('[data-fold]');if(fold){const k=fold.dataset.fold;state.open.has(k)?state.open.delete(k):state.open.add(k);renderDetail(s,state.detail);return;}
+    const view=event.target.closest('[data-dview]');if(view){state.findings.view=view.dataset.dview;renderDetail(s,state.detail);return;}
     const issue=event.target.closest('[data-issue]');if(issue){deskShow('insight');const label=title(s).text;window.insightBridge?.showSession(s.id,label);setTimeout(()=>window.insightBridge?.goToIssue(issue.dataset.issue),60);}
   });
 

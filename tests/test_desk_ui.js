@@ -54,7 +54,7 @@ function click(el,attr,value){
 }
 const plain=value=>JSON.parse(JSON.stringify(value));
 async function settle(){for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));}
-const emptyDetail=id=>({id,state:'none',label:'',kinds:{},quotes:{},events:[],insights:[]});
+const emptyDetail=id=>({id,state:'none',label:'',kinds:{},result:null,activities:[],insights:[]});
 
 async function fixture(state={}) {
   const {document,elements}=fakeDOM();const calls=[];let poll=null;
@@ -66,7 +66,7 @@ async function fixture(state={}) {
   const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){return null;},setItem(){}},
     matchMedia:()=>({matches:false,addEventListener(){}}),getComputedStyle:()=>({getPropertyValue:()=>''}),setTimeout(){return 1;},clearTimeout(){},
     setInterval(fn){poll=fn;return 1;},navigator:{clipboard:{writeText:async text=>{data.clipboard=text;}}},console});
-  vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui/desk.js'),'utf8'),context);
+  for(const file of ['findings.js','desk.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui',file),'utf8'),context);
   await settle();
   const el=id=>elements.get(id);
   return {elements,el,calls,data,async refresh(){poll();await settle();},
@@ -115,6 +115,34 @@ test('external preprocessing badges never change recording state or disable revi
     if(!['none','complete'].includes(s.preprocessing.state))assert.match(detail,/外部 &lt;整理&gt;/);
   }
   assert.equal(f.calls.filter(c=>c.name==='session_detail').length>=5,true);
+});
+
+test('a session an agent is organizing reads 整理中, not 待整理',async()=>{
+  const f=await fixture({sessions:[{id:'busy',game:'Game',state:'可回看',can_review:true,preprocessing:{state:'processing'}}]});
+  assert.match(f.el('sessionScroll').innerHTML,/<span class="c-st[^"]*">整理中<\/span>/);
+});
+
+test('the detail shows the same 问题 / 体验事件 views as review; a click opens review on that tab',async()=>{
+  // Trigger path: select an organized session in the desk, read its problems, click one to open review there.
+  const result={events:[{id:'e1',title:'Bag <full>',start:10,end:80,summary:'Cleared the bag.'},{id:'e2',title:'Map',start:80,end:120,summary:''}],
+    instances:[{id:'i1',event_id:'e1',kind:'confusion',said:[{start:12,end:14,text:'What now?'}],refers_to:{start:12,end:14,basis:'same_time'},statement:'Lost after the bag filled.',screen:'bag'},
+      {id:'i2',event_id:'e2',kind:'observation',said:[{start:90,end:91,text:'Map opens.'}],refers_to:{start:90,end:91,basis:'same_time'},statement:'Noted the map.',screen:''}],coverage:null};
+  const f=await fixture({sessions:[{id:'done',game:'Game',state:'可回看',can_review:true,preprocessing:{state:'complete',kinds:{confusion:1,observation:1}}}]});
+  f.data.details.done={id:'done',state:'complete',label:'',kinds:{confusion:1,observation:1},result,activities:[{name:'Bag',event_ids:['e1']}],insights:[]};
+  await f.select('done');
+  const detail=f.el('sessionDetail').innerHTML,views=f.el('deskFindings').innerHTML;
+  assert.match(detail,/data-dview="problems"[^>]*>问题 1</);assert.match(detail,/data-dview="events"[^>]*>体验事件 2</);
+  assert.match(views,/What now\?/);assert.match(views,/Lost after the bag filled\./);assert.match(views,/Bag &lt;full&gt;/);
+  assert.match(views,/data-filter="other"[^>]*>其他 <b>1<\/b>/);
+  const container=f.el('deskFindings');container.contains=()=>true;
+  const seek={dataset:{seek:'12',event:'e1'},disabled:false,hasAttribute:()=>false};
+  container.listeners.click({target:{closest:selector=>selector==='button'?seek:null}});await settle();
+  assert.deepEqual(plain(f.calls.find(c=>c.name==='open_review').args),['done',12,'problems','']);
+  click(f.el('sessionDetail'),'data-dview','events');await settle();
+  assert.match(f.el('deskFindings').innerHTML,/data-sec="e1"[\s\S]*data-activity="Bag"/);
+  const section={dataset:{seek:'10',event:'e1'},disabled:false,hasAttribute:name=>name==='data-section-time'};
+  f.el('deskFindings').contains=()=>true;f.el('deskFindings').listeners.click({target:{closest:selector=>selector==='button'?section:null}});await settle();
+  assert.deepEqual(plain(f.calls.filter(c=>c.name==='open_review').at(-1).args),['done',10,'events','e1']);
 });
 
 test('an unfinished external preprocessing run reads 整理未完成, never 转写失败',async()=>{

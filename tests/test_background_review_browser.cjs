@@ -18,7 +18,7 @@ const inputs={version:1,state:'complete',recording_scope:'all',duration:32,timeb
 ]};
 const data={title:'后台操作区域 · 合成验收',game:'合成测试',session_name:'后台操作区域 · 合成验收',desktop:true,test:true,video:'/demo.mp4',segments:[{start:3.2,end:5.5,text:'这段原话在后台区间中，文字和气泡保持正常可读。'}],transcription:{state:'ready'},inputs};
 const media=fs.readFileSync(path.join(root,'docs/prototypes/input-review/demo.mp4'));
-const values={TITLE:data.title,DATA:JSON.stringify(data),CSS:read('ui/review.css'),JS:read('ui/review.js'),FONTS: '', PLYR_CSS:read('ui/vendor/plyr/plyr.css'),PLYR_JS:read('ui/vendor/plyr/plyr.min.js'),PLYR_SVG:read('ui/vendor/plyr/plyr.svg'),LICENSE:'Synthetic browser acceptance'};
+const values={TITLE:data.title,DATA:JSON.stringify(data),CSS:read('ui/review.css'),JS:read('ui/review.js'),FINDINGS_JS:read('ui/findings.js'),FINDINGS_CSS:read('ui/findings.css'),FONTS: '', PLYR_CSS:read('ui/vendor/plyr/plyr.css'),PLYR_JS:read('ui/vendor/plyr/plyr.min.js'),PLYR_SVG:read('ui/vendor/plyr/plyr.svg'),LICENSE:'Synthetic browser acceptance'};
 const html=read('player.html').replace(/%%([A-Z_]+)%%/g,(_,key)=>values[key]);
 const server=http.createServer((request,response)=>{if(request.url==='/demo.mp4'){response.setHeader('Content-Type','video/mp4');response.setHeader('Accept-Ranges','bytes');const range=/^bytes=(\d+)-(\d*)$/.exec(request.headers.range||'');if(range){const start=+range[1],end=Math.min(range[2]?+range[2]:media.length-1,media.length-1);response.writeHead(206,{'Content-Range':`bytes ${start}-${end}/${media.length}`,'Content-Length':end-start+1});response.end(media.subarray(start,end+1));}else response.end(media);return;}response.setHeader('Content-Type','text/html; charset=utf-8');response.end(html);});
 const checks=[],errors=[];let browser;

@@ -29,7 +29,7 @@ MAX_RESULT = 2 * 1024 * 1024
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 STATUS_CACHE_VERSION = 1
-CHECKING = dict(state='checking', label='核对中', reason='正在核对整理结果，完成后显示事件数。')
+CHECKING = dict(state='checking', label='核对中', reason='正在核对整理结果，完成后显示问题分布。')
 
 
 def _path(folder, name):
@@ -847,6 +847,7 @@ def submit(folder, token, value):
         _write(folder, RESULT, result)
     summary = dict(state='complete', revision=revision, events=len(result['events']),
                    questions=len(result['questions']), ideas=len(result['ideas']), instances=len(result.get('instances', [])))
+    summary['standalone_page'] = refresh_standalone(folder)
     if result.get('instances'):
         # 路径 3：提交写入后在锁外核对界面编号与画面上亮着的页签（每刻约 2 秒识别），只提醒不拦截。
         from context_track import check_screens
@@ -882,7 +883,28 @@ def _activity_name_source(folder):
                              activity_naming=previous)
 
 
+def refresh_standalone(folder):
+    """Path 3: 独立回看.html in the session folder is written at transcription and opened without the app;
+    rewrite it after a result, activity names or a calibration land, outside the metadata lock.
+
+    The page is a copy for offline viewing: a failure is reported, never undoes the committed change."""
+    try:
+        from recorder import make_player
+        from review_runtime import session_review_payload
+        make_player(Path(folder), None, None, session_review_payload(folder))
+        return 'updated'
+    except Exception as error:
+        return 'not_updated: ' + str(error)[:200]
+
+
 def name_activities(folder, value=None, *, apply=False):
+    response = _name_activities(folder, value, apply=apply)
+    if apply and response.get('state') == 'complete' and not response.get('replayed'):
+        refresh_standalone(folder)
+    return response
+
+
+def _name_activities(folder, value=None, *, apply=False):
     """Give completed events a short title and separate, traceable content details.
 
     The result hash fences reanalysis with unchanged materials; expected_name
@@ -987,6 +1009,8 @@ def _reanalysis_status(job, raw):
 
 
 QUOTE_ORDER = ('obstacle', 'cost', 'confusion', 'negative')
+# The four problem types every window counts; the other kinds are listed apart.
+PROBLEM_KINDS = ('confusion', 'obstacle', 'cost', 'negative')
 _FILLER = ('呃', '嗯', '哎', '啊', '哦', '好', '然后', '但是', '那', '对', '就是')
 
 
@@ -1033,7 +1057,7 @@ def _status(folder, meta, validate=True):
     context = _analysis_context(folder, raw)
     if (not complete or marker.get('version') != VERSION
             or not _revision_matches(folder, marker.get('revision'), meta, material, revision, context)):
-        return dict(state='stale', label='需重新预处理', reason='素材已更新，旧整理结果已保留。')
+        return dict(state='stale', label='需重新整理', reason='素材已更新，旧整理结果已保留。')
     if has_result:
         if _revision_matches(folder, raw.get('revision'), meta, material, revision, context):
             if not validate:
@@ -1051,12 +1075,14 @@ def _status(folder, meta, validate=True):
                 result = transcript_corrections.project(folder, result)
             except (OSError, ValueError, TypeError, KeyError):
                 pass  # A damaged corrections file leaves quotes as transcribed; the file itself is kept.
-            value = dict(state='complete', label=f'已预处理 · {len(result["events"])} 个事件',
+            problems = sum(1 for item in result.get('instances', []) if item.get('kind') in PROBLEM_KINDS)
+            value = dict(state='complete', label=(f'已整理 · {problems} 个问题' if 'instances' in result
+                                                  else f'已整理 · {len(result["events"])} 个体验事件'),
                          events=len(result['events']), questions=len(result['questions']),
                          ideas=len(result['ideas']), instances=len(result.get('instances', [])), result=result, editing=editing,
                          **_digest(result))
             if context is not None and context != _current_analysis_context(meta):
-                value['notice'] = '整理后同步偏移／记录者已改动，事件中的操作时间可能有偏差'
+                value['notice'] = '整理后同步偏移／记录者已改动，整理结果里的操作时间可能有偏差'
             redo = _reanalysis_status(job, raw)
             if redo:
                 value['reanalysis'] = redo
@@ -1064,12 +1090,12 @@ def _status(folder, meta, validate=True):
                 value['label'] += f' · {label}，旧结果仍可回看'
             return value
     if job.get('revision') != revision:
-        return dict(state='stale', label='需重新预处理', reason='素材已更新，旧整理结果已保留。')
+        return dict(state='stale', label='需重新整理', reason='素材已更新，旧整理结果已保留。')
     if job.get('state') == 'processing':
         if _number(job.get('expires_at')) and job['expires_at'] > time.time():
-            return dict(state='processing', label='预处理中', expires_at=job['expires_at'])
-        return dict(state='interrupted', label='预处理未完成', reason='处理者未续期，可由外部会话重新领取。')
-    return dict(state='failed', label='预处理未完成', reason=str(job.get('reason') or '外部预处理没有完成。')[:2000])
+            return dict(state='processing', label='整理中', expires_at=job['expires_at'])
+        return dict(state='interrupted', label='整理未完成', reason='处理者未续期，可由外部会话重新领取。')
+    return dict(state='failed', label='整理未完成', reason=str(job.get('reason') or '外部整理没有完成。')[:2000])
 
 
 def _unavailable(folder):
@@ -1077,7 +1103,7 @@ def _unavailable(folder):
         attempted = _path(folder, RESULT).exists() or _path(folder, STATE).exists()
     except Exception:
         attempted = False
-    return dict(state='invalid', label='预处理结果不可用', reason='结果格式或证据引用无效；原始录像仍可回看。') if attempted else dict(state='none')
+    return dict(state='invalid', label='整理结果不可用', reason='结果格式或证据引用无效；原始录像仍可回看。') if attempted else dict(state='none')
 
 
 def _expiry(value):
@@ -1135,7 +1161,33 @@ def preprocessing_status(folder, meta=None, include_result=False):
             _CACHE.move_to_end(key)
             while len(_CACHE) > 64:
                 _CACHE.popitem(last=False)
-    return deepcopy(value if include_result else {k: v for k, v in value.items() if k != 'result'})
+    if not include_result:
+        return deepcopy({k: v for k, v in value.items() if k != 'result'})
+    value = deepcopy(value)
+    if value.get('state') == 'complete':
+        # Path 1: review and the desk tag a result's events with the session's activity names. The names live in
+        # session.json, outside this cache, and count only while they were made for the result shown.
+        value['activities'] = current_activities(folder, meta, (value.get('editing') or {}).get('result_sha256'))
+    return value
+
+
+def current_activities(folder, meta, result_sha256=None):
+    """Activity names with their event ids, or [] when the naming belongs to another result."""
+    naming = meta.get('activity_naming') if isinstance(meta, dict) else None
+    if not isinstance(naming, dict) or not isinstance(naming.get('activities'), list):
+        return []
+    try:
+        digest = result_sha256 or _file_hash(_path(folder, RESULT))
+    except (OSError, ValueError):
+        return []
+    if naming.get('result_sha256') != digest:
+        return []
+    rows = []
+    for row in naming['activities']:
+        if (isinstance(row, dict) and isinstance(row.get('name'), str) and row['name'].strip()
+                and isinstance(row.get('event_ids'), list) and all(isinstance(ref, str) for ref in row['event_ids'])):
+            rows.append(dict(name=row['name'].strip(), event_ids=list(row['event_ids'])))
+    return rows
 
 
 def _list_signature(folder, meta):

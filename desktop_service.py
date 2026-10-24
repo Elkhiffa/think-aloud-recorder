@@ -2000,11 +2000,11 @@ class DesktopService:
     def open_review(self, id):
         return self._open_review(id)
 
-    def review_at(self, id, at):
-        """Insight evidence opens a review at its cited moment; not a main-window bridge method."""
-        return self._open_review(id, at)
+    def review_at(self, id, at, focus=None):
+        """Insight evidence and desk rows open a review at their moment; not a main-window bridge method."""
+        return self._open_review(id, at, focus)
 
-    def _open_review(self, id, at=None):
+    def _open_review(self, id, at=None, focus=None):
         admitted = False
         try:
             with self._lock:
@@ -2019,7 +2019,7 @@ class DesktopService:
                     raise RuntimeError('回看窗口尚未就绪。')
                 self._review_opening += 1
                 admitted = True
-            return ok(opener(session) if at is None else opener(session, at))
+            return ok(opener(session) if at is None else opener(session, at) if focus is None else opener(session, at, focus))
         except Exception as error:
             return self._error(error)
         finally:

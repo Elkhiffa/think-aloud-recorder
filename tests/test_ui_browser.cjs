@@ -97,7 +97,7 @@ function reviewHTML() {
     segments: Array.from({ length: 48 }, (_, i) => ({ start: i, end: i + 0.95, text: words[i % words.length] })),
   };
   const values = {
-    TITLE: data.title, DATA: JSON.stringify(data), CSS: read('ui/review.css'), JS: read('ui/review.js'),
+    TITLE: data.title, DATA: JSON.stringify(data), CSS: read('ui/review.css'), JS: read('ui/review.js'), FINDINGS_JS: read('ui/findings.js'), FINDINGS_CSS: read('ui/findings.css'),
     FONTS: '', PLYR_CSS: read('ui/vendor/plyr/plyr.css'), PLYR_JS: read('ui/vendor/plyr/plyr.min.js'),
     PLYR_SVG: read('ui/vendor/plyr/plyr.svg'), LICENSE: 'Synthetic acceptance fixture; bundled Plyr license applies',
   };
@@ -1322,11 +1322,16 @@ function deskState(overrides = {}) {
   return { tab: 'sessions', game: '示例游戏 · 合成测试', sessions: deskSessions(), busy: false, recording: false,
     background_jobs: [{ session_id: 'd2', state: 'running', detail: '合成测试：后台转写中。' }], insight: { insights: 1 }, ...overrides };
 }
+function deskInstance(id, event, kind, at, text) {
+  return { id, event_id: event, kind, said: [{ start: at, end: at + 1, text }], refers_to: { start: at, end: at + 1, basis: 'same_time' }, statement: '合成陈述：' + text, screen: '' };
+}
 const deskDetails = {
   d1: { id: 'd1', state: 'complete', label: '', kinds: { obstacle: 2, confusion: 1, suggestion: 2 },
-    quotes: { confusion: [{ text: '这个标记是什么意思我没看懂', at: 12.5 }], obstacle: [{ text: '找不到返回的地方只能重进', at: 30 }, { text: '背包满了又不能直接丢东西', at: 95 }], cost: [], negative: [] },
-    events: [{ title: '清河任务', start: 0, end: 120 }, { title: '野外探索', start: 120, end: 300 }], insights: [{ id: 'TA-01', title: '目标明确仍有摩擦', count: 2 }] },
-  d2: { id: 'd2', state: 'none', label: '这一场还没有整理结果。', kinds: {}, quotes: {}, events: [], insights: [] },
+    result: { coverage: null, events: [{ id: 'e1', title: '清河任务', start: 0, end: 120, summary: '合成概述：接任务后在清河找人。' }, { id: 'e2', title: '野外探索', start: 120, end: 300, summary: '' }],
+      instances: [deskInstance('i1', 'e1', 'confusion', 12.5, '这个标记是什么意思我没看懂'), deskInstance('i2', 'e1', 'obstacle', 30, '找不到返回的地方只能重进'),
+        deskInstance('i3', 'e1', 'obstacle', 95, '背包满了又不能直接丢东西'), deskInstance('i4', 'e2', 'suggestion', 130, '这里可以加个提示'), deskInstance('i5', 'e2', 'suggestion', 200, '地图可以标一下')] },
+    activities: [{ name: '清河', event_ids: ['e1'] }], insights: [{ id: 'TA-01', title: '目标明确仍有摩擦', count: 2 }] },
+  d2: { id: 'd2', state: 'none', label: '这一场还没有整理结果。', kinds: {}, result: null, activities: [], insights: [] },
 };
 const deskOverview = { vault: '合成资料库', reports: [{ name: 'r.md', modified: 1, bytes: 10 }], feedback: [], tag_groups: [], tags: [], instance_tags: {}, session_labels: { d1: '0922' },
   instances: [{ session_id: 'd1', instance_id: 'i1', said_start: 30, refers_start: 28, refers_end: 31, refers_basis: 'same_time', screen: 'bag', catalog_screen: 'bag', elements: [], kind: 'obstacle', statement: '合成陈述', issue_tags: [], issue_links: [], event_id: 'e1', event_title: '清河任务' }],
@@ -1409,47 +1414,39 @@ async function deskChecks(context, origin) {
     await page.locator('#searchInput').fill('萌宠'); assert.deepEqual(await deskRows(page), ['d1', 'd4']);
     await page.locator('#searchInput').fill(''); assert.deepEqual(await deskRows(page), ['d1', 'd2', 'd3', 'd4', 'd5'], 'clearing the search shows everything');
   });
-  await check('the first session opens by default; its detail groups quotes, problems, insights and activities', async () => {
-    await page.locator('#sessionDetail .kq').first().waitFor();
+  await check('the first session opens by default; its detail shows the same 问题 and 体验事件 views as review', async () => {
+    await page.locator('#sessionDetail .fd-group').first().waitFor();
     assert.deepEqual(await deskCalls(page, 'session_detail'), [['d1']]);
     assert.equal(await page.locator('#sessionScroll [data-session="d1"]').evaluate(n => n.classList.contains('sel')), true);
     assert.equal(await page.locator('#sessionDetail h1').innerText(), '清河探索与初次止戈');
-    assert.equal(await page.locator('#sessionDetail .d-meta').innerText(), '9月22日 周二 · 10:30–11:32 · 1:02:05 · 2 个体验事件');
-    assert.deepEqual(await page.locator('#sessionDetail .kq .gh').evaluateAll(n => n.map(x => x.textContent)), ['困惑1', '阻碍2']);
+    assert.equal(await page.locator('#sessionDetail .d-meta').innerText(), '9月22日 周二 · 10:30–11:32 · 1:02:05');
+    assert.deepEqual(await page.locator('#sessionDetail [data-dview]').allInnerTexts(), ['问题 3', '体验事件 2']);
+    assert.deepEqual(await page.locator('#sessionDetail .fd-view>.fd-group .fd-gh').evaluateAll(n => n.map(x => x.querySelector('.fd-name').textContent + x.querySelector('small').textContent)), ['困惑1', '阻碍2', '其他2']);
     assert.equal(await page.locator('#sessionDetail .d-sum .total').innerText(), '3 个问题', 'the four problem kinds only');
     assert.deepEqual(await page.locator('#sessionDetail .d-sum .kleg span').allInnerTexts(), ['1 困惑', '2 阻碍']);
-    assert.match(await page.locator('#sessionDetail .d-sum .note').innerText(), /另有 2 条/);
     assert.deepEqual(await page.locator('#sessionDetail .ln.ins').evaluateAll(n => n.map(x => [x.querySelector('.tx').textContent, x.querySelector('.ct').textContent])), [['目标明确仍有摩擦', '2']]);
-    const events = page.locator('#sessionDetail .grp', { hasText: '体验事件' });
-    assert.equal(await events.locator('li').count(), 2);
-    await events.locator('[data-at="120"]').click();
-    assert.deepEqual((await deskCalls(page, 'open_review')).at(-1), ['d1', 120], 'an activity opens review at its start');
     assert.equal(await page.locator('[data-act="handoff"]').count(), 0, 'organized sessions need no hand-off');
-    await page.locator('#sessionDetail [data-at="30"]').click();
-    assert.deepEqual((await deskCalls(page, 'open_review')).at(-1), ['d1', 30]);
-    assert.equal(await page.locator('#sessionDetail .unnamed').count(), 0);
+    await page.locator('#sessionDetail .fd-at[data-seek="30"]').click();
+    assert.deepEqual((await deskCalls(page, 'open_review')).at(-1), ['d1', 30, 'problems', ''], 'a problem opens review on 问题 at the moment it was said');
     await screen(page, 'desk-detail-1240x900');
+    await page.locator('#sessionDetail [data-dview="events"]').click();
+    assert.equal(await page.locator('#sessionDetail .fd-sec').count(), 2);
+    assert.deepEqual(await page.locator('#sessionDetail [data-sec="e1"] .fd-tag').allInnerTexts(), ['清河']);
+    await page.locator('#sessionDetail [data-section-time][data-seek="120"]').click();
+    assert.deepEqual((await deskCalls(page, 'open_review')).at(-1), ['d1', 120, 'events', 'e2'], 'an event opens review on 体验事件 with that event');
+    assert.equal(await page.locator('#sessionDetail .unnamed').count(), 0);
+    await screen(page, 'desk-detail-events-1240x900');
+    await page.locator('#sessionDetail [data-dview="problems"]').click();
   });
-  await check('a problem type with more than three quotes expands from its header and collapses again', async () => {
-    const quotes = ['第一条合成原话很普通', '第二条合成原话也普通', '第三条合成原话还普通', '第四条合成原话被收起', '第五条合成原话被收起'];
-    await page.evaluate(rows => { window.__deskFixture.details.d1.quotes.confusion = rows.map((text, i) => ({ text, at: 40 + i })); }, quotes);
-    await page.locator('#sessionScroll [data-session="d4"]').click(); await page.locator('#sessionScroll [data-session="d1"]').click();
-    const block = page.locator('#sessionDetail .kq.k-confusion');
-    await block.locator('[data-fold]').waitFor();
-    const head = block.locator('[data-fold]'), sheet = await page.locator('#sessionDetail').evaluate(n => getComputedStyle(n).backgroundColor);
+  await check('a problem type folds from its header; the header keeps the strip and fill of its kind', async () => {
+    const group = page.locator('#sessionDetail .fd-view>.fd-group.k-obstacle'), head = group.locator('[data-fold]');
+    const sheet = await page.locator('#sessionDetail').evaluate(n => getComputedStyle(n).backgroundColor);
     assert.equal(await head.evaluate(n => getComputedStyle(n).borderLeftWidth), '3px', 'a strong strip on the left of the header');
     assert.notEqual(await head.evaluate(n => getComputedStyle(n).backgroundColor), sheet, 'the header has a weak fill of the same hue');
-    assert.equal(await block.locator('.lns').evaluate(n => getComputedStyle(n).backgroundColor), 'rgba(0, 0, 0, 0)', 'quotes sit on the sheet');
-    assert.equal(await block.locator('.ln').count(), 3); assert.equal(await head.getAttribute('aria-expanded'), 'false');
-    await head.click(); assert.equal(await block.locator('.ln').count(), 5); assert.equal(await head.getAttribute('aria-expanded'), 'true');
-    const line = block.locator('.ln').first();
-    assert.equal(await line.locator('.go').evaluate(n => getComputedStyle(n).visibility), 'hidden');
-    await line.hover(); assert.equal(await line.locator('.go').evaluate(n => getComputedStyle(n).visibility), 'visible', 'hovering a quote shows the jump arrow');
-    await block.locator('[data-fold]').click(); assert.equal(await block.locator('.ln').count(), 3);
-    assert.equal(await page.locator('#sessionDetail .kq.k-obstacle [data-fold]').count(), 0, 'three or fewer quotes need no fold');
-    await page.evaluate(() => { window.__deskFixture.details.d1.quotes.confusion = [{ text: '这个标记是什么意思我没看懂', at: 12.5 }]; });
-    await page.locator('#sessionScroll [data-session="d4"]').click(); await page.locator('#sessionScroll [data-session="d1"]').click();
-    await page.locator('#sessionDetail .kq').first().waitFor();
+    const before = await head.boundingBox();await head.hover();assert.deepEqual(await head.boundingBox(), before, 'hover never resizes the header');
+    await head.click(); assert.equal(await head.getAttribute('aria-expanded'), 'false'); assert.equal(await group.locator('.fd-rows').isHidden(), true);
+    assert.ok(Math.abs((await head.boundingBox()).y - before.y) <= 1, 'the clicked header stays where it was');
+    await head.click(); assert.equal(await group.locator('.fd-row').count(), 2);
   });
   await check('detail actions call the matching bridge methods; rename, process and recover confirm first', async () => {
     assert.equal(await page.locator('#moreMenu').isVisible(), false);
@@ -1504,7 +1501,7 @@ async function deskChecks(context, origin) {
     await screen(page, 'desk-failed-1240x900');
   });
   await check('while recording, processing, export and cloud recovery lock on every session', async () => {
-    await page.locator('#sessionScroll [data-session="d1"]').click(); await page.locator('#sessionDetail .kq').first().waitFor();
+    await page.locator('#sessionScroll [data-session="d1"]').click(); await page.locator('#sessionDetail .fd-group').first().waitFor();
     await page.evaluate(() => { window.__deskFixture.desk.busy = true; window.__deskFixture.desk.recording = true; });
     await page.waitForFunction(() => document.querySelector('#sessionDetail [data-act="process"]')?.disabled === true, null, { timeout: 8000 });
     assert.deepEqual(await deskEnabled(page), { review: true, rename: true, copy: true, more: true, folder: true, process: false, export: false, raw: true, recover: false });
@@ -1542,7 +1539,7 @@ async function deskChecks(context, origin) {
     try {
       await p.waitForFunction(() => !document.querySelector('#paneInsight').classList.contains('hidden'));
       await noHorizontalOverflow(p); await screen(p, 'desk-insight-960x600');
-      await p.locator('#deskTabSessions').click(); await p.locator('#sessionDetail .kq').first().waitFor();
+      await p.locator('#deskTabSessions').click(); await p.locator('#sessionDetail .fd-group').first().waitFor();
       await noHorizontalOverflow(p);
       for (const selector of ['#sessionScroll', '#sessionDetail', '.tb [data-win="close"]', '#kindToggle', '#sortSelect']) await assertInsideViewport(p, selector);
       assert.ok((await box(p, '#sessionScroll [data-session="d1"] .nm')).width >= 120, 'session names keep room at the minimum size');

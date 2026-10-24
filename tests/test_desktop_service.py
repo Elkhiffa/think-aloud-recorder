@@ -905,6 +905,10 @@ class DesktopServiceTests(unittest.TestCase):
         self.service.set_review_opener(review)
         self.assertTrue(self.service.review_at(session.meta['id'], 12.5)['ok'])
         self.assertEqual(review.call_args.args[1], 12.5)
+        self.assertEqual(len(review.call_args.args), 2)
+        # Path 1: a desk row passes which tab and event to open.
+        self.assertTrue(self.service.review_at(session.meta['id'], 12.5, dict(tab='events', event='e1'))['ok'])
+        self.assertEqual(review.call_args.args[2], dict(tab='events', event='e1'))
         self.assertEqual(self.service._review_opening, 0)
 
     def test_pending_review_and_rename_are_independent_of_background_processing(self):

@@ -283,11 +283,11 @@ class WindowManager:
             pass
         return options
 
-    def open_review(self, session, initial_time=None):
+    def open_review(self, session, initial_time=None, focus=None):
         with self._lock:
             if self._updating:raise RuntimeError('应用正在退出以完成更新。')
         from review_runtime import ReviewAPI, prepare_window
-        page, payload = prepare_window(self.service.root, session, initial_time)
+        page, payload = prepare_window(self.service.root, session, initial_time, focus)
         api = ReviewAPI(session.path, payload, self.service.root / 'state/review-layout.json')
         chrome = self._chrome_for(api)
         try:

@@ -33,7 +33,7 @@ const fixture = {
   ] },
 };
 const values = {
-  TITLE: fixture.title, DATA: JSON.stringify(fixture), CSS: read('ui/review.css'), JS: read('ui/review.js'),
+  TITLE: fixture.title, DATA: JSON.stringify(fixture), CSS: read('ui/review.css'), JS: read('ui/review.js'), FINDINGS_JS: read('ui/findings.js'), FINDINGS_CSS: read('ui/findings.css'),
   FONTS: '', PLYR_CSS: read('ui/vendor/plyr/plyr.css'), PLYR_JS: read('ui/vendor/plyr/plyr.min.js'),
   PLYR_SVG: read('ui/vendor/plyr/plyr.svg'), LICENSE: 'Synthetic quote popover acceptance',
 };

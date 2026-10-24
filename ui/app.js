@@ -43,6 +43,7 @@ function renderLastInstall(raw){
  show('updateRecoveryHint',result.recovery);
  setText('updateRecoveryHint',result.recoveryPath?'请先关闭记录器、回看窗口，以及从该目录启动的 OBS，再双击下面的恢复文件。恢复完成前请保留备份。':'请保留备份与更新事务文件。恢复步骤见软件目录中的 docs/updates.md；恢复前请关闭记录器和回看窗口。');
 }
+let updateNotesOpen=false;
 function renderUpdates(){
  const raw=store.snapshot?.updates;
  if(!updateChannelDirty)$('#updateChannel').value=raw?.include_prerelease===true?'preview':'stable';
@@ -66,7 +67,10 @@ function renderUpdates(){
  setText('updateProgressLabel',u.state==='verifying'?'正在校验':'正在下载');
  setText('updateBytes',bytes(u.downloaded_bytes)+(u.total_bytes?' / '+bytes(u.total_bytes):''));
  if(u.total_bytes&&u.state==='downloading')$('#updateProgress').value=Math.min(100,u.downloaded_bytes/u.total_bytes*100);else $('#updateProgress').removeAttribute('value');
- show('updateReleaseInfo',!!u.latest_version);setText('updateNotes',u.notes||'此版本未提供更新说明。');setText('updateSize',u.total_bytes?'软件包 '+bytes(u.total_bytes):'');
+ show('updateReleaseInfo',!!u.latest_version);setText('updateNotes',u.notes||'此版本未提供更新说明。');
+ // Long notes fold to a few lines under the buttons; the buttons stay beside the progress bar.
+ const notes=$('#updateNotes');notes.classList.add('clamped');const longNotes=notes.scrollHeight>notes.clientHeight+1;notes.classList.toggle('clamped',longNotes&&!updateNotesOpen);
+ show('updateNotesMore',longNotes);setText('updateNotesMore',updateNotesOpen?'收起说明':'展开全部说明');$('#updateNotesMore').setAttribute('aria-expanded',String(updateNotesOpen));setText('updateSize',u.total_bytes?'软件包 '+bytes(u.total_bytes):'');
  show('updateInstallInfo',u.state==='ready'&&!u.cancelPending);setText('updateCloseSummary','将关闭记录器和 '+u.review_count+' 个回看窗口。');
  const blockers=[...u.blockers];if(u.state==='ready'&&!u.can_install&&!blockers.length)blockers.push('正在等待记录器确认是否可以更新。');
  $('#updateBlockers').innerHTML=blockers.map(message=>'<li>'+escapeHTML(message)+'</li>').join('');show('updateBlockers',blockers.length>0);
@@ -97,7 +101,7 @@ async function updateAction(actionName){
 // Update availability: a dot on the settings gear, the 通用 tab and the 版本与更新 heading.
 function renderUpdateBadge(){const u=updateState(),has=['available','downloading','verifying','ready'].includes(u.state)&&!!u.latest_version;$('#settingsButton').classList.toggle('badge',has);$('#tabGeneral').classList.toggle('badge',has);$('#updateGroup').classList.toggle('badge-text',has);$('#settingsButton').title=has?'设置 · 有新版本 v'+String(u.latest_version).replace(/^v/i,''):'设置';$('#settingsButton').setAttribute('aria-label',$('#settingsButton').title);}
 $('#updateChannel').onchange=()=>{updateChannelDirty=true;updateError='';renderUpdates();};
-$('#updateCheck').onclick=()=>updateAction('check');$('#updateDownload').onclick=()=>updateAction('download');$('#updateCancel').onclick=()=>updateAction('cancel');$('#updateInstall').onclick=()=>updateAction('install');$('#updateRelease').onclick=()=>updateAction('open_release');
+$('#updateCheck').onclick=()=>updateAction('check');$('#updateDownload').onclick=()=>updateAction('download');$('#updateCancel').onclick=()=>updateAction('cancel');$('#updateInstall').onclick=()=>updateAction('install');$('#updateRelease').onclick=()=>updateAction('open_release');$('#updateNotesMore').onclick=()=>{updateNotesOpen=!updateNotesOpen;renderUpdates();};
 function render(){renderHome();renderGames();renderLast();renderInsight();if(store.draft){completeDeviceSetup();renderDeviceOptions();renderResources();renderVaultChoice();renderVocabulary();}renderControls();const a=store.activity;const signature=JSON.stringify([a.kind,a.status,a.detail]);if(signature!==lastActivitySignature){lastActivitySignature=signature;if(sheetOpen()&&a.status==='操作未完成'&&a.detail)wizardError(a.detail);else if(!sheetOpen()&&store.readiness.ready&&a.status==='操作未完成'&&a.detail)notify('上次操作未完成：'+a.detail);if(sheetOpen()&&actionContext==='verify'&&a.kind==='idle'&&a.detail)setText('cloudFeedback',a.detail);}
  if(!firstSetupHandled&&store.snapshot){firstSetupHandled=true;if(!store.presets.length&&!store.recording)openSheet('first');}}
 // What the ready record block lists under 已就绪: the target and the microphone (with input capture when on).
@@ -334,7 +338,7 @@ function layoutSheet(){
  $('#panelGeneral').classList.toggle('wizard',!settings);
  $$('#panelGame [data-in]:not([data-in="game-layout"])').forEach(field=>{const key=field.dataset.in;field.classList.toggle('hidden',current==='vault'?key!=='game-vault':!settings&&(key==='game-vault'||key==='game-delete'));});
  if(settings&&current==='game'){const key=store.activeId;if(key!==layoutKey){layoutKey=key;refreshLayout();}else renderLayout(layoutStatus);}else show('layoutField',false);
- $('#wizardBody').scrollTop=0;renderSheetFoot();renderUpdateBadge();
+ $('#wizardBody').scrollTop=0;renderSheetFoot();renderUpdateBadge();renderGeneralNav();
  if(current==='game')$('#game').focus({preventScroll:true});
 }
 // Read when the sheet opens or another game is chosen (and after enabling), not on every sheet redraw.
@@ -356,6 +360,25 @@ $('#wizardCancel').onclick=cancelWizard;
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&sheetOpen()&&!$('#actionDialog').open)cancelWizard();});
 function setSheetTab(tab){if(sheetTab===tab)return;if(settingsDirty()){wizardError('请先保存或取消当前修改，再切换。');return;}wizardError();sheetTab=tab;layoutSheet();}
 $('#tabGame').onclick=event=>{event.preventDefault();setSheetTab('game');};$('#tabGeneral').onclick=event=>{event.preventDefault();setSheetTab('general');};
+// 通用 runs to several screens at the default window size. Past one screen a rail jumps to each section;
+// the page still scrolls as one. Positions come from the scroll offset, not an observer the fake DOM lacks.
+const GENERAL_SECTIONS=['generalRecording','generalOcr','generalTranscription','generalLibrary','updateGroup'];
+let generalNavJump=0;
+function generalSectionTop(id){const body=$('#wizardBody'),heading=$('#'+id);return heading?.getBoundingClientRect&&body.getBoundingClientRect?heading.getBoundingClientRect().top-body.getBoundingClientRect().top:Infinity;}
+function markGeneralSection(current){
+ const body=$('#wizardBody');
+ if(!current){current=GENERAL_SECTIONS[0];for(const id of GENERAL_SECTIONS)if(generalSectionTop(id)<=body.clientHeight/3)current=id;if(body.scrollTop>0&&body.scrollTop+body.clientHeight>=body.scrollHeight-2)current=GENERAL_SECTIONS.at(-1);}
+ $$('#generalNav [data-section]').forEach(link=>{const on=link.dataset.section===current;link.classList.toggle('on',on);if(on)link.setAttribute('aria-current','true');else link.removeAttribute('aria-current');});
+}
+function renderGeneralNav(){
+ const body=$('#wizardBody'),panel=$('#panelGeneral'),shown=sheetOpen()&&sheetMode==='settings'&&sheetTab==='general';
+ const long=shown&&body.scrollHeight>body.clientHeight+1;
+ show('generalNav',long);panel.classList.toggle('has-nav',long);if(long)markGeneralSection();
+}
+$('#generalNav').addEventListener('click',event=>{const link=event.target.closest?.('[data-section]');if(!link)return;event.preventDefault();const top=generalSectionTop(link.dataset.section);if(!Number.isFinite(top))return;
+ generalNavJump=Date.now()+400;$('#wizardBody').scrollTop+=top;markGeneralSection(link.dataset.section);});
+$('#wizardBody').addEventListener('scroll',()=>{if(Date.now()>generalNavJump&&!$('#generalNav').classList.contains('hidden'))markGeneralSection();});
+if(typeof ResizeObserver==='function'){const observer=new ResizeObserver(()=>renderGeneralNav());observer.observe($('#wizardBody'));observer.observe($('#panelGeneral'));}
 $('#gameSubtabs').addEventListener('click',async event=>{const target=event.target.closest('[data-sub-game],[data-sub-add]');if(!target)return;event.preventDefault();if(settingsDirty()){wizardError('请先保存或取消当前修改，再切换游戏。');return;}if(target.hasAttribute('data-sub-add')){closeSheet();openSheet('new');return;}const id=target.dataset.subGame;if(id===store.activeId)return;closeSheet();const result=await action('select_preset',[id]);if(result.ok)openSheet('settings','game');});
 function gameStepError(){const d=store.draft;if(!d.game.trim())return '请填写游戏名称。';if(d.source!=='整个显示器'&&!d.window)return '请选择游戏窗口。';return '';}
 function proposeVault(){const d=store.draft,root=libraryRootDraft??store.saved.library_root;if(d.vault)return;if(root)d.vault=root.replace(/[\\/]+$/,'')+'\\'+d.game.trim().replace(/[<>:"/\\|?*\x00-\x1f]/g,'_');else if(sheetMode==='first')d.vault=store.snapshot?.default_vault?.path||'';$('#vault').value=d.vault;}
@@ -575,7 +598,6 @@ function sessionTitle(s){return s.title||s.session_name||s.game||s.id;}
 function canReview(s){return s.can_review===true||(s.can_review!==false&&sessionKind(s)==='ready');}
 
 function sessionKind(s){if(store.sessionJob(s.id))return 'processing';const status=String(s.state||'');if(s.error||/失败|错误|failed|error/i.test(status))return 'failed';if(/待整理|待转写|pending|recorded|saved/i.test(status))return 'pending';if(/可回看|完成|就绪|ready|done|complete/i.test(status))return 'ready';return 'other';}
-function preprocessingLabel(s){return s.preprocessing?.state==='complete'&&Number.isInteger(s.preprocessing.events)?`预处理 ${s.preprocessing.events} 个事件`:s.preprocessing?.label||'';}
 function findSession(id){return (store.snapshot?.sessions||[]).find(s=>String(s.id)===String(id));}
 function processSession(s){if(store.saved.transcription_provider==='later'){showDialog('先选择整理方式','<p>当前预设只保存录制。选择本地或云端转写后，再回来整理此场次。</p>',[{label:'设置整理方式',primary:true,run:()=>{setTimeout(()=>openSheet('settings','general'),0);}}]);return;}showDialog('整理这次体验','<p>'+escapeHTML(s.game||s.id)+'\n使用'+escapeHTML(providerNames[store.saved.transcription_provider]||'已保存的方式')+'。旧版文字与复盘会保留。</p>'+(store.saved.transcription_provider==='qwen'?'<p>将上传这次的麦克风录音到 Qwen，可能产生服务费用。</p>':'')+'<p>如果上次云端任务结果不确定，请从详情恢复原任务，避免重复提交。</p>',[{label:'开始整理',primary:true,run:()=>action('process_session',[s.id])}]);}
 function recoverSession(s){showDialog('恢复已有云端任务','<p>填写已有任务编号，继续查询原任务，不重新上传录音。</p><label for="recoveryId">云端任务编号</label><input id="recoveryId" autocomplete="off" spellcheck="false" placeholder="已有 task_id">',[{label:'恢复任务',primary:true,run:()=>{const id=$('#recoveryId').value.trim();if(!id){notify('请填写已有任务编号。');return false;}return action('recover_cloud_task',[s.id,id]);}}]);}

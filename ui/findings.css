@@ -1,0 +1,96 @@
+/* 回看与资料台共用的整理结果视图（ui/findings.js）。两个窗口的变量名不同，这里只取共有的几项并给出兜底；
+   问题类型颜色与主窗口、资料台、洞察相同（困惑靛蓝、阻碍赭石、操作成本暗黄、负面评价紫）。回看导出页会内联这份样式。 */
+.findings{
+  --fd-ink:var(--ink,#221E19);--fd-muted:var(--muted,#5F574B);--fd-line:var(--rule,var(--line,#DDD5C6));
+  --fd-surface:var(--sheet,var(--surface,#FFFDF9));--fd-hover:var(--paper,var(--bg,#F3EDE1));--fd-chip:var(--fill,var(--soft,#EEE8DC));
+  --k-confusion:#3F5D8C;--k-obstacle:#A3532B;--k-cost:#A8861C;--k-negative:#7C4B78;--k-other:#8C8273;
+  font-size:14px;line-height:1.6;color:var(--fd-ink);overflow-wrap:anywhere
+}
+.findings .k-confusion{--kc:var(--k-confusion)}.findings .k-obstacle{--kc:var(--k-obstacle)}.findings .k-cost{--kc:var(--k-cost)}
+.findings .k-negative{--kc:var(--k-negative)}.findings .k-other{--kc:var(--k-other)}
+.findings p{margin:0;max-width:none;white-space:normal}
+/* Reset only the resting state: a reset on :hover would outrank each button's own padding and border and resize it. */
+.findings button{border:0;background:none;padding:0;border-radius:4px;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.findings button:hover{background:none}
+.findings button:disabled{cursor:default;opacity:.45;background:none}
+.findings button:focus-visible{outline:2px solid var(--fd-ink);outline-offset:1px}
+.findings summary{cursor:pointer;color:var(--fd-muted)}
+
+/* 筛选条：随列表滚动时停在顶部 */
+.fd-bar{position:sticky;top:calc(-1 * var(--fd-pad-top,0px));z-index:3;display:flex;flex-wrap:wrap;gap:4px 8px;padding:8px 0;background:var(--fd-surface)}
+.findings .fd-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border:1px solid var(--fd-line);border-radius:999px;font-size:12px;line-height:20px;color:var(--fd-muted)}
+.fd-chip::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--kc,var(--fd-muted))}
+.fd-chip b{font-weight:700;color:var(--fd-ink);font-variant-numeric:tabular-nums}
+.findings .fd-chip:hover{border-color:var(--kc,var(--fd-muted));background:none}
+.findings .fd-chip[aria-pressed=true]{border-color:var(--kc);background:color-mix(in srgb,var(--kc) 14%,var(--fd-surface));color:var(--fd-ink)}
+.findings .fd-activity-chip{border-color:var(--fd-ink);color:var(--fd-ink)}
+.fd-activity-chip::before{display:none}
+.fd-count{font-size:12px;color:var(--fd-muted);margin:0 0 4px}
+.fd-empty{color:var(--fd-muted);padding:16px 0}
+
+/* 「问题」：每类一组，组头同资料台的分组色条 */
+.fd-group{margin-top:12px}
+.findings .fd-gh{display:flex;align-items:baseline;gap:8px;width:100%;margin-bottom:4px;padding:8px 12px;line-height:20px;border-left:3px solid var(--kc);border-radius:0 6px 6px 0;background:color-mix(in srgb,var(--kc) 9%,var(--fd-surface))}
+.findings .fd-gh:hover{background:color-mix(in srgb,var(--kc) 15%,var(--fd-surface))}
+.fd-gh .fd-name{font-weight:700;color:var(--kc)}
+.fd-gh small{font-size:12px;color:var(--fd-muted);font-variant-numeric:tabular-nums}
+.fd-sp{flex:1}
+.fd-chev{align-self:center;width:10px;height:6px;flex:none;fill:var(--fd-muted);transition:transform .12s}
+.fd-gh[aria-expanded=false] .fd-chev,.fd-toggle[aria-expanded=false] .fd-chev{transform:rotate(-90deg)}
+.fd-rows{list-style:none;margin:0;padding:0 0 0 4px}
+.fd-row{display:grid;grid-template-columns:64px minmax(0,1fr);column-gap:8px;padding:6px 8px;border-radius:8px}
+.fd-row:hover{background:var(--fd-hover)}
+.findings .fd-at{align-self:start;font-size:12px;line-height:22px;color:var(--kc);font-variant-numeric:tabular-nums}
+.findings .fd-at:hover{text-decoration:underline}
+.fd-quote::before{content:"“"}.fd-quote::after{content:"”"}
+.fd-quote{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
+.fd-stmt{font-size:12px;line-height:1.6;color:var(--fd-muted);margin-top:2px}
+.fd-meta{display:flex;flex-wrap:wrap;gap:2px 12px;margin-top:2px;font-size:12px;color:var(--fd-muted)}
+.fd-kind{color:var(--fd-ink)}
+.fd-screen::before{content:"界面 "}
+.findings .fd-jump,.findings .fd-event-link{color:var(--fd-muted);text-decoration:underline dotted;text-underline-offset:3px}
+.findings .fd-jump:hover,.findings .fd-event-link:hover{color:var(--fd-ink);text-decoration-style:solid}
+.findings .fd-event-link{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* 「体验事件」：每个事件一段，收起时看标题、时段、计数、概述和活动标签 */
+.fd-coverage{font-size:12px;color:var(--fd-muted);padding:4px 0 8px}
+.fd-coverage p{margin:4px 0}
+.fd-sec{padding:12px 0;border-top:1px solid var(--fd-line)}
+.fd-sec.is-current{box-shadow:inset 3px 0 0 var(--fd-ink);padding-left:12px}
+.fd-sh{display:flex;align-items:flex-start;gap:8px}
+.findings .fd-toggle{display:flex;align-items:baseline;gap:8px;flex:1;min-width:0}
+.fd-toggle .fd-chev{align-self:auto;transform-origin:center}
+.fd-title{font-size:15px;line-height:1.5;font-weight:700}
+.fd-sec.is-current .fd-title::after{content:"播放中";margin-left:8px;padding:0 6px;border-radius:999px;background:var(--fd-chip);font-size:12px;font-weight:400;color:var(--fd-muted)}
+.findings .fd-edit{flex:none;font-size:12px;color:var(--fd-muted);text-decoration:underline dotted;text-underline-offset:3px}
+.fd-sm{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;margin:4px 0 0 18px;font-size:12px;color:var(--fd-muted)}
+.fd-fp{display:inline-flex;width:96px;height:6px;border-radius:3px;overflow:hidden;background:var(--fd-chip)}
+.fd-fp i{display:block;min-width:2px;background:var(--kc)}
+.fd-legend{display:inline-flex;flex-wrap:wrap;gap:0 10px}
+.fd-legend span{color:var(--kc,var(--fd-muted))}
+.fd-legend b{font-weight:700}
+.fd-edited{color:var(--fd-ink)}
+.fd-sum{margin:4px 0 0 18px!important;font-size:13px;color:var(--fd-muted);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.fd-sec.is-open .fd-sum{display:block;color:var(--fd-ink)}
+.fd-tags{display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 0 18px}
+.findings .fd-tag{padding:0 8px;border-radius:999px;background:var(--fd-chip);font-size:12px;line-height:20px;color:var(--fd-muted)}
+.findings .fd-tag:hover{color:var(--fd-ink);background:var(--fd-chip)}
+.findings .fd-tag.on{background:var(--fd-ink);color:var(--fd-surface)}
+.fd-body{margin:8px 0 0 18px}
+.fd-body .fd-group:first-child{margin-top:4px}
+.fd-issue,.fd-notes{font-size:13px;margin:4px 0!important}
+.fd-issue strong{margin-right:8px}
+.fd-notes{color:var(--fd-muted);white-space:pre-wrap!important}
+
+/* 吸顶 / 吸底（同洞察页的议题树）：展开的事件标题停在筛选条下面，它下面再停当前问题类型的分组头；
+   看不见的下一个分组头和下一个事件标题按原样停在底部，点击跳过去。偏移抵消滚动区的内边距，否则内容会从筛选条上方露出来。 */
+.fd-view>.fd-group>.fd-gh,.fd-sec.is-open>.fd-sh{position:sticky;top:calc(var(--fd-bar-h,0px) - var(--fd-pad-top,0px));z-index:2}
+.fd-sec.is-open>.fd-body>.fd-group>.fd-gh{position:sticky;top:calc(var(--fd-bar-h,0px) - var(--fd-pad-top,0px) + var(--fd-sh-h,0px));z-index:1}
+.fd-sec.is-open>.fd-sh{background:var(--fd-surface)}
+.fd-sec.is-stuck>.fd-sh{box-shadow:0 1px 0 var(--fd-line)}
+.fd-next{position:sticky;bottom:calc(-1 * var(--fd-pad-bottom,0px));z-index:3;background:var(--fd-surface);box-shadow:0 -1px 0 var(--fd-line)}
+.fd-next .fd-pin.fd-group{margin:0;padding-top:4px}
+.fd-next .fd-pin .fd-gh{margin-bottom:0}
+.fd-next .fd-pin.fd-nested{margin-left:18px}
+.fd-next .fd-pin.fd-sec{padding:8px 0}
+.fd-next .fd-pin.fd-group+.fd-pin.fd-sec{margin-top:4px}
