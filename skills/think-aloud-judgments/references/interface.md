@@ -106,5 +106,6 @@
 - `kind` 只能是 `confusion`、`obstacle`、`cost`、`positive`、`negative`、`expectation`、`suggestion`、`self_correction`、`observation`；`confidence` 只能是 `high`、`medium`、`low`。
 - `screen` 是字符串或 null。目录存在时，不在目录里的界面必须标 `screen_proposed: true`，否则整份结果被拒。`route` 可选，最多 20 个界面名。`screen_context` 只在 `screen` 为 null 时使用，取值 `hud`、`multi_screen`、`outside_game`、`unknown`。`elements` 是画面文字列表，最多 20 个。
 - `statement` 最多 300 字；`evidence` 最多 12 条，每条 observation 最多 300 字；`issue_tags` 填 `[]`；只有记录者明说 bug、把问题归到程序本身或用跑测报缺陷的说法时填 `["BUG"]`（见 SKILL 第 7 步）。
+- `bug` 可选：`"explicit"`（明说，`issue_tags` 必须含 `BUG`）或 `"suspected"`（agent 判断，`issue_tags` 不能含 `BUG`）；不是 bug 就不写。旧结果只有 `BUG` 标签的按 `explicit` 读。
 - 数量上限：活动 300、每个活动的证据 30、实例 300；整个结果不超过 2 MB。
 - `coverage.transcript` 和 `inputs` 只能是 `full`、`partial`、`none`，按实际读过的范围填。

@@ -123,6 +123,31 @@ async function main(){
    await page.locator('[data-filter="negative"]').click();
    await page.screenshot({path:path.join(out,'judgment-instances-1440.png')});
  });
+ await check('a bug sits in the Bug group and in its own kind group; the Bug chip filters to bugs',async()=>{
+   /** 触发路径：用户在回看里看一条“设计没问题、实现出了问题”的判断 → 它在 Bug 组里写着原本的类型，在类型组里带 Bug 标记。 */
+   const bugs=structuredClone(excerptReady);bugs.result.version=2;bugs.bugs={i01:'suspected',i02:'explicit'};
+   bugs.result.instances=[{id:'i01',event_id:'e1',said:[{kind:'quote',ref:'t000001',start:2,end:4,text:'这个按钮又没反应。'}],refers_to:{start:2,end:4,basis:'same_time'},screen:null,elements:[],kind:'obstacle',statement:'按钮时灵时不灵。',issue_tags:[],evidence:[],confidence:'high'},
+     {id:'i02',event_id:'e1',said:[{kind:'quote',ref:'t000001',start:5,end:6,text:'这是 bug 吧，字被裁了。'}],refers_to:{start:5,end:6,basis:'same_time'},screen:null,elements:[],kind:'observation',statement:'按钮文字被裁切。',issue_tags:['BUG'],evidence:[],confidence:'high'},
+     {id:'i03',event_id:'e1',said:[{kind:'quote',ref:'t000001',start:7,end:8,text:'这个入口在哪？'}],refers_to:{start:7,end:8,basis:'same_time'},screen:null,elements:[],kind:'confusion',statement:'找不到入口。',issue_tags:[],evidence:[],confidence:'high'}];
+   await page.setViewportSize({width:1440,height:900});await page.goto(origin);await page.waitForFunction(()=>document.querySelector('video').readyState>=2);
+   await page.evaluate(value=>window.__snapshot.preprocessing=value,bugs);
+   await page.waitForFunction(()=>!document.querySelector('#problemsTab').hidden);await page.locator('#problemsTab').click();
+   assert.equal(await page.locator('#problemsTab').innerText(),'问题 2','bugs are not counted twice');
+   assert.deepEqual(await page.locator('#experienceEvents .fd-view>.fd-group .fd-name').allInnerTexts(),['困惑','阻碍','Bug','其他']);
+   const bugGroup=page.locator('#experienceEvents .fd-view>.fd-group.k-bug');
+   assert.deepEqual(await bugGroup.locator('.fd-row').evaluateAll(rows=>rows.map(row=>row.dataset.item)),['i01','i02']);
+   assert.match(await bugGroup.locator('[data-item="i01"] .fd-kind').innerText(),/阻碍 · 疑似/);
+   assert.match(await bugGroup.locator('[data-item="i02"] .fd-kind').innerText(),/^观察$/);
+   assert.equal(await page.locator('#experienceEvents .fd-group.k-obstacle [data-item="i01"] .fd-bug-mark').innerText(),'疑似 Bug');
+   assert.equal(await page.locator('#experienceEvents .fd-group.k-other [data-item="i02"] .fd-bug-mark').innerText(),'Bug');
+   assert.equal(await page.locator('#experienceEvents .fd-group.k-confusion .fd-bug-mark').count(),0);
+   assert.equal((await page.locator('[data-filter="bug"]').textContent()).trim(),'Bug 2');
+   await page.locator('[data-filter="bug"]').click();
+   assert.deepEqual(await page.locator('#experienceEvents .fd-view>.fd-group .fd-name').allInnerTexts(),['阻碍','Bug','其他'],'the Bug chip keeps only bugs, in every group they belong to');
+   await page.locator('#eventsTab').click();
+   assert.match(await page.locator('#experienceEvents .fd-sec .fd-legend').first().innerText(),/2 Bug/);
+   await page.locator('[data-filter="bug"]').click();
+ });
  await check('long event sections: heads stick, next heads wait at the bottom, a toggle keeps its head still',async()=>{
    /** 触发路径：用户在回看里展开一个很长的体验事件 → 往下读 → 要能看到当前事件和问题类型、找到下一个，并从吸顶标题直接收起，标题不跳。 */
    const long=structuredClone(ready);long.result.version=2;

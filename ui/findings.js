@@ -1,12 +1,14 @@
 'use strict';
 /* 回看与资料台共用的整理结果视图：按问题类型筛选，「问题」按类型分组，「体验事件」每个事件一段。
+   Bug 是和类型并列的一组（设计没问题、实现出了问题）：一条判断仍有自己的类型，是 bug 时两组都列出。
    调用方持有状态并决定点击去向（回看原地跳转，资料台打开回看）；这里只负责画和接点击。 */
 (function(root){
   const PROBLEM={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
   const OTHER={expectation:'预期',suggestion:'建议',positive:'正向体验',observation:'观察',self_correction:'自我修正'};
   const LABEL={...PROBLEM,...OTHER};
-  const GROUPS=[...Object.keys(PROBLEM),'other'];
-  const GROUP_LABEL={...PROBLEM,other:'其他'};
+  const GROUPS=[...Object.keys(PROBLEM),'bug','other'];
+  const GROUP_LABEL={...PROBLEM,bug:'Bug',other:'其他'};
+  const BUG_LABEL={explicit:'Bug',suspected:'疑似 Bug'};
   const CHEV='<svg class="fd-chev" viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6z"/></svg>';
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const groupOf=kind=>kind in PROBLEM?kind:'other';
@@ -14,7 +16,8 @@
   // One scroll listener per scroller; the desk re-creates the view on every detail render.
   const SCROLLERS=new WeakMap();
 
-  function model(result,activities){
+  // bugs: instance id -> 'explicit' | 'suspected', from the result and the library's BUG links.
+  function model(result,activities,bugs){
     const events=[...(result?.events||[])].sort((a,b)=>a.start-b.start||a.end-b.end);
     const eventById=new Map(events.map(event=>[event.id,event]));
     const tags=new Map(events.map(event=>[event.id,[]]));
@@ -23,15 +26,16 @@
       const said=[...(item.said||[])].sort((a,b)=>a.start-b.start);
       return {id:item.id,kind:item.kind,group:groupOf(item.kind),at:said[0]?.start??item.refers_to?.start??0,
         quote:said.map(ref=>ref.text).filter(Boolean).join(' … '),statement:item.statement||'',screen:item.screen||'',
-        refers:item.refers_to||null,compare:item.compare_to||null,event:item.event_id};
+        refers:item.refers_to||null,compare:item.compare_to||null,event:item.event_id,bug:bugs?.[item.id]||item.bug||null};
     }).sort((a,b)=>a.at-b.at);
     return {events,eventById,tags,items};
   }
-  function counts(items){const value=Object.fromEntries(GROUPS.map(group=>[group,0]));for(const item of items)value[item.group]++;return value;}
+  const inGroup=(item,group)=>group==='bug'?!!item.bug:item.group===group;
+  function counts(items){const value=Object.fromEntries(GROUPS.map(group=>[group,0]));for(const item of items){value[item.group]++;if(item.bug)value.bug++;}return value;}
   // Sizes go through CSSOM: the desk's content policy forbids inline style attributes.
   function sizeBars(container){container.querySelectorAll('[data-flex]').forEach(el=>{el.style.flex=el.dataset.flex;});}
   function bar(count){const present=Object.keys(PROBLEM).filter(kind=>count[kind]);return present.length?`<span class="fd-fp" aria-hidden="true">${present.map(kind=>`<i class="k-${kind}" data-flex="${count[kind]}"></i>`).join('')}</span>`:'<span class="fd-fp is-empty" aria-hidden="true"></span>';}
-  function legend(count){const parts=Object.keys(PROBLEM).filter(kind=>count[kind]).map(kind=>`<span class="k-${kind}"><b>${count[kind]}</b> ${PROBLEM[kind]}</span>`);if(count.other)parts.push(`<span class="k-other"><b>${count.other}</b> 其他</span>`);return parts.length?parts.join(''):'<span>没有整理出判断</span>';}
+  function legend(count){const parts=Object.keys(PROBLEM).filter(kind=>count[kind]).map(kind=>`<span class="k-${kind}"><b>${count[kind]}</b> ${PROBLEM[kind]}</span>`);if(count.bug)parts.push(`<span class="k-bug"><b>${count.bug}</b> Bug</span>`);if(count.other)parts.push(`<span class="k-other"><b>${count.other}</b> 其他</span>`);return parts.length?parts.join(''):'<span>没有整理出判断</span>';}
 
   function create(container,options={}){
     const clock=options.clock||(seconds=>String(Math.round(seconds)));
@@ -41,22 +45,25 @@
     container.classList.add('findings');
     let data=null,view=null;
 
-    const visible=item=>(!state.filter.size||state.filter.has(item.group))&&(!state.activity||view.tags.get(item.event)?.includes(state.activity));
+    const visible=item=>(!state.filter.size||[...state.filter].some(group=>inGroup(item,group)))&&(!state.activity||view.tags.get(item.event)?.includes(state.activity));
     const timeButton=(time,label,extra='')=>`<button type="button" class="fd-jump" data-seek="${time}"${extra}>${escape(label)}</button>`;
-    function row(item,{showEvent}){
+    function row(item,{showEvent,group}){
       const event=view.eventById.get(item.event),refers=item.refers;
       const referred=!refers?'':refers.basis==='earlier_session'?`<span title="${escape(refers.note||'')}">指本场之前</span>`:
         (Math.abs(refers.start-item.at)<1&&Math.abs((refers.end??refers.start)-item.at)<8)?'':timeButton(refers.start,`指 ${clock(refers.start)}–${clock(refers.end??refers.start)}`,` data-event="${escape(item.event)}"`);
       const compared=item.compare?timeButton(item.compare.start,`对照 ${clock(item.compare.start)}`,` data-event="${escape(item.event)}"`):'';
-      const meta=[item.group==='other'?`<span class="fd-kind">${escape(LABEL[item.kind]||item.kind)}</span>`:'',item.screen?`<span class="fd-screen">${escape(item.screen)}</span>`:'',referred,compared,
+      // In the Bug group each row names its own kind; elsewhere a bug carries a small mark.
+      const badge=item.bug&&group!=='bug'?`<span class="fd-bug-mark${item.bug==='suspected'?' is-suspected':''}">${BUG_LABEL[item.bug]}</span>`:'';
+      const kind=group==='other'||group==='bug'?`<span class="fd-kind">${escape(LABEL[item.kind]||item.kind)}${group==='bug'&&item.bug==='suspected'?' · 疑似':''}</span>`:'';
+      const meta=[kind,badge,item.screen?`<span class="fd-screen">${escape(item.screen)}</span>`:'',referred,compared,
         showEvent&&event?`<button type="button" class="fd-event-link" data-goto-event="${escape(event.id)}" title="在「体验事件」里查看这一段">${escape(event.title)}</button>`:''].filter(Boolean).join('');
-      return `<li class="fd-row k-${item.group}" data-item="${escape(item.id)}"><button type="button" class="fd-at" data-seek="${item.at}" data-event="${escape(item.event)}" title="定位到说出口的时刻">${clock(item.at)}</button>`+
+      return `<li class="fd-row k-${group}" data-item="${escape(item.id)}"><button type="button" class="fd-at" data-seek="${item.at}" data-event="${escape(item.event)}" title="定位到说出口的时刻">${clock(item.at)}</button>`+
         `<div class="fd-main">${item.quote?`<p class="fd-quote">${escape(item.quote)}</p>`:''}<p class="fd-stmt">${escape(item.statement)}</p>${meta?`<p class="fd-meta">${meta}</p>`:''}</div></li>`;
     }
     function groups(items,{showEvent,prefix}){
-      return GROUPS.map(group=>{const rows=items.filter(item=>item.group===group);if(!rows.length)return '';const key=prefix+group,folded=state.folded.has(key);
+      return GROUPS.map(group=>{const rows=items.filter(item=>inGroup(item,group));if(!rows.length)return '';const key=prefix+group,folded=state.folded.has(key);
         return `<section class="fd-group k-${group}"><button type="button" class="fd-gh" data-fold="${escape(key)}" aria-expanded="${!folded}"><span class="fd-name">${GROUP_LABEL[group]}</span><small>${rows.length}</small><span class="fd-sp"></span>${CHEV}</button>`+
-          `<ul class="fd-rows"${folded?' hidden':''}>${rows.map(item=>row(item,{showEvent})).join('')}</ul></section>`;}).join('');
+          `<ul class="fd-rows"${folded?' hidden':''}>${rows.map(item=>row(item,{showEvent,group})).join('')}</ul></section>`;}).join('');
     }
     function filterBar(scope){
       const count=counts(scope);
@@ -189,7 +196,7 @@
     });
     return {
       state,
-      update(next){data=next&&next.result?next:null;view=data?model(data.result,data.activities):null;render();},
+      update(next){data=next&&next.result?next:null;view=data?model(data.result,data.activities,data.bugs):null;render();},
       setView(next){state.view=next;render();},
       openEvent,
       counts(){return view?counts(view.items):counts([]);},

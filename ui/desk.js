@@ -126,7 +126,7 @@
       const findings=Findings.create($('deskFindings'),{state:state.findings,clock:short,scroller:$('sessionDetail'),
         onView:view=>document.querySelectorAll('#sessionDetail [data-dview]').forEach(button=>{const on=button.dataset.dview===view;button.classList.toggle('on',on);button.setAttribute('aria-selected',String(on));}),
         onSeek:(time,where)=>call('open_review',s.id,time,where.view,where.view==='events'?where.event:'').catch(error=>toast(error.message))});
-      findings.update({result:detail.result,activities:detail.activities||[]});
+      findings.update({result:detail.result,activities:detail.activities||[],bugs:detail.bugs||{}});
     }
   }
   function dialog(titleText,html,buttons){

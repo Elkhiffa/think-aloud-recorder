@@ -3,11 +3,11 @@
 .findings{
   --fd-ink:var(--ink,#221E19);--fd-muted:var(--muted,#5F574B);--fd-line:var(--rule,var(--line,#DDD5C6));
   --fd-surface:var(--sheet,var(--surface,#FFFDF9));--fd-hover:var(--paper,var(--bg,#F3EDE1));--fd-chip:var(--fill,var(--soft,#EEE8DC));
-  --k-confusion:#3F5D8C;--k-obstacle:#A3532B;--k-cost:#A8861C;--k-negative:#7C4B78;--k-other:#8C8273;
+  --k-confusion:#3F5D8C;--k-obstacle:#A3532B;--k-cost:#A8861C;--k-negative:#7C4B78;--k-bug:#B0233F;--k-other:#8C8273;
   font-size:14px;line-height:1.6;color:var(--fd-ink);overflow-wrap:anywhere
 }
 .findings .k-confusion{--kc:var(--k-confusion)}.findings .k-obstacle{--kc:var(--k-obstacle)}.findings .k-cost{--kc:var(--k-cost)}
-.findings .k-negative{--kc:var(--k-negative)}.findings .k-other{--kc:var(--k-other)}
+.findings .k-negative{--kc:var(--k-negative)}.findings .k-bug{--kc:var(--k-bug)}.findings .k-other{--kc:var(--k-other)}
 .findings p{margin:0;max-width:none;white-space:normal}
 /* Reset only the resting state: a reset on :hover would outrank each button's own padding and border and resize it. */
 .findings button{border:0;background:none;padding:0;border-radius:4px;color:inherit;font:inherit;text-align:left;cursor:pointer}
@@ -47,6 +47,8 @@
 .fd-stmt{font-size:12px;line-height:1.6;color:var(--fd-muted);margin-top:2px}
 .fd-meta{display:flex;flex-wrap:wrap;gap:2px 12px;margin-top:2px;font-size:12px;color:var(--fd-muted)}
 .fd-kind{color:var(--fd-ink)}
+.fd-bug-mark{padding:0 6px;border:1px solid var(--k-bug);border-radius:999px;line-height:16px;color:var(--k-bug)}
+.fd-bug-mark.is-suspected{border-style:dashed}
 .fd-screen::before{content:"界面 "}
 .findings .fd-jump,.findings .fd-event-link{color:var(--fd-muted);text-decoration:underline dotted;text-underline-offset:3px}
 .findings .fd-jump:hover,.findings .fd-event-link:hover{color:var(--fd-ink);text-decoration-style:solid}

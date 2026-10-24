@@ -17,7 +17,7 @@ QUOTE_REACH = 60
 FIX_HEADING = re.compile(r'^#{1,4}[^\n]*转写修正[^\n]*$', re.MULTILINE)
 NOT_WORD = re.compile(r'[\s，。！？、：；,.!?:;“”‘’「」…—\-·]')
 # 记录者报缺陷的说法：明说 bug、归到程序本身、跑测常用的表现词。逐字稿里很少用于设计评价。
-BUG_WORD = re.compile('bug|cocos|引擎|报错|闪退|重叠|裁切|适配|歪了|偏了|偶现|不显示|没显示|超框|看不全|悬空|标错', re.IGNORECASE)
+BUG_WORD = re.compile('bug|cocos|引擎|报错|闪退|重叠|裁切|适配|拉伸|歪了|偏了|偶现|不显示|没显示|超框|看不全|悬空|标错', re.IGNORECASE)
 
 
 def _report_path(vault, name):

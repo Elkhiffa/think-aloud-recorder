@@ -222,6 +222,7 @@ def main(argv=None):
     instances_query.add_argument('--element')
     instances_query.add_argument('--kind', choices=('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion', 'self_correction', 'observation'))
     instances_query.add_argument('--session')
+    instances_query.add_argument('--bug', choices=('explicit', 'suspected', 'any'), help='只看单场标了 bug 的实例：明说、疑似或两者')
     insight_validate = commands.add_parser('insight-validate', help='核对资料库洞察报告里的实例和议题引用')
     insight_validate.add_argument('vault')
     insight_validate.add_argument('report', help='洞察/ 目录下的报告文件名')
@@ -440,7 +441,7 @@ def main(argv=None):
             value = resolve_feedback(args.vault, args.id, args.note)
         elif name == 'instances-query':
             from issue_registry import query_instances
-            value = query_instances(args.vault, args.issue, args.screen, args.element, args.kind, args.session)
+            value = query_instances(args.vault, args.issue, args.screen, args.element, args.kind, args.session, args.bug)
         elif name == 'insight-validate':
             from insight_report import validate_report
             value = validate_report(args.vault, args.report)
