@@ -6,6 +6,7 @@ import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from input_capture import InputRecorder
@@ -30,12 +31,15 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(tracker.finish(6089), [])
 
     def test_genuine_hold_longer_than_reported_bug_is_not_clipped(self):
-        tracker = ButtonStateReconciler()
-        self.down(tracker)
-        for at in range(101, 6000):
-            self.assertEqual(tracker.sample(at, lambda vk: True), [])
-        tracker.observe(dict(type='button', timestamp=6000., device='mouse', code='MouseLeft', down=False))
-        self.assertEqual(tracker.finish(6010), [])
+        """触发路径：用户 → 操作录制 → 实际按住鼠标或 F4 → 长时间未松开 → 不能按键名或时长误删。"""
+        for device, code in (('mouse', 'MouseLeft'), ('keyboard', 'F4')):
+            with self.subTest(device=device, code=code):
+                tracker = ButtonStateReconciler()
+                self.down(tracker, device=device, code=code)
+                for at in range(101, 6000):
+                    self.assertEqual(tracker.sample(at, lambda vk: True), [])
+                tracker.observe(dict(type='button', timestamp=6000., device=device, code=code, down=False))
+                self.assertEqual(tracker.finish(6010), [])
 
     def test_one_false_sample_does_not_split_a_hold(self):
         tracker = ButtonStateReconciler()
@@ -109,6 +113,77 @@ class ReconciliationTests(unittest.TestCase):
                 self.assertNotIn('end_reason', projected['intervals'][1])
             finally:
                 recorder.stop()
+
+
+class StartupStateTests(unittest.TestCase):
+    def source(self):
+        clock = SimpleNamespace(value=100.)
+        source = WindowsInputSource(None, None, clock=lambda: clock.value, capture_all=True)
+        source._capture_started = 100.
+        source.user = SimpleNamespace(GetAsyncKeyState=Mock(side_effect=lambda vk: 0x8000 if vk == 0x73 else 0))
+        source._button_probe = SimpleNamespace(available=lambda: True, raised_foreground=lambda: False)
+        source._controllers = SimpleNamespace(resume=Mock())
+        return source, clock
+
+    def test_startup_stale_state_does_not_create_a_session_long_press(self):
+        """触发路径：用户 → 开始录制 → Windows 遗留 F4 按住状态 → 没有按下事件 → 不应虚构整场长按。"""
+        source, clock = self.source()
+        source._resume_due = 100.
+        source._resume_if_stable()
+        for at in (100.1, 200., 628.7):
+            clock.value = at
+            source._reconcile_buttons()
+        source._pending.extend(source._buttons.finish(628.8))
+        self.assertEqual(source._pending, [])
+        source.user.GetAsyncKeyState.assert_not_called()
+        source._controllers.resume.assert_called_once_with()
+
+    def test_restored_access_does_not_invent_keys_after_a_gap(self):
+        """触发路径：系统 → 录制时键鼠状态暂不可读 → 恢复权限且 F4 状态滞留 → 不应补出新的按下。"""
+        source, clock = self.source()
+        source._emit(dict(type='button', device='keyboard', code='W', down=True, timestamp=100.))
+        source._button_probe.available = lambda: False
+        clock.value = 100.1
+        source._reconcile_buttons()
+        source._button_probe.available = lambda: True
+        clock.value = 100.2
+        source._reconcile_buttons()
+        self.assertEqual([(e['code'], e['down']) for e in source._pending], [('W', True), ('W', False)])
+        self.assertEqual(source._pending[-1]['end_reason'], 'state_unavailable')
+        source.user.GetAsyncKeyState.assert_not_called()
+
+    def test_real_raw_f4_and_mouse_transitions_are_still_recorded(self):
+        """触发路径：用户 → 录制中真实按下并松开 F4、鼠标 → Raw Input → 保留实际键位与准确起止。"""
+        import ctypes as C
+        from input_capture_windows import RawInput
+        source, clock = self.source()
+        raw = RawInput()
+        def get_raw(_handle, _command, buffer, size, _header_size):
+            size._obj.value = C.sizeof(raw)
+            if buffer is None:
+                return 0
+            C.memmove(buffer, C.byref(raw), C.sizeof(raw))
+            return C.sizeof(raw)
+        source.user.GetRawInputData = get_raw
+        source._stamp = lambda: clock.value
+        for at, device, down in ((101., 'keyboard', True), (101.125, 'keyboard', False),
+                                 (102., 'mouse', True), (102.25, 'mouse', False)):
+            clock.value = at
+            raw = RawInput()
+            raw.header.size = C.sizeof(raw)
+            if device == 'keyboard':
+                raw.header.type = 1
+                raw.data.keyboard.vkey = 0x73
+                raw.data.keyboard.flags = 0 if down else 1
+            else:
+                raw.header.type = 0
+                raw.data.mouse.flags = 1 if down else 2
+            source._raw(1)
+        self.assertEqual([(e['code'], e['down'], e['timestamp']) for e in source._pending],
+                         [('F4', True, 101.), ('F4', False, 101.125),
+                          ('MouseLeft', True, 102.), ('MouseLeft', False, 102.25)])
+        self.assertTrue(all('resumed' not in e for e in source._pending))
+        self.assertEqual(source._buttons.finish(6000.), [])
 
 
 class HistoricalCorrectionTests(unittest.TestCase):
