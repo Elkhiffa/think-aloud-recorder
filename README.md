@@ -4,58 +4,122 @@
 
 # Think Aloud Recorder
 
-A think-aloud recorder for game UX research on Windows: record gameplay with your spoken thoughts, review footage and transcript side by side, and hand each session to an AI agent for analysis.
+Windows 游戏体验记录器：录下游戏画面与口述，在独立窗口同步回看录像与口述逐字稿，再交给 AI agent 整理分析。
 
-English | [简体中文](https://github.com/Elkhiffa/think-aloud-recorder/blob/main/README.zh-CN.md)
+简体中文 | [English](README.en.md)
 
-[Download](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [Install the analysis skills](docs/agent-integration.md#skill-安装与更新) · [Changes in 0.10.3](docs/changes-2026-10-24.md)
+[下载](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [安装分析 skill](docs/agent-integration.md#skill-安装与更新) · [0.10.3 改动汇总](docs/changes-2026-10-24.md)
 
 </div>
 
-## What it does
+当前源码版本为 **0.10.3**，本轮改动见 [0.10.3 改动汇总](docs/changes-2026-10-24.md)；此前记录见 [0.9.0](docs/changes-2026-10-22.md)、[0.8.1](docs/changes-2026-10-15.md)、[0.8.0](docs/changes-2026-10-13.md)、[0.7.8](docs/changes-2026-10-09.md)、[2026-10-08 改动汇总](docs/changes-2026-10-08.md) 和 [2026-09-28 改动汇总](docs/changes-2026-09-28.md)。
 
-- **Record**: one button records the game window (or a whole display) through a bundled OBS, with your microphone on its own audio track. A short chime confirms that recording has really started.
-- **Transcribe**: the microphone track is transcribed locally with Whisper large-v3, or in the cloud with Qwen using your own Bailian API key. Nothing is uploaded unless you choose the cloud option.
-- **Review**: each session opens in its own review window: the video, a word-level transcript that follows playback, and, if enabled, a timeline of keyboard, mouse and gamepad input. Once an agent has organized the session, a **Problems** tab groups its findings by type (confusion, obstacle, operation cost, negative feedback, other) and an **Experience events** tab walks through it event by event; both filter by type and every time jumps the video.
-- **Organize**: the desk window lists every session of a game with its state and problem mix, and shows the insight reports an agent writes into the library, with every quote linked back to the moment it was said.
+## 使用
 
-The recorder has no built-in AI. Analysis is done by an external agent (Codex or Claude) using the two skills in this repository; the recorder keeps the raw material and checks the citations in the reports.
+1. 完整解压 Windows x64 便携包，运行 `Think Aloud.exe`。
+2. 第一次打开时，向导依次介绍记录方法，设置麦克风与转写方式，填写游戏名和游戏窗口，选择保存位置。每款游戏是一个项目，各自一个资料库文件夹。
+3. 以后在主窗口顶部点游戏名切换游戏，点 **开始录制**。游戏窗口未打开时，按钮会禁用，旁边醒目地写出原因，并提供“重新检查”和“去设置”。检测不到麦克风时，确认一次后可以只录画面和操作。模型或密钥还没准备好不影响录制：场次先停在“待整理”，准备好后再开始转写。
+4. 结束录制后，主窗口的“上一场”依次显示已保存、转写中、待整理；待整理时可以“复制整理指令”，粘贴给 Codex 或 Claude 整理。全部场次和洞察在“资料台”窗口里查看，回看窗口可以同时打开多个。
 
-## Getting started
+OBS 确认录像开始时会响一声短促柔和的提示音（约 0.2 秒），听到后可以直接切回游戏；这声提示会录进回放用的混音轨，不进入纯口述音轨（使用外放时麦克风也可能收到）。录制中，录制卡片显示时长和所选麦克风的实时音量条，正常状态不显示额外的麦克风说明。开始后说一句话，确认音量条随声音变化；连续约 2 分钟没有明显声音时，在录制按钮上方提示检查静音键、连接与设备选择。音量条只表示口述音轨收到信号，不代表已经识别为人声；硬件静音键未必能报告静音状态。检测中断会显示异常提示，不会停止录像。音量来自 OBS 中独立口述源的输出，不使用游戏声音，也不会额外打开麦克风或保存音量历史。
 
-1. Download the latest Windows x64 package from [Releases](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest), extract the whole folder and run `Think Aloud.exe`.
-2. The first-run setup walks through how to think aloud, the microphone and transcription method, the game and its window, and where to save. Each game gets its own library folder.
-3. Pick the game at the top of the main window and press **Record**. If the game window is missing, the button is disabled and the reason is shown next to it. Without a microphone you can still record picture and input after one confirmation. A missing model or API key does not stop recording: the session waits, and you start its transcription later.
-4. After you stop, the main window shows the latest session as saved, transcribing, and then ready to organize.
+首次设置默认将资料库建在软件父级目录下的 `think-aloud-database`，多个版本放在同一父目录时可沿用此位置。若目录已存在，向导会询问是否使用已有资料库，也可选择其他位置；确认并完成设置后才会创建或使用它。设置了“资料总库”后，新建游戏默认放在 `资料总库\游戏名`。已保存的游戏继续使用原路径，不自动搬动已有资料；把旧的单层资料库改成按游戏分文件夹，用 `scripts/migrate_library_layout.py`（先预览，再加 `--apply` 执行，执行前需退出软件）。
 
-The recorder asks for administrator rights when it starts, so it can record keyboard and mouse input in games that run as administrator; declining keeps everything else working. Requires Windows 10/11 x64 and the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/). The recorder does not install a global Python or change system proxy settings. The interface is in Chinese.
+需要 Windows 10/11 x64 和 [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)。软件不安装全局 Python、不改变系统代理。
 
-## After recording: the analysis skills
+## 软件更新
 
-Two skills in [`skills/`](skills) turn sessions into analysis:
+主窗口打开后自动检查一次 GitHub 正式版，有更新时在左下角的设置按钮上显示红点。「版本与更新」在设置 → 通用里，也可在那里手动点击「检查更新」。下载并校验后，在工作结束时点击「退出并更新」。不会自动下载、安装或弹窗打断录制；预览版需要主动选择。没有 Release、已经是最新版和网络失败会分别显示。
 
-- [`think-aloud-judgments`](skills/think-aloud-judgments): organizes one session into traceable judgment instances (when it was said, which moment it refers to, which screen, and the evidence).
-- [`think-aloud-insight`](skills/think-aloud-insight): works across sessions. It files instances under the issue tree and, from an analysis brief you confirm, writes an insight report in which every claim cites its evidence.
+从 `0.6.1` 起统一使用 `0.6.1 → 0.6.2 → …` 的版本序列，同一份软件在本地和 GitHub 使用相同版本号，不再添加 `preview` 或 `local` 后缀。版本以源码中的 `portable.json` 为准；旧预览版本仍可升级。源码合入后还需单独发布 Release 附件，才会出现在软件的更新检查中。
 
-**Install them once** from the app: the first-run step **准备分析** (prepare analysis) downloads the text recognition component and installs both skills in one click, and can create a 燕云十六声 project with its interface rules ready. On a computer already set up, use Settings → 通用 → 记录方法 → **安装分析 skill**, which copies both skills, which ship with the app, into the skill folders of the agents you have (`%USERPROFILE%\.claude\skills` for Claude Code, `%USERPROFILE%\.codex\skills` for Codex), backing up any older copy first. Click it again after an app update to sync them. Manual steps are in [Skill install and update](docs/agent-integration.md#skill-安装与更新).
+安装沿用当前目录，保留预设、资料库路径、本机密钥、模型、回看偏好和用户词库。录制、保存、整理、导出等工作尚未结束时不能安装；确认更新会关闭全部回看窗口。更新事务保留旧版备份，失败时恢复或给出明确的恢复入口。详见[更新说明与发布准备](docs/updates.md)。
 
-Context tracks and interface path recognition need local text recognition: download the **识别组件** (about 65 MB, pinned packages from files.pythonhosted.org) in Settings → 通用 once; it is kept across updates.
+## 转写方式
 
-When a session is ready, click **复制整理指令** (copy the organize prompt) in the main window or the desk, and paste it to your agent. The recorder never starts an agent, schedules a task or scans the library on its own.
+- **本地 Whisper large-v3**：在本机处理；模型约 3.09 GB，独立于软件包。向导可下载固定版本，或校验并直接引用已有模型文件夹，不复制权重。默认使用 CPU。
+- **Qwen 云端转写**：使用自己的百炼 API Key。选择云端转写后，只将麦克风独立音轨上传到服务提供方，可能产生服务费用。密钥使用当前 Windows 用户的 DPAPI 加密保存，不进入场次导出。
 
-## Updates
+新的 Qwen 录音转写会保留说话人编号。回看按说话时长和麦克风音量推荐记录者，可试听、手动改选、暂不指定或恢复推荐；推荐不等于身份识别，也不能仅凭音量确定离麦克风的距离。旧逐字稿不会自动上传重转写，已有云端任务恢复时沿用原请求，避免升级后重复提交。详见[说话人验证与限制](docs/speaker-labels-validation.md)。
 
-The app checks GitHub for a new release once after it opens and shows a dot on the settings button when one is available. Download and verification run in the background, and the update is installed only when you click **退出并更新** (quit and update), never during a recording. Presets, library paths, keys, models and vocabularies are kept, and the previous version is backed up until the update succeeds. See [updates](docs/updates.md).
+设置 → 通用以「本地转写」「Qwen 转写」两个并列选项呈现转写方式，对所有游戏生效。新预设默认选中本地转写；不会自动下载模型或上传音频。旧版本保存的“仅录制”预设继续保留，编辑时需要明确选择一种转写方式，保存后才生效。
 
-## Privacy
+模型清单固定上游版本和每个文件的 SHA256。支持暂停与断点续传；文件校验通过后才能用于转写。软件升级不要求重新下载模型。换到新软件目录时，可重新引用原模型目录和资料库。
 
-- Recordings, transcripts and analysis stay in your library folder on your computer.
-- Cloud transcription uploads only the microphone track, and only when you choose it. The API key is encrypted with Windows DPAPI for the current user.
-- The recorder never uploads anything silently.
+词库分两份：设置 → 通用里的通用词库（如 UI/UX 术语）对所有游戏生效；设置 → 游戏里的游戏词库和补充词条只用于这款游戏，转写时两者合并。都支持多选 TXT / 搜狗 SCEL 词库，展示文件名与词数，可查看词条或逐项移除，重复词条自动合并。提供[搜狗官方词库下载入口](https://pinyin.sogou.com/dict/)。词库内容随设置保存，原文件移动后仍可使用；需要更新内容时重新选择文件。
 
-## Building from source
+软件安装目录自带 `vocabularies/uiux-terms.txt`，包含 536 个通用 UI/UX、界面控件、焦点状态与游戏交互术语。首次设置和新建预设默认选中，折叠的「语言与词库」也会显示「UI/UX 已选」；展开后点「查看」可阅读实际选用的词条。已有预设与主动移除的词库保持原样，可手动选择该 TXT 加入。词库文件选择器默认打开 `vocabularies` 文件夹，打包仅收录这份内置词表。仓库另提供按用户授权共享的 [燕云十六声词库](vocabularies/README.md)，可下载并手动加入游戏预设。详见[词库说明](docs/uiux-vocabulary.md)。
 
-The core is Python with OBS WebSocket; the interface is local HTML/CSS/JavaScript in pywebview/WebView2. No frontend build step or remote web pages.
+## 回看与资料
+
+从场次列表点击 **回看**，打开可拖动、缩放的独立窗口。视频区域固定，逐字稿列表单独滚动。点击原话定位并播放对应视频；当前句自动高亮。手动滚动暂停跟随，点击“恢复跟随”继续。
+
+拖动视频和逐字稿之间的分隔线，可自由调整两边的占用比例。宽窗口左右调整，窄窗口上下调整；两种布局分别记住比例，已打开的多个回看窗口互不影响。双击分隔线恢复默认；分隔线获得焦点时可用方向键微调，Shift 加方向键加大步幅，Enter 恢复默认。缩小窗口会保留两边的基本操作空间，放大后恢复你选择的比例。
+
+播放器使用随软件离线提供的 Plyr 3.8.4。支持点击/拖动进度条、空格播放/暂停、左右方向键前后 15 秒、音量、倍速与全屏。快捷键只影响当前窗口，在搜索框输入时不触发。
+
+顶部片段信息旁提供分体复制按钮，不覆盖录像：直接点击 **复制资料库路径**，复制本场次所属资料库路径，方便交给 agent；点击右侧箭头，可单独复制逐字稿 JSON、视频路径，或打开复盘与逐字稿文档。复制成功后图标变为对号、文字显示 `copied!`，两秒后恢复，不改变视频区域大小。旧场次读取已有时间戳和逐字稿，无须重新转写；导出时生成新版离线网页。
+
+每个片段可以单独命名：在资料台的场次详情或桌面回看页点击名称旁的铅笔，名称原地变成输入框，回车保存、Esc 放弃。片段名支持长名称（最多 4096 字），留空恢复游戏／项目名称；不会改动预设名称或资料文件夹。后台整理和重新转写会保留这个名字，已打开的桌面回看页会同步更新。离线导出页展示导出时的名称，不提供无法持久保存的改名入口。
+
+## 操作记录
+
+在设置 → 通用中录制范围选择 **游戏窗口** 后，可以勾选「同时记录键鼠与手柄操作」。默认关闭；改为录制整个显示器后自动关闭。启用后，在本次录制期间完整保存键鼠与手柄操作，另行记录目标窗口的前后台状态，切出游戏不再停止操作采集。回看默认显示全部操作，也可筛选「仅游戏前台」；筛选只改变显示，不改原始资料。键鼠使用 Windows Raw Input，手柄使用随便携包提供的 SDL2；Windows 手柄优先使用 XInput 路径，保留 DualSense HIDAPI。真实设备兼容性验证范围见 [采集验证记录](docs/input-capture-validation.md)。
+
+键鼠按下以录制期间实际收到的 Raw Input 事件为准；启动、切回游戏或恢复访问权限时，不凭 Windows 当前的按住状态补造操作，以免系统残留状态被误记为整场长按。状态查询只校验已经收到的按下，帮助处理漏掉的松开。开始采集前或权限不可用时按住的键鼠，会从之后实际收到的按下事件开始记录，不推测此前时长；手柄仍可恢复当前状态。
+
+回看页的视频下方可切换「最近按键」「设备图」或收起。选「设备图」时这一栏会加高、视频相应缩小一些，整张设备图（含额外按键）按面板缩放，不用在面板里滚动；切回后视频恢复原尺寸。键鼠与手柄按最近有效操作自动切换，摇杆漂移不会直接抢占显示。右侧「操作时间轴」从左到右为时间刻度、原话、方向、指向、其他按键；按实际起止时间显示长按和重叠，WASD／左摇杆、鼠标移动／右摇杆使用固定轨道，其余按键紧凑排列。
+
+连续摇杆、鼠标移动及扳机的相邻采样显示为活动带，保留内部方向变化，悬停可查看对应时刻的输入。短按键帽至少高 28 像素，显示区域重叠时向右占用空列；缩放后重新排布，宽度不足时只在时间轴内横向滚动。键帽边线表示真实持续时间，扩大显示不会延长按下状态，也不会合并重复按下；已有场次直接使用新版显示，无需重新录制。
+
+每次打开回看时，操作时间轴默认每格 2 秒。鼠标位于时间轴内容区时，滚轮浏览记录而不改变播放进度；位于左侧时间刻度时，滚轮调整缩放。悬停原话条查看内容，点击固定后可拖动浮层，通过关闭按钮关闭。转写尚未完成时，「转写中」页签不可切换；完成后自动变为「原话」，保留当前播放进度、播放状态和倍速。
+
+点击时间刻度或时间轴空白处可定位视频；在时间轴中按住左键上下拖动，可连续调整进度。视频、播放头和当前按键同步更新，播放或暂停状态及倍速保持原样。手动定位后时间轴保留当前浏览范围，点击「恢复跟随」重新跟随播放。直接单击原话条仍固定文本，拖动原话条则调整进度；直接单击按键条保留定位到该次操作的功能。
+
+操作数据单独保存在场次中，不嵌入视频。未开启、真实采集异常、窗口状态未知分别显示；窗口处于后台本身不构成新录制的采集缺口。旧场次保留当时的采集语义；密集的重复缺口在回看中合并呈现，不逐条堆叠，也无法补回过去未保存的操作。操作记录随场次一起导出。
+
+录制状态检查同时检查操作采集是否仍在运行。采集或保存线程中断时，界面提示「录制中 · 操作记录已中断」，保留已确认的操作并标出后续缺口，视频继续录制。首次异常在场次的 `input-capture-diagnostic.json` 中保留发生阶段、异常类型、系统错误码和精简调用栈；不记录栈内变量、代码正文或完整配置。若保存磁盘本身不可写，诊断文件也可能无法落盘。不会自动重启监听或推测缺失操作。
+
+前台窗口状态异常另存 `window-state-diagnostic.json`，只把相应窗口状态标为未知，当前完整采集模式继续保存键鼠和手柄操作。历史操作文件的 `complete` 表示已结束保存，不能据此认定操作覆盖完整；回看仍按有效记录和缺口呈现，没有有效操作时明确说明。
+
+关闭主窗口后，已经打开的回看窗口继续保留；最后一个窗口关闭后程序退出。普通设备检查不再阻止关闭。若仍在录制或整理，会明确询问是否结束录制并等待保存、整理完成后自动关闭，不会悄悄最小化。
+
+主录制窗口安全关闭后，会正常退出本次由记录器启动且已空闲的 OBS，回看窗口仍可继续使用。手动打开的 OBS、正在录制或推流的 OBS，以及无法确认来源或状态的进程都不会被强制结束。升级前请先退出旧版记录器遗留的 OBS；新版不会接管没有启动记录的旧进程。
+
+完整解压导出的场次后，也可以用浏览器打开“独立回看.html”；播放器资源已嵌入网页。浏览器不能直接调用资源管理器时，文件夹按钮会复制路径。
+
+每个场次独立保存原始 MKV、回看 MP4、口述音频、带词级时间戳的逐字稿和 `复盘.md`。重新转写保留旧稿与手写笔记。导出包含所选场次和离线回看网页。已有复盘、历史逐字稿与旧资料库保留，不安装或导出 Obsidian 插件。
+
+录制保存两条音轨：第 1 轨用于游戏声音与麦克风混合回放；第 2 轨仅包含选定麦克风，是唯一转写输入。扬声器传到麦克风的环境声音仍属于实际麦克风输入，音轨分离本身不会消除它。
+
+## 录完以后：分析 skill
+
+记录器不附带 AI agent。录像、转写和文件整理完成后，场次最后生成 `agent-ready.json`，供外部会话读取。没有预处理结果时，录制、转写、回看和导出照常可用。
+
+分析由外部 agent（Codex 或 Claude）按仓库里的两份 skill 完成：单场整理 [`skills/think-aloud-judgments`](skills/think-aloud-judgments) 把一场录制整理成可追溯的判断实例；跨场次分析 [`skills/think-aloud-insight`](skills/think-aloud-insight) 把实例归到议题树，并按你确认的分析简报写洞察报告。
+
+**第一次用之前先安装**：首次设置的“准备分析”一步，一次点击就下载识别组件并装好两份 skill，还可以直接创建燕云十六声项目并装好识别规则（默认勾选）。已经设置过的电脑，在 设置 → 通用 → 记录方法 点「安装分析 skill」，就装进这台电脑已有的 agent 技能目录（Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`），旧副本先备份。软件更新后再点一次即可同步。手动安装见 [Skill 安装与更新](docs/agent-integration.md#skill-安装与更新)。
+
+情景轨道和界面路径识别需要本地文字识别：在 设置 → 通用 下载一次「识别组件」（约 65 MB，固定版本，来自 files.pythonhosted.org），更新软件时保留。
+
+推荐手动选择时机：等场次转写完成，再在主窗口或资料台点「复制整理指令」，粘贴给 agent（见[手动发起一次整理](docs/agent-integration.md#手动发起一次整理)）。只处理指定场次，完成后结束；软件和 skill 都不会自动创建会话、定时任务或常驻扫描。
+
+旧版预处理 skill（think-aloud-preprocess）的结果继续可读：列表显示处理标记，回看增加「体验事件」页签，包含带时间证据的体验事件、值得展开的想法和可选问题。点击事件或证据可定位视频。结果失效或处理失败不影响原有回看；重新处理保留历史，不改逐字稿或笔记。已授权按内容命名时，保留手动标题；没有手动标题时给出简短内容名，完整活动详情单独换行呈现。详见[本地接口与约定](docs/agent-integration.md)。
+
+结果格式 v2 在事件下增加可分别定位“说”和“指”的判断实例，并支持资料库议题标签与跨场次筛选；本地 OCR 情景轨道和界面目录提供取材辅助，见[逐字稿优先的开发版接口](docs/agent-integration.md#逐字稿优先的开发版接口)。
+
+整理过的场次，回看和资料台详情都有同样的两个视图：
+
+- 「问题」：按困惑、阻碍、操作成本、负面评价和其他（预期、建议、观察、正向体验、自我修正）分组，每条写着说出口的时间、原话、整理出的陈述、界面和所属事件；点时间定位录像，“指”定位所指的时刻。
+- 「体验事件」：每个事件一段，收起时看时间、四类计数、概述和活动标签，展开后按类型列出这一段的问题；点活动标签只看带这个活动的事件，播放头所在的那一段自动展开。
+
+两个视图共用一排类型筛选。长列表里，展开的事件和问题类型的标题停在顶部，下一个停在底部，点一下就到；展开、收起时点的那一行不会跳。资料台里点一条问题或一个事件，回看会打开在对应的页签和那一刻。场次文件夹里的“独立回看.html”在整理结果、活动命名或校准变化后自动重写，离线打开也是最新结果。
+
+主窗口的「全部场次」和「洞察」打开当前游戏的资料台窗口（全局只开一个，跟随主窗口的当前游戏）。「场次库」页签是一张按月分组的表格（日期、场次、开始、时长、问题数和四类比例、状态），可搜索，可按状态（已整理、待整理、转写中、失败）和问题类型筛选，按时间或问题数排序；选中一场在右边显示这一场的详情：回看、复制整理指令、复制资料库路径，打开资料文件夹、重新整理、导出、原始录像和恢复云端任务收在「更多」里；问题分布，它挂在哪些洞察下（点一下切到洞察并只看这一场的证据），以及与回看相同的「问题 / 体验事件」两个视图（点一下在回看里打开对应页签和那一刻）。「洞察」页签：左栏是跨场次分析 agent 写进资料库 `洞察/` 的报告，引用可点；右栏按洞察、议题、子议题列出证据卡片，点时间在新窗口打开该场回看并停在那一刻。左栏可切到「界面库」：按系统、玩法标签浏览，点标签只看相关的洞察、议题和子议题；右栏每层显示判断类型分布，点类型或标签都能筛选，可叠加。agent 整理的议题和界面名默认接受；觉得哪个议题、证据或标签不对，点它旁边的铅笔按钮写一句怎么调，反馈存进资料库的 `feedback.json`，「反馈」页签列出全部反馈和处理状态，下一轮 agent 按反馈调整。工具不撰写报告。
+
+## 开发与构建
+
+核心为 Python + OBS WebSocket；界面为本地 HTML/CSS/JavaScript + pywebview/WebView2；耗时转写在独立进程运行。无需前端打包服务或远程网页。
 
 ```powershell
 runtime/python.exe -m unittest discover -s tests
@@ -63,8 +127,30 @@ runtime/python.exe app.py
 runtime/python.exe scripts/build_portable.py --outdir dist/candidate --candidate
 ```
 
-See [build notes](docs/build.md) for the runtime and third-party sources, and [release readiness](docs/release-readiness.md) for publishing. Most documentation is in Chinese.
+准备运行环境、构建范围与依赖源码材料见 [构建说明](docs/build.md)。`--candidate` 生成供本地验证的包；公开二进制发行需满足构建器检查的第三方源码条件。源码许可证不自动涵盖第三方二进制。
 
-## License
+GitHub 首次发行、三件套校验和当前依赖缺口见 [Release 准备状态](docs/release-readiness.md)。发布前运行 `scripts/prepare_release.py`；它仅检查本地产物并准备草稿，不上传文件或公开发布。候选包不能作为软件内更新的发布附件。
 
-Original code is under the [MIT License](LICENSE). Third-party components keep their own licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+实现约定见 [AGENTS.md](AGENTS.md)，体验要求见 [recorder-experience.md](docs/recorder-experience.md)，桌面接口见 [bridge-contract.md](docs/bridge-contract.md)。运行数据、密钥、模型与未经授权共享的个人词库不进入 Git。
+
+## 记录与回看工作台
+
+主窗口是一个 720×520 的录音机，常年开在副屏也不占地方：左侧是占满全高的录制块，写着游戏名和就绪状态；右侧一栏依次是游戏页签、上一场（日期、名称、四类问题的比例条和计数、一句原话）、“全部场次”和“洞察”两张卡，底部是记录方法和设置。录制条件不满足时录制块变灰，原因列在右栏顶部。录制中录制块里只剩计时、麦克风音量和结束按钮。三个窗口都去掉系统标题栏，页面自己画标题区，拖动、贴边、四边改大小仍交给 Windows（`window_chrome.py`）。视觉方向见 `docs/plans/2026-10-19-redesign.md` 第四轮：浅暖纸色底、宋体标题，红色只用于录制和回看播放头；暂只提供浅色。回看选中原话时，以浅暖底色、红色时间戳和时间戳后的竖线标出当前句。
+
+回看初始窗口按所在显示器工作区分配约 90% 宽、92% 高；窗口内先为右侧保留可读宽度，视频使用剩余空间并受实际可用高度约束，始终保持源比例。扩大窗口时视频继续扩大，整段没有有效操作记录时，下方操作区显示紧凑提示。可继续拖动分隔条手动调整；双击分隔条或选中后按 Enter 可重新适配视频。逐字稿独立滚动，视频区域保持固定。
+
+新录制按实际游戏画面比例设置 OBS 画布和输出，在所选画质的尺寸上限内等比缩放，避免把超宽画面固定填入 16:9 画布。旧视频若已有经过核对的黑边显示配置，只改变回看呈现并可切回原画面，不重新编码或改动原视频。
+
+首次设置用“观察、理解、行动、感受”四类口述例子介绍记录方法；这些是可自由选择的提示。之后的设置是一页表单：一级页签“游戏 | 通用”，游戏下面是各个游戏的二级页签；没有修改时只显示“关闭”，有修改时显示“保存”。新建游戏只有“游戏与窗口”“保存位置”两步。平时可从左下角的“记录方法”入口查看。
+
+设置 → 游戏最下方可以「删除这个游戏」。确认框里默认只删除软件里的设置（游戏窗口、游戏词库、补充词条）和页签、资料台中的入口，资料文件夹原样保留；勾选「同时把资料文件夹移到回收站」并输入游戏名称后，文件夹会移到 Windows 回收站，可以还原，过大放不进回收站时 Windows 会先询问。录制中、有场次正在后台转写、或资料文件夹与其他游戏共用（或包含资料总库、软件本身）时，不会移走资料。删除当前游戏后自动切到下一个游戏；删光后回到首次设置前的状态。
+
+新建游戏和首次设置走到“游戏与窗口”这一步时，名称输入框自动获得焦点。设备读取结果和「刷新设备」显示在设置页顶部，首次设置的“设备与转写”一步就能刷新；首次刷新成功后初选系统主显示器与默认麦克风，只填入当前未保存的设置。录制范围和显示器在设置 → 通用里，所有游戏共用。如果无法确认默认设备，会提示手动选择；已有设备时的「刷新设备」保留手动选择。
+
+云端密钥输入框不会回填已保存的密钥；旁边显示保存状态，并提供百炼控制台入口。页面只打开固定的控制台网址，不把输入内容发送到网址中。
+
+0.7.1 支持在回看中校准体验事件的起止时间、名称、概述、问题与感受、备注。原 agent 结果保持不变，手动修正独立保存在 `experience-event-edits.json`。下次整理读取 `evidence.manual_corrections` 的字段差异和 diff，并提交当前 `corrections_review` 采纳说明；漏读或并发新修改会阻止覆盖。事件阅读顺序为概述、具体问题、弱化备注、默认收起的证据。
+
+## 许可证
+
+原创代码采用 [MIT](LICENSE)。第三方组件保留各自许可证，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。不分发 Obsidian 程序本体。
