@@ -561,7 +561,7 @@
     const segment=segments[index],transcription=data.transcription?.state||'ready';
     const signature=JSON.stringify([index,active,segment,data.speakers?.selected_id,data.speakers?.source,transcription]);if(signature===quoteSignature)return;quoteSignature=signature;
     $('currentQuoteLabel').textContent=segment&&active<0?'上一句':'原话';$('currentQuotePanel').classList.toggle('is-previous',active<0);
-    $('currentQuoteText').textContent=segment?.text||(transcription==='pending'?'转写完成后，原话会显示在这里。':transcription==='not_started'?'这一场还没有转写。在主窗口或资料台开始转写后，原话会显示在这里。':transcription==='failed'?'转写未完成，可继续回看录像。':'当前没有原话。');
+    $('currentQuoteText').textContent=segment?.text||(transcription==='pending'?'转写完成后，原话会显示在这里。':transcription==='not_started'?'这一场还没有转写。在主窗口或资料台开始转写后，原话会显示在这里。':transcription==='no_narration'?'这一场录制时没有麦克风，只有画面和操作记录。':transcription==='failed'?'转写未完成，可继续回看录像。':'当前没有原话。');
     $('currentQuoteTime').hidden=!segment;
     if(segment){$('currentQuoteTime').textContent=formatTime(segment.start);$('currentQuoteTime').onclick=()=>seek(segment.start);}
     const tag=$('currentQuoteSpeaker');tag.textContent=segment?speakerLabel(segment.speaker_id):'';$('currentQuoteSpeakerControl').hidden=!tag.textContent;tag.classList.toggle('is-recorder',!!segment&&Number.isInteger(segment.speaker_id)&&data.speakers?.selected_id===segment.speaker_id);
@@ -1124,7 +1124,7 @@
       $('inputPanel').classList.toggle('is-empty',source.intervals.length===0);
       source=filterInputScope(source,state.scope);bands=inputVisualBands(source.intervals,source.gaps);repack();index=intervalIndex(source.intervals);gapIndex=intervalIndex(source.gaps);
       $('inputScopeLabel').hidden=source.recording_scope!=='all';
-      const transcript=data.transcription?.state||'ready',isReady=transcript==='ready';quoteIndex=intervalIndex(isReady?segments.map((item,i)=>({...item,index:i})):[]);$('transcriptTab').disabled=!isReady;$('transcriptTab').textContent=isReady?'原话':transcript==='failed'?'转写失败':transcript==='not_started'?'尚未转写':'转写中';$('transcriptTab').title=data.transcription?.error||'';
+      const transcript=data.transcription?.state||'ready',isReady=transcript==='ready';quoteIndex=intervalIndex(isReady?segments.map((item,i)=>({...item,index:i})):[]);$('transcriptTab').disabled=!isReady;$('transcriptTab').textContent=isReady?'原话':transcript==='failed'?'转写失败':transcript==='not_started'?'尚未转写':transcript==='no_narration'?'没有口述':'转写中';$('transcriptTab').title=data.transcription?.error||'';
       if(!isReady&&state.tab==='transcript')setTab('inputs');
       const message=inputMessage(),gapCount=source.gaps.filter(gap=>!gap.preparation).length;$('timelineState').textContent=message||`${bands.length} 段记录${gapCount?' · '+gapCount+' 处缺口':''}`;$('timelineState').title=source.error||message||`${source.intervals.length} 个原始采样区间；暖色实线为超过 0.5 秒的长按，深色为短按；虚线浅色为合并活动，短横线为实际输入。内容区滚轮浏览，时间刻度区滚轮缩放。`;
       if(source.input_corrections?.excluded_count){$('timelineState').textContent+=` · 已排除 ${source.input_corrections.excluded_count} 段不可信操作`;$('timelineState').title=source.input_corrections.note;}

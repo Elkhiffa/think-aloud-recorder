@@ -101,7 +101,7 @@ $('#updateCheck').onclick=()=>updateAction('check');$('#updateDownload').onclick
 function render(){renderHome();renderGames();renderLast();renderInsight();if(store.draft){completeDeviceSetup();renderDeviceOptions();renderResources();renderVaultChoice();renderVocabulary();}renderControls();const a=store.activity;const signature=JSON.stringify([a.kind,a.status,a.detail]);if(signature!==lastActivitySignature){lastActivitySignature=signature;if(sheetOpen()&&a.status==='操作未完成'&&a.detail)wizardError(a.detail);else if(!sheetOpen()&&store.readiness.ready&&a.status==='操作未完成'&&a.detail)notify('上次操作未完成：'+a.detail);if(sheetOpen()&&actionContext==='verify'&&a.kind==='idle'&&a.detail)setText('cloudFeedback',a.detail);}
  if(!firstSetupHandled&&store.snapshot){firstSetupHandled=true;if(!store.presets.length&&!store.recording)openSheet('first');}}
 // What the ready record block lists under 已就绪: the target and the microphone (with input capture when on).
-function readyLines(){const c=store.saved;const notices=(store.readiness?.notices||[]).map(n=>n.message).filter(Boolean);return [c.source==='整个显示器'?'整个显示器 · '+deviceLabel('monitor',c.monitor):'游戏窗口 · '+deviceLabel('window',c.window),'麦克风'+(c.record_inputs?' · 操作记录':''),...notices];}
+function readyLines(){const c=store.saved,list=store.readiness?.notices||[],noMic=list.some(n=>n.code==='MIC_UNAVAILABLE');const notices=list.map(n=>n.message).filter(Boolean);return [c.source==='整个显示器'?'整个显示器 · '+deviceLabel('monitor',c.monitor):'游戏窗口 · '+deviceLabel('window',c.window),...(noMic?[]:['麦克风'+(c.record_inputs?' · 操作记录':'')]),...notices];}
 function liveSummary(){const c=store.saved;return [c.source==='整个显示器'?'录整个显示器':'只录游戏窗口',String(c.preset||'').split(' ').pop(),c.record_inputs?'操作记录中':'',providerNames[c.transcription_provider]||''].filter(Boolean).join('　');}
 function renderHome(){
  const a=store.activity,r=store.readiness,recording=store.recording;
@@ -243,7 +243,8 @@ function showMicrophone(data={state:'connecting',level:0}){
   muted:['麦克风已静音','录制引擎中的麦克风已静音，请取消静音后确认音量条有变化。'],
   unrouted:['口述音轨未接入','当前麦克风未送入口述音轨。请结束这段录制，检查录制设置后重试。'],
   loud:['音量偏高','声音可能失真，试着离麦克风远一点或降低麦克风增益。'],
-  unavailable:['音量状态暂不可用','暂时无法确认麦克风是否收到声音，正在重试。录像不会因此停止。']
+  unavailable:['音量状态暂不可用','暂时无法确认麦克风是否收到声音，正在重试。录像不会因此停止。'],
+  none:['没有麦克风','这一场只录画面和操作，没有口述。']
  };
  const state=Object.hasOwn(states,data.state)?data.state:'unavailable',copy=states[state];
  $('#microphoneMonitor').dataset.state=state;
@@ -293,7 +294,8 @@ function renderControls(){renderHome();renderUpdates();renderUpdateBadge();const
  renderSheetFoot();}
 $('#methodButton').onclick=()=>showDialog('让想法跟上体验','<div class="method-content">'+$('#methodContent').innerHTML+'</div>');
 $('#methodLink').onclick=()=>showDialog('让想法跟上体验','<div class="method-content">'+$('#methodContent').innerHTML+'</div>');
-$('#recordButton').onclick=()=>{if(store.recording)action('stop_recording');else if(store.canStart)action('start_recording',[store.startPayload()]);};
+// No microphone (user decision 2026-10-24): recording picture and input only is allowed after one confirmation.
+$('#recordButton').onclick=()=>{if(store.recording)action('stop_recording');else if(store.canStart){if((store.readiness?.notices||[]).some(n=>n.code==='MIC_UNAVAILABLE'))showDialog('没有检测到麦克风','<p>这一场只会录下画面和操作记录，没有口述，也不会转写。</p><p>要记录口述，请先连接麦克风再开始录制。</p>',[{label:'只录画面和操作',primary:true,run:()=>action('start_recording',[{without_microphone:true}])}]);else action('start_recording',[store.startPayload()]);}};
 $('#openVault').onclick=()=>action('open_folder');
 $('#settingsButton').onclick=()=>{if(sheetOpen())return;openSheet(store.presets.length?'settings':'first','game');};
 $('#alertMore').onclick=()=>showDialog('录制条件尚未满足','<ol class="alert-list">'+currentBlockers.map(message=>'<li>'+escapeHTML(message)+'</li>').join('')+'</ol>');

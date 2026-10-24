@@ -155,6 +155,14 @@ class ReviewTests(unittest.TestCase):
             _, payload = prepare_window(self.root, recorder.Session(self.folder))
         self.assertEqual(payload['transcription']['state'], 'pending')
 
+    def test_session_recorded_without_a_microphone_has_no_narration(self):
+        # 路径 1：远程访问时确认“只录画面和操作”：回看说“没有口述”，不说“尚未转写”。
+        (self.folder / '录像.whisper.json').unlink()
+        recorder.Session(self.folder).update(state='待整理', transcription_state=None, narration=False)
+        with patch('review_runtime.render_player', wraps=lambda root, payload: render_player(recorder.ROOT, payload)):
+            _, payload = prepare_window(self.root, recorder.Session(self.folder))
+        self.assertEqual(payload['transcription']['state'], 'no_narration')
+
     def test_video_review_opens_while_transcription_owns_processing_lock(self):
         import msvcrt
         (self.folder / '录像.whisper.json').unlink()

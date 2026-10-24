@@ -1912,12 +1912,40 @@ class DesktopServiceTests(unittest.TestCase):
         self.devices['mic'] = []
         state = self.readiness()
         self.assertFalse(state['ready'])
-        self.assertEqual({x['code'] for x in state['errors']}, {'WINDOW_UNAVAILABLE', 'MIC_UNAVAILABLE'})
+        # A missing window blocks; a missing microphone is a notice (user decision 2026-10-24: record picture and input).
+        self.assertEqual({x['code'] for x in state['errors']}, {'WINDOW_UNAVAILABLE'})
         self.assertTrue(all(x['step'] == 1 for x in state['errors']))
         self.assertIn('Synthetic window', str(state['errors']))
-        self.assertIn('Synthetic microphone', str(state['errors']))
+        self.assertEqual([x['code'] for x in state['notices']], ['MIC_UNAVAILABLE'])
+        self.assertIn('Synthetic microphone', state['notices'][0]['detail'])
         self.devices.update(available)
         self.assertTrue(self.readiness()['ready'])
+        self.assertEqual(self.readiness()['notices'], [])
+
+    def test_recording_without_a_microphone_needs_confirmation_and_is_never_transcribed(self):
+        # 路径 1：远程访问时没有麦克风：开录前确认一次，只录画面和操作；结束后不转写，回看说“没有口述”。
+        self.devices['mic'] = []
+        session = self.session(state='录制中')
+        with patch.object(bridge.recorder.Session, 'start', return_value=session) as start, \
+                patch.object(bridge, 'process_isolated') as process:
+            refused = self.service.start_recording({})
+            self.wait()
+            start.assert_not_called()
+            activity = self.service.get_state()['data']['activity']
+            self.assertIn('没有检测到麦克风', str(refused) + activity['status'] + activity['detail'])
+            self.assertTrue(self.service.start_recording({'without_microphone': True})['ok'])
+            self.wait()
+            start.assert_called_once()
+            self.assertIs(bridge.recorder.Session(session.path).meta['narration'], False)
+            self.assertEqual(self.service.get_microphone_state()['data']['state'], 'none')
+            with patch.object(session, 'stop'):
+                self.assertTrue(self.service.stop_recording()['ok'])
+                self.wait()
+            process.assert_not_called()
+        self.assertEqual(bridge.recorder.Session(session.path).meta['state'], '待整理')
+        self.assertIn('没有口述', self.service.get_state()['data']['activity']['status']
+                      + self.service.get_state()['data']['activity']['detail'])
+        self.assertFalse(self.service.process_session(session.meta['id'])['ok'])
 
     def test_missing_cloud_key_is_a_notice_not_a_blocker(self):
         # 路径 1：用户 2026-10-24 定：录制时 API 还没配好也能录，录完再补转写。

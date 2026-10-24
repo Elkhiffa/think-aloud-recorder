@@ -721,6 +721,8 @@ class DesktopService:
             session = self._active
             if session is None:
                 return ok(dict(state='idle', level=0, session_id=None))
+            if session.meta.get('narration') is False:
+                return ok(dict(state='none', level=0, session_id=session.meta['id']))
             mic = session.meta.get('settings', {}).get('mic', '')
             label = self._device_labels['mic'].get(mic) or next(
                 (item.get('itemName') for item in self._devices['mic'] if item.get('itemValue') == mic), None)
@@ -1028,7 +1030,9 @@ class DesktopService:
                             if not value or not available:
                                 label = self._device_label(key, value)
                                 if key == 'mic':
-                                    error('MIC_UNAVAILABLE', f'麦克风“{label}”未连接或不可用，请重新连接或选择麦克风。', 1)
+                                    # 路径 1：用户 2026-10-24 定：没有麦克风也能录画面和操作（远程测试、只录操作），开录前确认一次。
+                                    notices.append(dict(code='MIC_UNAVAILABLE', message='没有麦克风 · 可只录画面和操作',
+                                                        detail=f'麦克风“{label}”未连接或不可用。'))
                                 elif key == 'window':
                                     error('WINDOW_UNAVAILABLE', f'游戏窗口“{label}”未打开或已关闭，请先打开该窗口。', 1)
                                 else:
@@ -1729,6 +1733,9 @@ class DesktopService:
             timer.mark('readiness')
             if not readiness['ready']:
                 raise RuntimeError('\n'.join(item['message'] for item in readiness['errors']))
+            no_microphone = any(item['code'] == 'MIC_UNAVAILABLE' for item in readiness.get('notices', []))
+            if no_microphone and not without_microphone:
+                raise RuntimeError('没有检测到麦克风。确认只录画面和操作后再开始，或连接麦克风后重试。')
             selection = readiness.get('window_selection')
             if cfg.get('source') == '游戏窗口' and selection and selection['status'] == 'matched':
                 if selection['requested'] != cfg.get('window'):
@@ -1737,6 +1744,9 @@ class DesktopService:
             try:
                 session = recorder.Session.start(cfg, progress=progress, mark=timer.mark,
                                                  confirmed=lambda _: self._play_start_chime())
+                if no_microphone:
+                    # No narration track content: never transcribed; review says so.
+                    session.update(narration=False)
                 with self._lock:
                     self._active = session
                 self._report_recording_state(session, '录像已开始。')
@@ -1752,8 +1762,9 @@ class DesktopService:
         with self._lock:
             try:
                 self._guard()
-                if payload not in (None, {}):
+                if payload not in (None, {}, {'without_microphone': True}):
                     raise ValueError('开始录制只使用已保存的预设。请先保存设置，再开始。')
+                without_microphone = payload == {'without_microphone': True}
                 if not self._cfg.get('configured') or not self._cfg.get('active_preset_id'):
                     raise RuntimeError('请先完成并保存录制预设。')
                 cfg = deepcopy(self._cfg)
@@ -1816,6 +1827,10 @@ class DesktopService:
             with self._lock:
                 self._active = None
                 self._uncertain_ids.discard(session.meta['id'])
+            if session.meta.get('narration') is False:
+                session.update(state='待整理')
+                self._progress('录像已保存。这一场没有口述，不需要转写；画面和操作可以直接回看。', status='待整理')
+                return
             if cfg['transcription_provider'] == 'later':
                 session.update(state='待整理')
                 self._progress('录像已保存。可选择转写方式后再整理。', status='待整理')
@@ -1859,6 +1874,8 @@ class DesktopService:
         # now has the same name. Only the chosen transcription engine and its
         # execution options come from the current saved configuration.
         cfg = deepcopy(session.meta['settings'])
+        if session.meta.get('narration') is False:
+            raise RuntimeError('这一场录制时没有麦克风，没有可转写的口述。')
         for key in ('model', 'device', 'compute_type', 'transcription_provider', 'qwen_region', 'qwen_model'):
             if key in self._cfg:
                 cfg[key] = deepcopy(self._cfg[key])

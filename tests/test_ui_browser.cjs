@@ -399,6 +399,25 @@ async function homeChecks(context, origin) {
       await screen(page, 'home-transcription-not-ready-720x520');
     } finally { await patchSnapshot(page, { readiness: snapshot().readiness }); await pollNow(page); }
   });
+  await pageCheck(page, 'no microphone: recording picture and input only starts after one confirmation', async () => {
+    // 用户 2026-10-24 定：远程访问等没有麦克风时也能录画面和操作，开录前确认一次。
+    const notice = '没有麦克风 · 可只录画面和操作';
+    try {
+      await patchSnapshot(page, { readiness: { ...snapshot().readiness, notices: [{ code: 'MIC_UNAVAILABLE', message: notice }] } });
+      await pollNow(page);
+      assert.equal(await page.locator('#recordButton').isEnabled(), true);
+      assert.deepEqual(await page.locator('#homeStatus span').allInnerTexts(), ['已就绪', '游戏窗口 · 示例游戏窗口（合成测试）', notice]);
+      const before = (await calls(page, 'start_recording')).length;
+      await page.locator('#recordButton').click();
+      await page.locator('#actionDialog[open]').waitFor();
+      assert.match(await page.locator('#actionBody').innerText(), /只会录下画面和操作记录/);
+      assert.equal((await calls(page, 'start_recording')).length, before, 'nothing starts before the confirmation');
+      await screen(page, 'home-no-microphone-confirm-720x520');
+      await page.locator('#actionFooter button', { hasText: '只录画面和操作' }).click();
+      await page.waitForFunction(count => window.__syntheticFixture.calls.filter(call => call.method === 'start_recording').length > count, before);
+      assert.deepEqual((await calls(page, 'start_recording')).at(-1).args, [{ without_microphone: true }]);
+    } finally { await patchSnapshot(page, { readiness: snapshot().readiness }); await pollNow(page); }
+  });
   await pageCheck(page, 'game tabs: the current game is marked, others switch through select_preset, ＋ opens a new game', async () => {
     assert.deepEqual(await page.locator('#gameTabs [data-game]').evaluateAll(nodes => nodes.map(n => [n.dataset.game, n.classList.contains('on'), n.getAttribute('aria-current')])), [['synthetic-one', true, 'page'], ['synthetic-two', false, null]]);
     assert.equal(await page.locator('#gameTabs .g.on').innerText(), snapshot().config.game);
@@ -609,6 +628,7 @@ async function homeChecks(context, origin) {
     } finally { await patchSnapshot(page, { sessions: snapshot().sessions, background_jobs: snapshot().background_jobs }); await page.locator('#openLibrary').waitFor(); }
   });
   await pageCheck(page, 'recording keeps only the clock, the microphone gauge and a prompt; settings and game switching lock', async () => {
+    const startsBefore = (await calls(page, 'start_recording')).length;
     try {
       await patchSnapshot(page, { activity: { kind: 'recording', busy: false, status: '录制中', active_id: 'synthetic-recording', elapsed_seconds: 84 }, readiness: { ready: false, checking: false, errors: [] } });
       await page.waitForFunction(() => document.querySelector('#capturePanel').classList.contains('recording'));
@@ -628,7 +648,7 @@ async function homeChecks(context, origin) {
       for (const selector of ['#recordButton', '#liveClock', '#microphoneMonitor', '#livePrompt']) await assertInsideViewport(page, selector);
       await screen(page, 'home-recording-720x520');
       await page.locator('#recordButton').click(); assert.equal((await calls(page, 'stop_recording')).length, 1);
-      assert.equal((await calls(page, 'start_recording')).length, 0);
+      assert.equal((await calls(page, 'start_recording')).length, startsBefore, 'the button stops while recording; it never starts');
     } finally {
       await patchSnapshot(page, { activity: snapshot().activity, readiness: snapshot().readiness });
       await page.waitForFunction(() => !document.querySelector('#capturePanel').classList.contains('recording') && !document.querySelector('#recordButton').disabled);
