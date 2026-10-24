@@ -82,7 +82,7 @@ def main():
         assert checks['record_engine'], '缺少 OBS 录制引擎'
         assert (root / 'ui/index.html').is_file(), '缺少桌面界面'
         assert (root / 'player.html').is_file(), '缺少独立回看模板'
-        for asset in ('review.js', 'review.css', 'vendor/plyr/plyr.min.js', 'vendor/plyr/plyr.css', 'vendor/plyr/plyr.svg'):
+        for asset in ('review.js', 'review.css', 'findings.js', 'findings.css', 'vendor/plyr/plyr.min.js', 'vendor/plyr/plyr.css', 'vendor/plyr/plyr.svg'):
             assert (root / 'ui' / asset).is_file(), '缺少回看资源：' + asset
         import ctypes
         import hashlib

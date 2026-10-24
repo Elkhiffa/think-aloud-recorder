@@ -1303,10 +1303,10 @@ OFFICE = """# 办公室回看
 迁移时复制完整资料库，再在记录器设置中选择新目录。可将场次文件夹路径交给 agent 分析录像、逐字稿与复盘。
 """
 
-def make_player(p, meta, segments):
+def make_player(p, meta, segments, payload=None):
     from review_runtime import render_player, review_payload
     temporary=p/('独立回看.html.'+uuid.uuid4().hex+'.tmp')
-    temporary.write_text(render_player(ROOT, review_payload(p, meta, segments)), encoding='utf-8')
+    temporary.write_text(render_player(ROOT, payload or review_payload(p, meta, segments)), encoding='utf-8')
     try:
         for attempt in range(40):
             try:os.replace(temporary,p/'独立回看.html');return

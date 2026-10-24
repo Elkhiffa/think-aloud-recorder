@@ -254,3 +254,13 @@ progress{width:100%;height:6px;accent-color:var(--ink)}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 *{scrollbar-width:thin;scrollbar-color:var(--fill2) transparent}
+
+/* 设置 · 通用：超过一屏时左侧分节导航（仍是一整页滚动）；更新说明放在按钮下面，过长时折叠 */
+#panelGeneral.has-nav{display:grid;grid-template-columns:88px minmax(0,1fr);column-gap:var(--s4);align-items:start}
+.section-nav{position:sticky;top:0;display:flex;flex-direction:column;padding-top:var(--s1)}
+.section-nav a{padding:var(--s1) var(--s2);border-left:2px solid var(--rule);font-size:var(--t1);line-height:20px;color:var(--muted);text-decoration:none}
+.section-nav a:hover{color:var(--ink)}
+.section-nav a.on{border-left-color:var(--ink);color:var(--ink);font-weight:700}
+.update-notes.clamped{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:6;overflow:hidden}
+#updateNotesMore{justify-self:start;margin-top:var(--s1)}
+#methodLink{justify-self:start}

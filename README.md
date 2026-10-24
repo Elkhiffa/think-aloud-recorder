@@ -16,7 +16,7 @@ English | [简体中文](https://github.com/Elkhiffa/think-aloud-recorder/blob/m
 
 - **Record**: one button records the game window (or a whole display) through a bundled OBS, with your microphone on its own audio track. A short chime confirms that recording has really started.
 - **Transcribe**: the microphone track is transcribed locally with Whisper large-v3, or in the cloud with Qwen using your own Bailian API key. Nothing is uploaded unless you choose the cloud option.
-- **Review**: each session opens in its own review window: the video, a word-level transcript that follows playback, and, if enabled, a timeline of keyboard, mouse and gamepad input.
+- **Review**: each session opens in its own review window: the video, a word-level transcript that follows playback, and, if enabled, a timeline of keyboard, mouse and gamepad input. Once an agent has organized the session, a **Problems** tab groups its findings by type (confusion, obstacle, operation cost, negative feedback, other) and an **Experience events** tab walks through it event by event; both filter by type and every time jumps the video.
 - **Organize**: the desk window lists every session of a game with its state and problem mix, and shows the insight reports an agent writes into the library, with every quote linked back to the moment it was said.
 
 The recorder has no built-in AI. Analysis is done by an external agent (Codex or Claude) using the two skills in this repository; the recorder keeps the raw material and checks the citations in the reports.

@@ -139,6 +139,10 @@ async function main(){
     const cardBox=await card.boundingBox();assert.ok(cardBox.y+cardBox.height>top2.y+top2.height,'card scrolls beneath the sticky rows');
     await page.waitForFunction(()=>!document.querySelector('#nextBar').hidden);
     assert.match(await page.locator('#nextBar').textContent(),/BUG/);
+    const look=await page.evaluate(()=>{const css=node=>{const s=getComputedStyle(node);return [s.backgroundColor,s.fontSize,s.fontWeight,s.paddingLeft].join('|');};
+      return [css(document.querySelector('#nextBar [data-next="issue-BUG"]').closest('.row')),css(document.querySelector('#issue-BUG>.row')),
+        css(document.querySelector('#nextBar [data-next="issue-BUG"]')),css(document.querySelector('#issue-BUG>.row>.toggle'))];});
+    assert.equal(look[0],look[1],'the pinned 洞察 row has the row background and padding');assert.equal(look[2],look[3],'and the row title type');
     await page.locator('#nextBar [data-next="issue-BUG"]').click();await page.waitForTimeout(700);
     const bug=await page.locator('#issue-BUG>.row').boundingBox();assert.ok(bug.y>=head.y+head.height-2&&bug.y<450,'next 洞察 is brought up into view');
     // At the end of a 议题 its row is pushed up; it must slide under the 洞察 row, not cover it.
@@ -156,6 +160,27 @@ async function main(){
       return bad;});
     assert.deepEqual(toolbarCovered,[],'toolbar is never covered by sticky rows');
     assert.equal(await page.locator('#evidencePane #expandAll').count(),0,'expand and collapse sit in the column head, outside the scrolling list');
+    await page.locator('#collapseAll').click();
+  });
+  await check('collapsing a stuck 洞察 keeps its row in place; the run-out only scrolls up and shrinks away',async()=>{
+    // Trigger path: the user reads to the end of the last 洞察 and folds it from its stuck row.
+    await page.locator('#tabEvidence').click();await page.locator('#expandAll').click();
+    const result=await page.locator('#evidencePane').evaluate(async pane=>{
+      const wait=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      pane.scrollTop=pane.scrollHeight;await wait();
+      const tops=[...document.querySelectorAll('#evidenceList>section')],line=document.querySelector('.evidence-head').getBoundingClientRect().bottom+2;
+      const stuck=tops.filter(section=>section.getBoundingClientRect().top<=line).at(-1),button=stuck.querySelector(':scope>.row>.toggle');
+      const before=button.getBoundingClientRect().top;button.click();await wait();
+      const after=button.getBoundingClientRect().top,runOut=document.querySelector('#evidencePane .run-out')?.offsetHeight||0;
+      const held=pane.scrollTop;pane.scrollTop+=200;await wait();const down=pane.scrollTop-held;
+      pane.scrollTop-=60;await wait();const shrunk=document.querySelector('#evidencePane .run-out')?.offsetHeight||0;
+      pane.scrollTop=0;await wait();
+      return {before,after,runOut,down,shrunk,gone:!document.querySelector('#evidencePane .run-out')};});
+    assert.ok(Math.abs(result.after-result.before)<=1,'the clicked row does not move');
+    assert.ok(result.runOut>0,'a run-out holds the row when the list got shorter');
+    assert.equal(result.down,0,'the run-out cannot be scrolled further down');
+    assert.ok(Math.abs(result.runOut-60-result.shrunk)<=1,'scrolling up shrinks the run-out by the same amount');
+    assert.equal(result.gone,true,'the run-out is gone once scrolled away');
     await page.locator('#collapseAll').click();
   });
   await check('busier 议题 come first; references in descriptions are quiet marks that locate the card',async()=>{

@@ -278,6 +278,7 @@ def render_player(root, payload):
         'PLYR_SVG': read('ui/vendor/plyr/plyr.svg'),
         'LICENSE': read('licenses/Plyr-MIT.txt').replace('--', '—'),
         'CSS': read('ui/review.css'), 'JS': read('ui/review.js'),
+        'FINDINGS_CSS': read('ui/findings.css'), 'FINDINGS_JS': read('ui/findings.js').replace('</script', '<\\/script'),
         # Inlined into a page under state/reviews: point the font faces at ui/fonts by absolute address.
         'FONTS': read('ui/fonts.css').replace('url(fonts/', 'url(' + (root / 'ui/fonts').resolve().as_uri() + '/'),
     }
@@ -285,7 +286,7 @@ def render_player(root, payload):
     return re.sub(r'%%([A-Z_]+)%%', lambda match: values[match[1]], read('player.html'))
 
 
-def prepare_window(root, session, initial_time=None):
+def prepare_window(root, session, initial_time=None, focus=None):
     # The processing lock can span hours of transcription. Readers only consume
     # atomically published files, so opening a video never waits on that lock.
     payload = session_review_payload(session.path, desktop=True)
@@ -294,6 +295,12 @@ def prepare_window(root, session, initial_time=None):
         if type(initial_time) not in (int, float) or not math.isfinite(initial_time) or initial_time < 0:
             raise ValueError('回看定位时间无效。')
         payload['initial_time'] = float(initial_time)
+    if focus is not None:
+        # Path 1: a desk click opens 问题, or 体验事件 with its event expanded.
+        if (not isinstance(focus, dict) or focus.get('tab') not in ('problems', 'events')
+                or not isinstance(focus.get('event', ''), str) or len(focus.get('event', '')) > 200):
+            raise ValueError('回看页签无效。')
+        payload['initial_focus'] = dict(tab=focus['tab'], event=focus.get('event', ''))
     directory = Path(root) / 'state/reviews'
     directory.mkdir(parents=True, exist_ok=True)
     page = directory / (uuid.uuid4().hex + '.html')

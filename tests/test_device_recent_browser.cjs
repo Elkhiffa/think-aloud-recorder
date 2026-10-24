@@ -49,7 +49,7 @@ const fixture = {
 };
 const sources = Object.fromEntries(['player.html', 'ui/review.js', 'ui/review.css'].map(file => [file, read(file)]));
 const substitutions = {
-  TITLE: fixture.title, DATA: JSON.stringify(fixture), CSS: sources['ui/review.css'], JS: sources['ui/review.js'],
+  TITLE: fixture.title, DATA: JSON.stringify(fixture), CSS: sources['ui/review.css'], JS: sources['ui/review.js'], FINDINGS_JS: read('ui/findings.js'), FINDINGS_CSS: read('ui/findings.css'),
   FONTS: '', PLYR_CSS: read('ui/vendor/plyr/plyr.css'), PLYR_JS: read('ui/vendor/plyr/plyr.min.js'),
   PLYR_SVG: read('ui/vendor/plyr/plyr.svg'), LICENSE: 'Synthetic device recent browser acceptance',
 };

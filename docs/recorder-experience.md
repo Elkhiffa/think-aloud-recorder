@@ -1,5 +1,7 @@
 # Recorder experience contract
 
+> **Superseded.** This describes the window before the 2026-10-19 redesign. The current main window, settings and desk are in `docs/plans/2026-10-19-redesign.md`; review and the desk detail (问题 / 体验事件) are described in `README.zh-CN.md` under 回看与资料.
+
 The daily screen contains one primary action: Start recording. A compact preset
 selector chooses the game/project configuration; New/Edit are secondary actions.
 Each preset independently stores output vault, capture mode/target, microphone,

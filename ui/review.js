@@ -248,7 +248,7 @@
   function inputHighlight(item,time){if(!item||time<item.start)return 0;return time<item.end?1:Math.max(0,1-(time-item.end)/2)*.7;}
   if(typeof module==='object'&&module.exports){module.exports={formatTime,activeSegment,splitBounds,sourceFit,videoFrame,videoPlacement,inputChannel,axisDirection,compactGaps,gapVisualBands,normalizeInputs,filterInputScope,windowStateAt,windowStateBands,inputBackgroundMask,startupPreparation,initialReviewTime,inputLabel,inputVisualBands,inputSampleAt,packInputIntervals,intervalIndex,intervalsInRange,meaningfulDevice,recentInputs,anchoredZoom,timelinePointerTime,timelineGesture,isLongPress,playheadDirection,visibleLabelTop,inputHighlight};return;}
   const data=JSON.parse(document.getElementById('review-data').textContent);
-  const $=id=>document.getElementById(id),video=$('video'),lines=$('lines');
+  const $=id=>document.getElementById(id),video=$('video'),lines=$('lines'),Findings=root.ThinkAloudFindings;
   let segments=Array.isArray(data.segments)?data.segments:[],nodes=[],inputUI=null;
   let previewInputOffset=null;
   function frameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{window.pywebview?.api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
@@ -298,7 +298,7 @@
   video.addEventListener('seeking',keepInitialPosition,{once:true});
   const status=(message,error=false)=>{$('status').textContent=message;$('status').classList.toggle('error',error);};
   const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-  function updateTitle(){const title=data.session_name||data.title||data.game||'体验片段';$('title').textContent=title;$('title').title=title;document.title=title+' · 回看';const date=new Date(data.created);const created=Number.isNaN(date.getTime())?'':date.toLocaleString('zh-CN',{year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});const info=data.preprocessing||{},count=info.state==='complete'&&Number.isInteger(info.events)?`<span class="preprocessing-count">预处理 ${info.events} 个事件</span>`:'';$('sessionInfo').innerHTML=escape(data.game||'')+count+(created?`<span class="session-created"> · ${escape(created)}</span>`:'');$('sessionContent').textContent=data.activity_details||'';}
+  function updateTitle(){const title=data.session_name||data.title||data.game||'体验片段';$('title').textContent=title;$('title').title=title;document.title=title+' · 回看';const date=new Date(data.created);const created=Number.isNaN(date.getTime())?'':date.toLocaleString('zh-CN',{year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});const info=data.preprocessing||{},kinds=Array.isArray(info.result?.instances)?Findings.counts(Findings.model(info.result,[]).items):info.kinds||{},spread=Object.entries(Findings.PROBLEM).filter(([kind])=>kinds[kind]).map(([kind,label])=>`${kinds[kind]} ${label}`).join(' · '),version2=info.state==='complete'&&Findings.isVersion2(info.result),count=info.state!=='complete'?'':`<span class="preprocessing-count">${version2?spread||'没有整理出问题':Number.isInteger(info.events)?info.events+' 个体验事件':''}</span>`;$('sessionInfo').innerHTML=escape(data.game||'')+count+(created?`<span class="session-created"> · ${escape(created)}</span>`:'');$('sessionContent').textContent=data.activity_details||'';}
   updateTitle();
   $('testLabel').hidden=!data.test;
   const layout=document.querySelector('.review-layout'),splitter=$('reviewSplitter');
@@ -728,7 +728,11 @@
     returnToPlayhead.title='回到当前播放位置并恢复跟随';$('inputTimelinePanel').append(returnToPlayhead);
     returnToPlayhead.onclick=()=>{hideInputDetail();setFollow(true);};
     const inputDetail=document.createElement('div');inputDetail.id='inputDetail';inputDetail.className='input-detail';inputDetail.setAttribute('role','tooltip');inputDetail.hidden=true;document.body.append(inputDetail);
-    const initialTab=(!data.inputs||['disabled','missing','unavailable'].includes(data.inputs.state))&&(data.transcription?.state||'ready')==='ready'?'transcript':'inputs';
+    const preprocessed=data.preprocessing?.state==='complete'?data.preprocessing.result:null,focusTab=data.initial_focus?.tab;
+    // Q6: a session with judgment instances opens on 问题; a desk click can ask for 体验事件 instead.
+    const initialTab=preprocessed&&Findings.isVersion2(preprocessed)?(['problems','events'].includes(focusTab)?focusTab:'problems'):
+      (!data.inputs||['disabled','missing','unavailable'].includes(data.inputs.state))&&(data.transcription?.state||'ready')==='ready'?'transcript':'inputs';
+    let findings=null,focusApplied=false;
     // Start at 32 px/second: the ruler shows a 2-second interval per grid cell.
     const state={mode:'keys',device:'auto',scope:'all',tab:initialTab,scale:32,viewStart:0,follow:true,signature:'',revision:0,needsRender:false,quote:null,pinned:false,lastInput:'',renderKey:'',lastClock:-1,stopped:false};
     let source=normalizeInputs(data.inputs,previewInputOffset),bands=inputVisualBands(source.intervals,source.gaps),packed=packInputIntervals(bands,{scale:state.scale}),index=intervalIndex(source.intervals),displayIndex=intervalIndex(packed.items,'displayEnd'),gapIndex=intervalIndex(source.gaps),quoteIndex=intervalIndex(segments.map((item,i)=>({...item,index:i}))),renderStart=0,raf=0;
@@ -751,9 +755,10 @@
     function inputMessage(){if(source.state==='disabled'&&source.error?.includes('旧场次'))return '旧场次没有操作记录';if(source.state==='complete'&&!source.intervals.length&&source.gaps.some(gap=>gap.discarded_events))return '本片段未保存有效操作记录';return ({missing:'此场次没有操作记录',disabled:'此场次未启用操作记录',failed:'操作记录采集失败',unavailable:'操作记录文件不可用',invalid:'操作记录文件不可用',interrupted:'操作记录未完整保存',pending:'操作记录正在保存',recording:'操作记录正在保存'}[source.state]||'');}
     function gapName(gap){return gap.preparation?'录制准备':({focus:'已切出目标程序',focus_lost:'已切出目标程序',disconnect:'设备连接中断',device_disconnected:'设备连接中断',error:'采集异常'}[gap.type]||'采集缺口');}
     function seekKeep(time,followPlayback=true){if(!video.readyState)return;const limit=Number.isFinite(video.duration)?video.duration:duration();video.currentTime=Math.max(0,Math.min(limit,time));setFollow(followPlayback);render(followPlayback);}
-    function setTab(tab){if(tab==='transcript'&&$('transcriptTab').disabled)return;if(tab==='events'&&$('eventsTab').hidden)return;state.tab=tab;$('inputTab').setAttribute('aria-selected',String(tab==='inputs'));$('transcriptTab').setAttribute('aria-selected',String(tab==='transcript'));$('eventsTab').setAttribute('aria-selected',String(tab==='events'));$('inputTimelinePanel').hidden=tab!=='inputs';lines.hidden=tab!=='transcript';$('transcriptTools').hidden=tab!=='transcript';$('transcriptSearch').hidden=tab!=='transcript';$('experienceEvents').hidden=tab!=='events';$('follow').hidden=tab==='events';$('empty').hidden=tab!=='transcript'||nodes.some(node=>!node.hidden);closeQuote();if(tab==='transcript')scrollCurrent();else if(tab==='inputs')render(true);}
-    $('inputTab').onclick=()=>setTab('inputs');$('transcriptTab').onclick=()=>setTab('transcript');$('eventsTab').onclick=()=>setTab('events');
-    for(const button of [$('inputTab'),$('transcriptTab'),$('eventsTab')])button.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const tabs=[$('inputTab'),$('transcriptTab'),$('eventsTab')].filter(tab=>!tab.hidden&&!tab.disabled),i=tabs.indexOf(button);const next=event.key==='Home'?tabs[0]:event.key==='End'?tabs.at(-1):tabs[(i+(event.key==='ArrowLeft'?-1:1)+tabs.length)%tabs.length];if(next){next.click();next.focus();}}});
+    // 「问题」「体验事件」是同一份整理结果的两个视图，共用一个面板和一组筛选（ui/findings.js）。
+    function setTab(tab){if(tab==='transcript'&&$('transcriptTab').disabled)return;if(tab==='events'&&$('eventsTab').hidden)return;if(tab==='problems'&&$('problemsTab').hidden)return;state.tab=tab;const findingsTab=tab==='problems'||tab==='events';$('inputTab').setAttribute('aria-selected',String(tab==='inputs'));$('transcriptTab').setAttribute('aria-selected',String(tab==='transcript'));$('problemsTab').setAttribute('aria-selected',String(tab==='problems'));$('eventsTab').setAttribute('aria-selected',String(tab==='events'));$('inputTimelinePanel').hidden=tab!=='inputs';lines.hidden=tab!=='transcript';$('transcriptTools').hidden=tab!=='transcript';$('transcriptSearch').hidden=tab!=='transcript';$('experienceEvents').hidden=!findingsTab;$('experienceEvents').setAttribute('aria-labelledby',tab==='problems'?'problemsTab':'eventsTab');if(findings&&findingsTab&&findings.state.view!==tab)findings.setView(tab);$('follow').hidden=findingsTab;$('empty').hidden=tab!=='transcript'||nodes.some(node=>!node.hidden);closeQuote();if(tab==='transcript')scrollCurrent();else if(tab==='inputs')render(true);}
+    $('inputTab').onclick=()=>setTab('inputs');$('transcriptTab').onclick=()=>setTab('transcript');$('problemsTab').onclick=()=>setTab('problems');$('eventsTab').onclick=()=>setTab('events');
+    for(const button of [$('inputTab'),$('transcriptTab'),$('problemsTab'),$('eventsTab')])button.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(event.key)){event.preventDefault();const tabs=[$('inputTab'),$('transcriptTab'),$('problemsTab'),$('eventsTab')].filter(tab=>!tab.hidden&&!tab.disabled),i=tabs.indexOf(button);const next=event.key==='Home'?tabs[0]:event.key==='End'?tabs.at(-1):tabs[(i+(event.key==='ArrowLeft'?-1:1)+tabs.length)%tabs.length];if(next){next.click();next.focus();}}});
     const eventDialog=$('eventDialog'),eventForm=$('eventForm');let editingEvent=null,eventSaving=false;
     const eventFields=['title','summary','issue','notes'];
     const editClock=seconds=>{const n=Math.round(seconds*1000);return `${formatTime(n/1000)}.${String(n%1000).padStart(3,'0')}`;};
@@ -783,10 +788,26 @@
     let eventSignature='';
     function updateEvents(){
       const info=data.preprocessing||{state:'none'},signature=JSON.stringify(info);if(signature===eventSignature)return;eventSignature=signature;
-      const result=info.state==='complete'?info.result:null,notice=$('preprocessingNotice'),panel=$('experienceEvents');
+      const result=info.state==='complete'?info.result:null,notice=$('preprocessingNotice'),panel=$('experienceEvents'),version2=!!result&&Findings.isVersion2(result);
+      const problems=version2?result.instances.filter(item=>item.kind in Findings.PROBLEM).length:0;
+      $('problemsTab').hidden=!version2;$('problemsTab').textContent=`问题 ${problems}`;
       $('eventsTab').hidden=!result;$('eventsTab').textContent=result?`体验事件 ${result.events.length}`:'体验事件';
-      notice.hidden=info.state==='none'||!!result;notice.textContent=[info.label,info.reason].filter(Boolean).join('。');
-      panel.replaceChildren();if(!result){if(state.tab==='events')setTab((data.transcription?.state||'ready')==='ready'?'transcript':'inputs');return;}
+      const messages=version2?[info.notice,info.editing?.error].filter(Boolean):[];
+      notice.hidden=info.state==='none'||(!!result&&!messages.length);notice.textContent=result?messages.join('。'):[info.label,info.reason].filter(Boolean).join('。');
+      if(!result){findings?.update(null);panel.replaceChildren();if(state.tab==='events'||state.tab==='problems')setTab((data.transcription?.state||'ready')==='ready'?'transcript':'inputs');return;}
+      if(version2){
+        if(!findings)findings=Findings.create(panel,{state:{view:state.tab==='events'?'events':'problems'},clock:formatTime,
+          editable:()=>!!(data.desktop&&data.preprocessing?.editing?.result_sha256),
+          onSeek:time=>seekKeep(time,false),
+          onEdit:id=>{const current=data.preprocessing;editEvent(current.result.events.find(event=>event.id===id),current.editing);},
+          onView:view=>{if(state.tab!==view)setTab(view);}});
+        panel.classList.add('findings');findings.update({result,activities:info.activities||[]});findings.setTime(video.currentTime||0);
+        if(!focusApplied&&data.initial_focus?.event){focusApplied=true;const id=data.initial_focus.event;root.requestAnimationFrame(()=>findings.openEvent(id,{playhead:true}));}
+        return;
+      }
+      // Version 1 results have no judgment instances: the events keep their original layout.
+      findings?.update(null);panel.classList.remove('findings');if(state.tab==='problems')setTab('events');
+      panel.replaceChildren();
       const jump=(time,label,cls='event-jump')=>`<button class="${cls}" data-event-time="${time}" title="定位原始录像">${escape(label)}</button>`;
       const basis={explicit:'你明确说出的体验',observed:'从画面与操作整理',inferred:'待核实的推测'},kind={friction:'遇到阻碍',positive:'顺畅体验',routine:'正常过程',question:'疑问'};
       const content=event=>{const parts=String(event.summary||'').split(/(?:^|\n)\s*备注[：:]\s*/),notes=[...parts.slice(1),event.notes].filter(Boolean).join('\n');return `<p class="event-description">${escape(parts[0])}</p>${event.context?`<p class="event-context">上下文：${escape(event.context)}</p>`:''}${event.issue?`<div class="event-issue"><strong>问题与感受</strong><p>${escape(event.issue)}</p></div>`:''}${notes?`<p class="event-notes">备注：${escape(notes)}</p>`:''}`;};
@@ -800,7 +821,7 @@
       panel.innerHTML=`<div class="event-intro"><p>${escape(result.summary)}</p><details class="event-coverage"><summary>查看整理范围与资料限制</summary><p>画面检查：${result.coverage.video_ranges.length?result.coverage.video_ranges.map(r=>`${formatTime(r.start)}–${formatTime(r.end)}`).join('、'):'未检查'}</p><p>原话：${({full:'全部',partial:'部分',none:'未检查'})[result.coverage.transcript]}；操作：${({full:'全部',partial:'部分',none:'未检查'})[result.coverage.inputs]}</p>${result.coverage.limitations.map(s=>`<p>${escape(s)}</p>`).join('')}</details></div>`+
         result.events.map(event=>`<article class="experience-event"><div class="event-meta">${jump(event.start,`${formatTime(event.start)}–${formatTime(event.end)}`)}<span>${escape(kind[event.kind]||'体验')}${event.manually_edited?' · 已校准':''}</span>${data.desktop&&info.editing?.result_sha256?`<button class="event-edit" data-edit-event="${escape(event.id)}" aria-label="编辑体验事件">编辑</button>`:''}</div><h3>${jump(event.start,event.title,'event-title')}</h3><p class="event-basis">${escape(basis[event.basis])}</p>${content(event)}${judgments(event)}<details class="event-evidence"><summary><span class="evidence-expand">展开证据</span><span class="evidence-collapse">收起证据</span> · ${event.evidence.length} 条</summary>${event.evidence.map(ref=>`<div class="event-evidence-row">${jump(ref.start,`${formatTime(ref.start)} · ${{quote:'原话',quote_words:'原话节选',video:'画面',input:'操作'}[ref.kind]}`)}<p${['quote','quote_words'].includes(ref.kind)?' class="event-quote"':''}>${escape(ref.text)}</p></div>`).join('')}</details></article>`).join('')+
         (!result.events.length?'<p class="event-empty">本轮没有提取出有充分依据的体验事件。</p>':'')+related('ideas','idea','值得展开的想法')+related('questions','question','可选补充')+
-        (result.questions?.length?'<p class="event-footnote">这些问题可以之后补充，不影响本轮预处理完成。</p>':'');
+        (result.questions?.length?'<p class="event-footnote">这些问题可以之后补充，不影响本轮整理完成。</p>':'');
       if(info.editing?.error){const error=document.createElement('p');error.className='event-notes';error.textContent=info.editing.error;panel.prepend(error);}
       if(info.notice){const message=document.createElement('p');message.className='preprocessing-notice';message.setAttribute('role','status');message.textContent=info.notice;panel.prepend(message);}
       panel.querySelectorAll('[data-edit-event]').forEach(button=>button.onclick=()=>editEvent(result.events.find(event=>event.id===button.dataset.editEvent),info.editing));
@@ -1000,7 +1021,7 @@
     $('quoteClose').onclick=()=>closeQuote(true);popover.onmouseleave=event=>{if(!state.pinned&&!event.relatedTarget?.closest?.('.quote-bar'))closeQuote();};
     document.addEventListener('click',outsideQuote);document.addEventListener('keydown',escapeQuote);root.addEventListener('resize',clampQuote);root.addEventListener('blur',endQuoteDrag);
     function render(force=false){
-      const time=video.currentTime||0;if(!force&&time===state.lastClock)return;state.lastClock=time;renderInput(time);sync();if(state.tab!=='inputs'||timeline.clientHeight<=0)return;
+      const time=video.currentTime||0;if(!force&&time===state.lastClock)return;state.lastClock=time;renderInput(time);sync();findings?.setTime(time);if(state.tab!=='inputs'||timeline.clientHeight<=0)return;
       const height=timeline.clientHeight,span=height/state.scale;
       if(state.follow)state.viewStart=Math.max(0,Math.min(Math.max(0,duration()-span),time-span*.38));
       else state.viewStart=Math.max(0,Math.min(Math.max(0,duration()-span),state.viewStart));

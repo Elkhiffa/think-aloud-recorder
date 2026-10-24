@@ -6,11 +6,14 @@ locks, background jobs and close guards stay in one place. The desk follows the 
 current game: `rebind` swaps the library without recreating the window.
 """
 import json
+import math
 from pathlib import Path
 
 from insight_runtime import InsightAPI
 
-PROBLEM_KINDS = ('confusion', 'obstacle', 'cost', 'negative')
+REVIEW_TABS = ('problems', 'events')
+EVENT_FIELDS = ('id', 'title', 'start', 'end', 'summary', 'issue', 'notes', 'manually_edited')
+INSTANCE_FIELDS = ('id', 'event_id', 'kind', 'said', 'refers_to', 'compare_to', 'statement', 'screen')
 DESK_METHODS = ('ready', 'get_overview', 'read_report', 'add_feedback', 'set_cover', 'edit_feedback', 'remove_feedback',
                 'thumbnail', 'open_review', 'desk_state', 'session_detail', 'review_session', 'rename_session',
                 'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task')
@@ -71,8 +74,15 @@ class DeskAPI:
     def thumbnail(self, session_id, at, large=False):
         return self._insight.thumbnail(session_id, at, large)
 
-    def open_review(self, session_id, at):
-        return self._insight.open_review(session_id, at)
+    def open_review(self, session_id, at, tab=None, event_id=None):
+        """Path 1: a desk click opens review at that moment, on 问题 or on 体验事件 with the event expanded."""
+        if tab is None:
+            return self._insight.open_review(session_id, at)
+        if type(at) not in (int, float) or not math.isfinite(at) or at < 0:
+            return _error(ValueError('回看定位时间无效。'))
+        if tab not in REVIEW_TABS or not isinstance(event_id, str) or len(event_id) > 200:
+            return _error(ValueError('回看页签无效。'))
+        return self._service.review_at(session_id, at, dict(tab=tab, event=event_id))
 
     # ---- 场次 tab ----
     def desk_state(self):
@@ -88,24 +98,25 @@ class DeskAPI:
                         insight=data.get('insight'), app_dir=data.get('app_dir')))
 
     def session_detail(self, ident):
-        """Quotes grouped by problem kind, the activities, and which insights cite this session."""
+        """The result in the shape review reads (ui/findings.js), its activities, and which insights cite this session."""
         try:
             from agent_protocol import preprocessing_status
             import recorder
             session = self._service._session(ident)
             meta = recorder.read(session.path / 'session.json')
             status = preprocessing_status(session.path, meta, include_result=True)
-            result = status.get('result') or {}
-            quotes = {kind: [] for kind in PROBLEM_KINDS}
-            for item in result.get('instances', []):
-                if item.get('kind') in quotes:
-                    said = (item.get('said') or [{}])[0]
-                    quotes[item['kind']].append(dict(instance=item.get('id'), text=said.get('text', ''), at=said.get('start'),
-                                                     statement=item.get('statement', ''), screen=item.get('screen') or '',
-                                                     confidence=item.get('confidence')))
-            events = [dict(title=row.get('title', ''), start=row.get('start'), end=row.get('end')) for row in result.get('events', [])]
+            result = status.get('result')
+            view = None
+            if isinstance(result, dict):
+                # Only what the two views draw: evidence, receipts and analysis context stay in the session folder.
+                view = dict(events=[{key: row.get(key) for key in EVENT_FIELDS if key in row} for row in result.get('events', [])],
+                            coverage=result.get('coverage'))
+                if 'instances' in result:
+                    view['instances'] = [{key: row.get(key) for key in INSTANCE_FIELDS if key in row}
+                                         for row in result['instances']]
             return _ok(dict(id=ident, state=status.get('state'), label=status.get('label', ''), kinds=status.get('kinds') or {},
-                            quotes=quotes, events=events, insights=self._session_insights(meta.get('id', ident))))
+                            result=view, activities=status.get('activities') or [],
+                            insights=self._session_insights(meta.get('id', ident))))
         except Exception as error:
             return _error(error)
 

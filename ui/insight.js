@@ -62,7 +62,7 @@
     if(row.elements?.length)screen+=' › '+escape(row.elements.join('、'));
     const counter=link?.role==='counter';
     return `<article class="card${counter?' counter':''}" data-key="${escape(key(row.session_id,row.instance_id))}" data-issue="${escape(issue||'')}">${thumb(row.session_id,at,label(row)+' · '+formatTime(at))}<div>`+
-      `<h4 class="card-title"><span class="kind kind-${escape(row.kind)}">${escape(KIND[row.kind]||row.kind)}</span><span>${escape(row.event_title||'未归入活动')}</span>${counter?'<span class="badge">反例</span>':''}</h4>`+
+      `<h4 class="card-title"><span class="kind kind-${escape(row.kind)}">${escape(KIND[row.kind]||row.kind)}</span><span>${escape(row.event_title||'未归入事件')}</span>${counter?'<span class="badge">反例</span>':''}</h4>`+
       `<p class="statement">${escape(row.statement)}</p>`+
       `<div class="aside"><span class="meta">${time}${earlier}${compare}<span>${escape(label(row))}</span>${flag({kind:'instance',session_id:row.session_id,instance_id:row.instance_id,issue:issue&&issue!=='cited'?issue:undefined})}</span><div>界面：${screen}</div>${link?.reason?`<div>归入理由：${escape(link.reason)}</div>`:''}</div></div></article>`;
   }
@@ -269,11 +269,29 @@
     }
     const nextTop=tops[i+1]||(i<0?tops[0]:null);
     if(below(nextTop))items.push([nextTop,1]);
+    // Pinned heads are drawn like the rows themselves; clicking one goes there.
     bar.innerHTML=items.map(([section,level])=>{const toggle=section.querySelector(':scope>.row>.toggle');
-      return `<button type="button" class="next level-${level}" data-next="${escape(section.id)}">${toggle.querySelector('.label').innerHTML}<span class="n">${toggle.querySelector('.n').innerHTML}</span></button>`;}).join('');
+      return `<div class="pin level-${level}${level>1?' nested':''}"><div class="row"><button type="button" class="toggle" data-next="${escape(section.id)}" aria-expanded="${toggle.getAttribute('aria-expanded')}">${toggle.innerHTML}</button></div></div>`;}).join('');
     bar.hidden=!items.length;
   }
   function scheduleStuck(){if(!stuckFrame)stuckFrame=requestAnimationFrame(updateStuck);}
+  // Expanding or collapsing keeps the clicked head where it was on screen (same rules as ui/findings.js). When the
+  // list is then too short for that, a temporary run-out after it holds the head: it can only be scrolled up, and
+  // shrinks by as much as it is scrolled up until the list is its real height again.
+  const runOuts=new Map();
+  function setRunOut(pane,list,value){
+    let node=list.nextElementSibling?.classList.contains('run-out')?list.nextElementSibling:null;
+    if(!value||value.height<=0.5){node?.remove();runOuts.delete(pane);return;}
+    if(!node){node=document.createElement('div');node.className='run-out';node.setAttribute('aria-hidden','true');list.after(node);}
+    node.style.height=value.height+'px';runOuts.set(pane,{...value,list});
+  }
+  function keepHead(pane,list,button,change){
+    const before=button.getBoundingClientRect().top;change();
+    const desired=pane.scrollTop+button.getBoundingClientRect().top-before,max=pane.scrollHeight-pane.clientHeight;
+    setRunOut(pane,list,{height:(runOuts.get(pane)?.height||0)+desired-max,at:desired});
+    pane.scrollTop=desired;const held=runOuts.get(pane);if(held)held.at=pane.scrollTop;
+  }
+  function shrinkRunOut(pane){const held=runOuts.get(pane);if(!held||pane.scrollTop>=held.at)return;setRunOut(pane,held.list,{height:held.height-(held.at-pane.scrollTop),at:pane.scrollTop});}
   function setExpanded(button,expanded){
     button.setAttribute('aria-expanded',String(expanded));
     const body=$(button.getAttribute('aria-controls'));if(body)body.hidden=!expanded;
@@ -411,7 +429,8 @@
     const i=current(groups,box.top+4),next=groups[i+1]||(i<0?groups[0]:null);
     const bottom=box.bottom-(bar.hidden?0:bar.offsetHeight);
     if(next&&next.getBoundingClientRect().top>bottom-4){
-      bar.innerHTML=`<button type="button" class="next level-1" data-lib-next="${escape(next.id)}">${escape(next.dataset.name)}<span class="n">${escape(next.dataset.count)} 条</span></button>`;
+      const toggle=next.querySelector('.lib-toggle');
+      bar.innerHTML=`<div class="lib-group pin"><button type="button" class="lib-toggle" data-lib-next="${escape(next.id)}" aria-expanded="${toggle.getAttribute('aria-expanded')}">${toggle.innerHTML}</button></div>`;
       bar.hidden=false;
     }else bar.hidden=true;
   }
@@ -446,7 +465,7 @@
     if(target.kind==='issue')return issueName(target.id);
     const row=state.instances.get(key(target.session_id,target.instance_id));
     const where=target.issue?`（在“${issueName(target.issue)}”下）`:'';
-    return row?`${KIND[row.kind]||row.kind} · ${row.event_title||'未归入活动'} ${label(row)}${where}`:`${target.session_id} ${target.instance_id}${where}`;
+    return row?`${KIND[row.kind]||row.kind} · ${row.event_title||'未归入事件'} ${label(row)}${where}`:`${target.session_id} ${target.instance_id}${where}`;
   }
   function feedbackForm(value=''){return `<form class="feedback-form"><label class="sr-only" for="feedbackText">哪里不对、该怎么调</label><textarea id="feedbackText" name="text" rows="2" required maxlength="2000" placeholder="哪里不对、该怎么调，例如：这条应该归到“找不到入口”">${escape(value)}</textarea><div class="form-actions"><button type="submit">记下</button><button type="button" data-feedback-cancel>取消</button></div></form>`;}
   function openFlag(button){
@@ -526,11 +545,10 @@
       else{const [session,...rest]=cite.dataset.citeInstance.split('/');goToInstance(session,rest.join('/'),cite.dataset.citeIn||null);}
       return;
     }
-    const button=event.target.closest('.toggle');
+    const button=event.target.closest('.toggle:not([data-next])');
     if(button){
-      const expanded=button.getAttribute('aria-expanded')!=='true';setExpanded(button,expanded);
-      const section=button.closest('section');
-      if(!expanded&&section.getBoundingClientRect().top<document.querySelector('.evidence-head').getBoundingClientRect().bottom)section.scrollIntoView({block:'start'});
+      const expanded=button.getAttribute('aria-expanded')!=='true';
+      keepHead($('evidencePane'),$('evidenceList'),button,()=>setExpanded(button,expanded));
       scheduleStuck();return;
     }
     const next=event.target.closest('[data-next]');
@@ -553,11 +571,10 @@
       return;
     }
     if(!event.target.closest('#menu'))$('menu').hidden=true;
-    const libToggle=event.target.closest('.lib-toggle');
+    const libToggle=event.target.closest('.lib-toggle:not([data-lib-next])');
     if(libToggle){
-      const open=libToggle.getAttribute('aria-expanded')!=='true';libToggle.setAttribute('aria-expanded',String(open));$(libToggle.getAttribute('aria-controls')).hidden=!open;
-      const group=libToggle.closest('.lib-group');
-      if(!open&&group.getBoundingClientRect().top<$('library').getBoundingClientRect().top)group.scrollIntoView({block:'start'});
+      const open=libToggle.getAttribute('aria-expanded')!=='true';
+      keepHead($('library'),$('libraryList'),libToggle,()=>{libToggle.setAttribute('aria-expanded',String(open));$(libToggle.getAttribute('aria-controls')).hidden=!open;});
       scheduleLibStuck();return;
     }
     const libNext=event.target.closest('[data-lib-next]');
@@ -598,9 +615,9 @@
   // Cards and sections scroll to just below the sticky outline, whatever its current height.
   new ResizeObserver(()=>$('evidencePane').style.setProperty('--head',document.querySelector('.evidence-head').offsetHeight-16+'px')).observe(document.querySelector('.evidence-head'));
   $('expandAll').onclick=()=>{openMemory.clear();document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,true));scheduleStuck();};
-  $('collapseAll').onclick=()=>{openMemory.clear();document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,false));$('evidencePane').scrollTop=0;scheduleStuck();};
-  $('evidencePane').addEventListener('scroll',scheduleStuck,{passive:true});
-  $('library').addEventListener('scroll',scheduleLibStuck,{passive:true});
+  $('collapseAll').onclick=()=>{openMemory.clear();document.querySelectorAll('#evidenceList .toggle').forEach(button=>setExpanded(button,false));setRunOut($('evidencePane'),$('evidenceList'),null);$('evidencePane').scrollTop=0;scheduleStuck();};
+  $('evidencePane').addEventListener('scroll',()=>{shrinkRunOut($('evidencePane'));scheduleStuck();},{passive:true});
+  $('library').addEventListener('scroll',()=>{shrinkRunOut($('library'));scheduleLibStuck();},{passive:true});
   new ResizeObserver(()=>{measureRows();scheduleStuck();}).observe($('evidencePane'));
   $('reportSelect').onchange=()=>openReport($('reportSelect').value).catch(error=>status(error.message,true));
   $('refresh').onclick=load;

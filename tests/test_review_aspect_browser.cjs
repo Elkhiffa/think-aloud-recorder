@@ -26,7 +26,7 @@ function html(params) {
     video: `/media/${key}?delay=${Number(params.get('delay')) || 0}`,
     video_display:key==='letterboxed'?legacyCrop:null,
     segments: Array.from({ length: 60 }, (_, i) => ({ start: i, end: i + .95, text: `合成测试原话 ${i + 1}：逐字稿独立滚动，视频的位置和尺寸应当保持稳定。` })) };
-  const values = { TITLE: data.title, DATA: JSON.stringify(data), CSS: read('ui/review.css'), JS: read('ui/review.js'),
+  const values = { TITLE: data.title, DATA: JSON.stringify(data), CSS: read('ui/review.css'), JS: read('ui/review.js'), FINDINGS_JS: read('ui/findings.js'), FINDINGS_CSS: read('ui/findings.css'),
     FONTS: '', PLYR_CSS: read('ui/vendor/plyr/plyr.css'), PLYR_JS: read('ui/vendor/plyr/plyr.min.js'), PLYR_SVG: read('ui/vendor/plyr/plyr.svg'), LICENSE: 'Synthetic source-aspect browser fixture' };
   return read('player.html').replace(/%%([A-Z_]+)%%/g, (_, key) => values[key]);
 }

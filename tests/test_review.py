@@ -66,6 +66,17 @@ class ReviewTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, '定位时间无效'):
                     prepare_window(self.root, recorder.Session(self.folder), value)
 
+    def test_desk_click_opens_review_on_the_matching_tab(self):
+        """触发路径：资料库详情里点一条问题或一个体验事件 → 回看打开在「问题」或「体验事件」并展开这个事件；无效页签不打开窗口。"""
+        with patch('review_runtime.render_player', wraps=lambda root, payload: render_player(recorder.ROOT, payload)):
+            _, payload = prepare_window(self.root, recorder.Session(self.folder), 12.0, dict(tab='events', event='e3'))
+            self.assertEqual(payload['initial_focus'], dict(tab='events', event='e3'))
+            _, payload = prepare_window(self.root, recorder.Session(self.folder), 12.0, dict(tab='problems', event=''))
+            self.assertEqual(payload['initial_focus'], dict(tab='problems', event=''))
+            for focus in (dict(tab='inputs'), dict(tab='events', event=3), 'events'):
+                with self.assertRaisesRegex(ValueError, '页签无效'):
+                    prepare_window(self.root, recorder.Session(self.folder), 12.0, focus)
+
     def test_export_refreshes_player_and_contains_no_absolute_desktop_paths(self):
         archive = recorder.Session(self.folder).package()
         with zipfile.ZipFile(archive) as bundle:
