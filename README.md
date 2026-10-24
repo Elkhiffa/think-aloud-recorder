@@ -8,11 +8,11 @@ Windows 游戏体验记录器：录下游戏画面与口述，在独立窗口同
 
 简体中文 | [English](README.en.md)
 
-[下载](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [安装分析 skill](docs/agent-integration.md#skill-安装与更新) · [0.10.4 改动汇总](docs/changes-2026-10-24.md)
+[下载](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [安装分析 skill](docs/agent-integration.md#skill-安装与更新) · [0.10.5 改动汇总](docs/changes-2026-10-24.md)
 
 </div>
 
-当前源码版本为 **0.10.4**，本轮改动见 [0.10.4 改动汇总](docs/changes-2026-10-24.md)；此前记录见 [0.9.0](docs/changes-2026-10-22.md)、[0.8.1](docs/changes-2026-10-15.md)、[0.8.0](docs/changes-2026-10-13.md)、[0.7.8](docs/changes-2026-10-09.md)、[2026-10-08 改动汇总](docs/changes-2026-10-08.md) 和 [2026-09-28 改动汇总](docs/changes-2026-09-28.md)。
+当前源码版本为 **0.10.5**，本轮改动见 [0.10.5 改动汇总](docs/changes-2026-10-24.md)；此前记录见 [0.9.0](docs/changes-2026-10-22.md)、[0.8.1](docs/changes-2026-10-15.md)、[0.8.0](docs/changes-2026-10-13.md)、[0.7.8](docs/changes-2026-10-09.md)、[2026-10-08 改动汇总](docs/changes-2026-10-08.md) 和 [2026-09-28 改动汇总](docs/changes-2026-09-28.md)。
 
 ## 使用
 

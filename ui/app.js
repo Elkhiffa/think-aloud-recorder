@@ -143,7 +143,7 @@ function renderHome(){
  if(alerting)button='暂不能录制';
  const panel=$('#capturePanel');panel.classList.toggle('recording',recording);panel.classList.toggle('alerting',alerting);panel.classList.toggle('off',!recording&&!ready);
  setText('recordingTime',recording?formatTime(a.elapsed_seconds):'00:00:00');show('liveClock',recording);
- setText('recordButtonText',button);setText('recordGame',recording?'':store.presets.find(p=>p.id===store.activeId)?.name||'');
+ setText('recordButtonText',button);
  $('#recordButton').classList.toggle('stopping',recording);
  const status=alerting?`${blockers.length} 项检查未通过\n处理右侧事项后重新检查`:ready?[label,...readyLines()].join('\n'):label;
  // Ready: one line per item, cut with an ellipsis rather than wrapped, so the record button keeps its size.
@@ -205,7 +205,6 @@ function renderLast(){
  const sessions=store.snapshot?.sessions||[],s=sessions[0],alerting=$('#capturePanel').classList.contains('alerting');
  const signature=JSON.stringify([s,store.backgroundJobs,sessions.length,alerting]);if(signature===lastSignature)return;lastSignature=signature;
  setText('sessionCount',sessions.length);
- const latest=s?new Date(s.created):null;setText('libraryBrief',latest&&!Number.isNaN(latest.getTime())?' · 最近 '+shortDate(latest):'');
  const jobs=store.backgroundJobs,running=jobs.filter(job=>job.state==='running').length,queued=jobs.filter(job=>job.state==='queued').length;
  setText('queueBrief',[running?running+' 段转写中':'',queued?queued+' 段排队':''].filter(Boolean).join(' · '));show('queueBrief',(running||queued)>0);
  if(!s){$('#lastSession').innerHTML='<p class="empty">还没有记录。点开始录制，边玩边说出你此刻的想法。</p>';return;}
@@ -319,7 +318,7 @@ function openSheet(mode='settings',tab='game'){
  store.openDraft(wizardMode);store.addedGeneralIds=[];if(mode==='first')store.markGeneral(store.draft.hotword_files);
  if(mode==='new'&&store.presets.length){for(const key of RecorderState.GENERAL_KEYS)if(store.saved[key]!==undefined)store.draft[key]=JSON.parse(JSON.stringify(store.saved[key]));store.draft.hotword_files=JSON.parse(JSON.stringify(store.saved.general_hotword_files||[]));store.draft.hotword_manual='';store.draft.vault='';store.syncVocabulary();}
  step=0;deviceSignature='';vocabularySignature='';downloadDirectory=null;wizardError();$('#cloudKey').value='';
- setText('cloudFeedback','新密钥在保存设置时保存，取消时清空。');setText('downloadDestination','下载到软件所在文件夹。下载可暂停，关闭设置后会继续。');
+ setText('cloudFeedback','');setText('downloadDestination','');
  fillFields();
  store.snapshotBaseline();
  $('#sheet').classList.remove('hidden');$('#settingsButton').classList.add('on');
@@ -473,7 +472,7 @@ function renderInputRecording(locked=false){
  const d=store.draft,available=d?.source==='游戏窗口';
  $('#recordInputs').checked=!!d?.record_inputs;
  $('#recordInputs').disabled=locked||!available;
- setText('inputRecordingHint',available?'录制期间完整记录键鼠和手柄操作，包括切到其他软件时的操作；目标窗口的前后台状态另行保存，回看时可筛选。':'选择“游戏窗口”及目标程序后可启用操作记录。操作只在录制期间采集，结束后停止。');
+ setText('inputRecordingHint',available?'':'录制范围是“游戏窗口”时才能开启操作记录。');
 }
 $('#recordInputs').onchange=()=>{if(store.draft&&store.draft.source==='游戏窗口'){store.updateDraft('record_inputs',$('#recordInputs').checked);renderSummary();}};
 function engineRecovery(){
@@ -499,7 +498,7 @@ function successfulDeviceFeedback(draft,inventory){
  }
  if(missing.length){const names=missing.map(key=>key==='mic'?'麦克风':targetName).join('和'),steps=missing.map(key=>key==='window'?'打开游戏':key==='mic'?'连接麦克风':'连接显示器').join('或');return `当前未找到所选${names}，请${steps}后刷新。`;}
  if(unselected.length)return '读取完成，请选择'+unselected.join('和')+'。';
- return `已识别当前选择的${targetName}和麦克风。`+(store.editingId?'已保存的预设保持不变。':'');
+ return '';
 }
 function renderDeviceOptions(force=false){
  if(!store.draft)return;
@@ -508,7 +507,7 @@ function renderDeviceOptions(force=false){
  if(force||signature!==deviceSignature){const a=fillDevice($('#target'),'window',d.window);const b=fillDevice($('#mic'),'mic',d.mic);const c=fillDevice($('#monitor'),'monitor',d.monitor);if(a&&b&&c)deviceSignature=signature;}
  show('target',kind!=='monitor');show('targetMonitorNote',kind==='monitor');show('monitorField',kind==='monitor');setText('refreshDevices',inventory.state==='running'?'正在读取…':'刷新设备');
  const feedback={idle:'尚未读取设备，已保存的选择待确认。',running:'正在读取可用窗口和麦克风，已保存的选择保持不变…',failed:'设备读取失败：'+(inventory.error||'请重试。')+' 已保存的选择尚未确认。',cached:'显示上次读取的设备，请刷新确认当前是否可用。',succeeded:successfulDeviceFeedback(d,inventory)};
- setText('deviceFeedback',feedback[inventory.state]);
+ setText('deviceFeedback',feedback[inventory.state]);$('#deviceBar').classList.toggle('quiet',!feedback[inventory.state]);
  const recovery=engineRecovery();
  show('reconnectEngine',!!recovery);show('engineFeedback',!!recovery);
  setText('reconnectEngine',recovery?.[1]||'重新连接录制引擎');setText('engineFeedback',recovery?.[2]||'');
@@ -563,7 +562,7 @@ $$('[data-provider]').forEach(button=>{
   event.preventDefault();chooseProvider(event.key==='Home'?'local':event.key==='End'?'qwen':button.dataset.provider==='local'?'qwen':'local',true);
  };
 });
-function renderResources(){if(!store.draft)return;const provider=store.draft.transcription_provider;show('localControls',provider==='local');show('cloudControls',provider==='qwen');show('providerChoiceHint',!['local','qwen'].includes(provider));setText('providerChoiceHint','尚未选择转写方式，请选择本地转写或 Qwen 转写。');$$('[data-provider]').forEach(button=>{const selected=button.dataset.provider===provider;button.setAttribute('aria-selected',String(selected));button.tabIndex=selected||!provider&&button.dataset.provider==='local'?0:-1;});const m=store.snapshot?.model||{};const names={missing:'未准备',downloading:'下载中',paused:'已暂停',verifying:'正在校验',ready:'已准备好',error:'未完成'};setText('modelStatus',names[m.state]||'正在读取');$('#modelStatus').className='state-label '+(m.state||'');setText('modelPath',m.path||'可选择已有的模型文件夹，无需再次复制。');show('modelProgressArea',['downloading','paused','verifying'].includes(m.state));setText('modelProgressLabel',m.state==='verifying'?'正在检查文件是否完整':'已下载');setText('modelBytes',bytes(m.downloaded_bytes)+(m.total_bytes?' / '+bytes(m.total_bytes):''));if(m.total_bytes&&m.state!=='verifying')$('#modelProgress').value=Math.min(100,(m.downloaded_bytes||0)/m.total_bytes*100);else $('#modelProgress').removeAttribute('value');setText('modelError',m.error||'');show('modelError',!!m.error);setText('downloadModel',{downloading:'暂停下载',paused:'继续下载',verifying:'正在校验',ready:'已准备好',error:'重试下载'}[m.state]||'下载模型');setText('cloudStatus',store.snapshot?.capabilities?.cloud_key?'密钥已保存':'尚未保存密钥');renderOcr();renderPrepare();renderControls();}
+function renderResources(){if(!store.draft)return;const provider=store.draft.transcription_provider;show('localControls',provider==='local');show('cloudControls',provider==='qwen');show('providerChoiceHint',!['local','qwen'].includes(provider));setText('providerChoiceHint','尚未选择转写方式，请选择本地转写或 Qwen 转写。');$$('[data-provider]').forEach(button=>{const selected=button.dataset.provider===provider;button.setAttribute('aria-selected',String(selected));button.tabIndex=selected||!provider&&button.dataset.provider==='local'?0:-1;});const m=store.snapshot?.model||{};const names={missing:'未准备',downloading:'下载中',paused:'已暂停',verifying:'正在校验',ready:'已准备好',error:'未完成'};setText('modelStatus',names[m.state]||'正在读取');$('#modelStatus').className='state-label '+(m.state||'');setText('modelPath',m.path||'');show('modelProgressArea',['downloading','paused','verifying'].includes(m.state));setText('modelProgressLabel',m.state==='verifying'?'正在检查文件是否完整':'已下载');setText('modelBytes',bytes(m.downloaded_bytes)+(m.total_bytes?' / '+bytes(m.total_bytes):''));if(m.total_bytes&&m.state!=='verifying')$('#modelProgress').value=Math.min(100,(m.downloaded_bytes||0)/m.total_bytes*100);else $('#modelProgress').removeAttribute('value');setText('modelError',m.error||'');show('modelError',!!m.error);setText('downloadModel',{downloading:'暂停下载',paused:'继续下载',verifying:'正在校验',ready:'已准备好',error:'重试下载'}[m.state]||'下载模型');setText('cloudStatus',store.snapshot?.capabilities?.cloud_key?'密钥已保存':'尚未保存密钥');renderOcr();renderPrepare();renderControls();}
 function renderOcr(){const o=store.snapshot?.ocr||{};const names={missing:'未下载',downloading:'下载中',paused:'已暂停',verifying:'正在安装',ready:'已准备好',error:'未完成'};setText('ocrStatus',o.builtin?'运行环境已自带':(names[o.state]||'正在读取'));$('#ocrStatus').className='state-label '+(o.builtin?'ready':(o.state||''));show('ocrProgressArea',!o.builtin&&['downloading','paused','verifying'].includes(o.state));setText('ocrProgressLabel',o.state==='verifying'?'正在检查并解压文件':'已下载');setText('ocrBytes',bytes(o.downloaded_bytes)+(o.total_bytes?' / '+bytes(o.total_bytes):''));if(o.total_bytes&&o.state!=='verifying')$('#ocrProgress').value=Math.min(100,(o.downloaded_bytes||0)/o.total_bytes*100);else $('#ocrProgress').removeAttribute('value');setText('ocrError',o.error||'');show('ocrError',!o.builtin&&!!o.error);show('ocrActions',!o.builtin&&o.state!=='ready');setText('downloadOcr',{downloading:'暂停下载',paused:'继续下载',verifying:'正在安装',error:'重试下载'}[o.state]||'下载');}
 $('#chooseVault').onclick=async()=>{const result=await action('choose_directory',['vault']);if(result.ok&&result.data?.path&&store.draft){store.updateDraft('vault',result.data.path);store.confirmVault();$('#vault').value=result.data.path;renderSummary();renderVaultChoice();renderControls();}};
 function renderVaultChoice(){if(!store.draft)return;const info=store.snapshot?.default_vault||{},same=store.defaultVaultSelected,exists=same&&info.requires_confirmation===true;show('reuseVaultNotice',exists);show('reuseVault',exists&&store.needsVaultConfirmation&&info.is_directory!==false);setText('reuseVaultMessage',info.is_directory===false?'该位置已有同名文件，请选择其他文件夹。':store.needsVaultConfirmation?'发现已有同名资料库。是否使用它并保留其中的录像和笔记？':'将使用已有资料库，保留其中的录像和笔记。');setText('chooseVault',exists?'选择其他位置':'选择');setText('vaultHint',same?'默认保存在软件父级的 think-aloud-database，更新版本后可继续使用。':'每场体验分别保存，不覆盖已有录像或笔记。');}

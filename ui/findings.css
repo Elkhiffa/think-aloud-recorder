@@ -49,7 +49,6 @@
 .fd-kind{color:var(--fd-ink)}
 .fd-bug-mark{padding:0 6px;border:1px solid var(--k-bug);border-radius:999px;line-height:16px;color:var(--k-bug)}
 .fd-bug-mark.is-suspected{border-style:dashed}
-.fd-screen::before{content:"界面 "}
 .findings .fd-jump,.findings .fd-event-link{color:var(--fd-muted);text-decoration:underline dotted;text-underline-offset:3px}
 .findings .fd-jump:hover,.findings .fd-event-link:hover{color:var(--fd-ink);text-decoration-style:solid}
 .findings .fd-event-link{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -60,7 +60,6 @@ button:disabled{cursor:default;opacity:.5}
 .tile{position:relative;border-radius:var(--r-lg);background:var(--rec);color:var(--rec-ink);display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .rec{flex:1;display:flex;flex-direction:column;align-items:flex-start;text-align:left;padding:var(--s5) var(--s5) 0;color:inherit;width:100%}
 .rec-title{font:700 var(--t3)/1.2 var(--serif)}
-.rec-game{font-size:var(--t1);color:var(--rec-soft)}
 .rec-icon{width:88px;height:88px;margin:auto;align-self:center}
 .checks{display:flex;flex-direction:column;justify-content:flex-end;padding:0 var(--s5) var(--s5);font-size:var(--t1);line-height:1.6;color:var(--rec-ink);white-space:pre-line;min-height:calc(var(--t2)*1.6 + var(--t1)*3.2 + var(--s5))}
 .checks span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.checks.ready span:first-child{font-weight:700;font-size:var(--t2)}
@@ -74,7 +73,7 @@ button:disabled{cursor:default;opacity:.5}
 .tile:not(.recording):has(.rec:enabled:hover){background:color-mix(in srgb,var(--rec) 88%,#000)}
 .tile:not(.recording):has(.rec:enabled:active){background:color-mix(in srgb,var(--rec) 78%,#000)}
 .tile:not(.recording):has(.rec:focus-visible){outline:2px solid var(--ink);outline-offset:2px}
-.tile.off .rec-game,.tile.off .checks,.tile.off .job-detail{color:var(--muted)}
+.tile.off .checks,.tile.off .job-detail{color:var(--muted)}
 .tile.off .rec-icon{color:var(--faint)}
 /* 录制中：块里只有“正在录制”、计时、麦克风和结束键 */
 .tile.recording{background:var(--rec);color:var(--rec-ink)}
@@ -93,7 +92,7 @@ button:disabled{cursor:default;opacity:.5}
 .tile.recording .rec{flex:none;margin:var(--s4) var(--s5) var(--s5);width:auto;padding:0;height:36px;border-radius:var(--r);background:var(--rec-ink);color:var(--rec);flex-direction:row;align-items:center;justify-content:center;gap:var(--s2)}
 .tile.recording .rec::before{content:"";width:12px;height:12px;border-radius:2px;background:var(--rec)}
 .tile.recording .rec-title{font:700 var(--t2)/1 var(--sans)}
-.tile.recording .rec-game,.tile.recording .rec-icon{display:none}
+.tile.recording .rec-icon{display:none}
 .tile.recording .checks{padding-bottom:0;min-height:0}
 
 .col{display:flex;flex-direction:column;gap:var(--s4);min-width:0;min-height:0}
@@ -176,7 +175,7 @@ button:disabled{cursor:default;opacity:.5}
 .sub-tabs a.add{color:var(--faint)}
 .sheet-body{flex:1;min-height:0;overflow-y:auto;padding:0 var(--s5) var(--s5)}
 .wizard-error{margin:0 0 var(--s3);padding:var(--s3) var(--s4);background:var(--warn-bg);border-radius:var(--r);color:var(--warn)}
-.group{font-size:var(--t1);font-weight:400;color:var(--muted);margin:var(--s5) 0 var(--s1)}
+.group{font-size:var(--t2);font-weight:700;color:var(--ink);margin:var(--s5) 0 var(--s1)}
 .group:first-child{margin-top:0}
 .field{display:grid;gap:var(--s1);padding:var(--s2) 0;max-width:560px}
 .field>label,.field>.label{font-size:var(--t1);color:var(--muted)}
@@ -204,6 +203,7 @@ progress{width:100%;height:6px;accent-color:var(--ink)}
 .vault-reuse{margin-top:var(--s2);display:flex;gap:var(--s3);align-items:center}
 .device-bar{display:grid;gap:var(--s1);margin-bottom:var(--s3);padding:var(--s2) var(--s3);background:var(--sheet);border-radius:var(--r);font-size:var(--t1);color:var(--muted);max-width:560px}
 .device-bar .link{color:var(--ink)}
+.device-bar.quiet{background:none;padding:0}
 .update{display:grid;gap:var(--s3);max-width:560px}
 .update-versions{display:flex;gap:var(--s6)}
 .update-versions dt{font-size:var(--t1);color:var(--muted)}
@@ -264,3 +264,8 @@ progress{width:100%;height:6px;accent-color:var(--ink)}
 .update-notes.clamped{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:6;overflow:hidden}
 #updateNotesMore{justify-self:start;margin-top:var(--s1)}
 #methodLink{justify-self:start}
+
+/* 转写方式是单选：和其他单选分段一样，选中是白色底（多选筛选才是墨色底） */
+#providerTabs{display:inline-flex;justify-self:start;gap:var(--s1);padding:var(--s1);border-radius:var(--r);background:var(--fill)}
+#providerTabs .chip{background:none;color:var(--muted)}
+#providerTabs .chip[aria-selected=true]{background:var(--sheet);color:var(--ink);box-shadow:0 1px 2px rgb(60 40 20 / .08)}
