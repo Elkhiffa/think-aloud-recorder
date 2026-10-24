@@ -8,11 +8,13 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 默认由用户控制发起时机：结束一段录制，并等转写和文件整理完成后，把该场次文件夹路径交给外部会话。单次任务完成即结束，不需要定时检查资料库。录制中的场次或仅视频先就绪的场次不应进入预处理。
 
-将源码中的单场整理 skill `skills/think-aloud-judgments` 整个目录安装到所用 agent 的技能目录后，可使用下面的提示词；它就是主窗口“上一场”和资料台场次详情里「复制整理指令」复制出来的内容。软件更新不会同步这个独立副本，更新方法见下方“Skill 安装与更新”。回看顶部复制按钮的下拉菜单提供「复制场次文件夹路径」。这里的路径应指向包含 `session.json`、录像和逐字稿的具体场次文件夹，而不是整个资料库；接口会检查真实整理状态和当前素材版本。
+先装好单场整理 skill `think-aloud-judgments`（见下方“Skill 安装与更新”），再用下面的提示词；它就是主窗口“上一场”和资料台场次详情里「复制整理指令」复制出来的内容，其中“软件目录”一行告诉 agent 在哪里运行 `agent_cli.py`。软件更新不会同步已装的 skill 副本。回看顶部复制按钮的下拉菜单提供「复制场次文件夹路径」。这里的路径应指向包含 `session.json`、录像和逐字稿的具体场次文件夹，而不是整个资料库；接口会检查真实整理状态和当前素材版本。
 
 ```text
 请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。
 场次文件夹：【粘贴当前场次文件夹路径】
+资料库：【资料库路径】
+软件目录（agent_cli.py 和 runtime 在这里）：【安装目录下的 app 文件夹】
 只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。
 ```
 
@@ -36,13 +38,15 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 ## Skill 安装与更新
 
-**第一次安装**：
+**在软件里安装（0.10.0 起）**：设置 → 通用 → 记录方法（首次设置的第一步也有）→「安装分析 skill」。两份 skill 随软件包放在 `app\docs\skills\`，点一下就复制到已经存在的 `%USERPROFILE%\.claude\skills` 和 `%USERPROFILE%\.codex\skills`（没装的 agent 不碰）。已有同名副本且内容不同时，先整份备份到 `app\state\skill-backups\<时间>\`（技能目录之外，不会被当成第二份 skill 加载）再写入；内容相同就跳过；你自己加进 skill 文件夹的文件保留不动，并在结果里列出。软件更新后再点一次，就把 skill 同步到新版。
 
-1. 在 [Releases](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) 下载与所装应用同一版本的 **Source code (zip)**，完整解压。skill 不在应用安装包里。
+**手动安装（源码检出或旧版软件）**：
+
+1. 在 [Releases](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) 下载与所装应用同一版本的 **Source code (zip)**，完整解压。0.10.0 以前的应用安装包里没有 skill。
 2. 把解压出的 `skills\think-aloud-judgments` 和 `skills\think-aloud-insight` 两个文件夹整个复制到 agent 的技能目录：Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`。两个都用就两处都复制。也可以在 PowerShell 里运行（把第一行换成实际解压位置）：
 
    ```powershell
-   $src = "D:\Downloads\think-aloud-recorder-0.9.0\skills"
+   $src = "D:\Downloads\think-aloud-recorder-0.10.0\skills"
    foreach ($dest in "$env:USERPROFILE\.claude\skills", "$env:USERPROFILE\.codex\skills") {
      New-Item -ItemType Directory -Force $dest | Out-Null
      Copy-Item -Recurse "$src\think-aloud-judgments", "$src\think-aloud-insight" $dest
@@ -66,7 +70,7 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 每个场次在录像、转写和独立回看文件完成后，最后原子发布 `agent-ready.json`。信号包含协议版本、场次 ID、素材 revision、相对源文件名及大小/修改时间、录像时长。没有安装路径、配置或密钥。
 
-`agent_cli.py` 是外部会话的本地接口，使用自带 Python。`scan` 读取就绪场次；`publish` 为指定旧场次补发或更新信号；`claim` 领取，`reprocess` 备份后重新领取已有结果，`renew` 续期，`evidence` 读概览/区间，`frame` 提取图片，`validate` 校验候选，`submit` 提交，`fail` 记录原因，`status` 回读状态。完整参数见 `--help`。v2 结果提交写入后，`submit` 在锁外按每条实例第一条画面证据的时刻取帧识别，用界面目录的 `layout` 判出亮着的页签，回执附 `screen_check:{checked,warnings[],skipped?}`：编号里某一段（组名去掉括号、第一、二段页签）在画面上属于一排页签、亮着的却是另一个时，记一条 `{instance,at,screen,segment,lit,row}`；画面上看不到的段不下结论。只提醒，不拦截提交。每刻约 2 秒；结果按时刻缓存在场次目录的 `screen-check.json`（录像或 layout 变了自动作废），改正后重新提交不再重复识别。目录没有 layout、或运行环境没有画面文字识别（安装版）时只写 `skipped`。
+`agent_cli.py` 是外部会话的本地接口，使用自带 Python。`scan` 读取就绪场次；`publish` 为指定旧场次补发或更新信号；`claim` 领取，`reprocess` 备份后重新领取已有结果，`renew` 续期，`evidence` 读概览/区间，`frame` 提取图片，`validate` 校验候选，`submit` 提交，`fail` 记录原因，`status` 回读状态。完整参数见 `--help`。v2 结果提交写入后，`submit` 在锁外按每条实例第一条画面证据的时刻取帧识别，用界面目录的 `layout` 判出亮着的页签，回执附 `screen_check:{checked,warnings[],skipped?}`：编号里某一段（组名去掉括号、第一、二段页签）在画面上属于一排页签、亮着的却是另一个时，记一条 `{instance,at,screen,segment,lit,row}`；画面上看不到的段不下结论。只提醒，不拦截提交。每刻约 2 秒；结果按时刻缓存在场次目录的 `screen-check.json`（录像或 layout 变了自动作废），改正后重新提交不再重复识别。目录没有 layout、或没有画面文字识别（安装版还没下载识别组件）时只写 `skipped`。
 
 0.6.10 增加 `quote-words SESSION --ref t000040 [--offset 0 --limit 80]`，按需读取一条原话的原始词时间，最多每页 200 词。当同一转写片段中的话相隔很久，可在结果中用 `{"kind":"quote_words","ref":"t000040","word_range":[3,9]}` 引用原数组索引 3–8。程序生成节选文字、时间和说话人，回看点击定位到节选起点；不修改原转写、素材 revision 或已有机械索引。没有有效词时间时明确拒绝节选，普通整段引用仍可使用。词间空档不等于已确认的静音。
 
@@ -206,7 +210,9 @@ catalog-hotwords VAULT GAME --output FILE
 - `focus:{box,text?}`（有 `layout.focus`）：手柄操作时的金色焦点框（方、菱、圆，顶部居中有向下的小三角），box 是 960 宽画面上的 [x0,y0,x1,y1]，text 是框内的字。键鼠操作时没有焦点框，不报；没有小三角的金色边框（品质框）不算。`--compact` 不带 focus（手柄操作时它每几秒就变）。
 没报（缺字段或少了某一排）表示“未定”，不表示没有。`context-read` 完整输出带这些字段；`--compact` 每段带 `tabs`（亮着的页签文字）和 `headings`（主标题在前），同一标题下亮着的页签变了就分成新的一段，没报的帧不算变化。
 
-在一个资料库上启用：先 `runtime\python.exe -B -X utf8 scripts\apply_layout.py "<资料库>\燕云十六声"`（加 `--dry-run` 只检查），把 `docs/layouts/<游戏>.json` 写进界面目录，旧目录留在旁边；再用 `scripts\rebuild_context_tracks.py "<资料库>\燕云十六声"` 重建已有场次的轨道（两场并行，可中断后重跑，已按当前 layout 建好的跳过）。两步都要在带 OCR 模型的开发 runtime 里跑。
+软件带了这款游戏的 `docs/layouts/<游戏>.json` 时，资料库还没有界面目录的场次直接使用这套规则（`game_catalog.session_catalog` 返回只含规则、没有界面的目录）；首次设置勾选“创建燕云十六声项目”时会建好目录。规则写法见 [docs/layouts/README.md](layouts/README.md)。已有界面目录的资料库在 设置 → 游戏 →「界面路径识别」→ 启用，等同 `agent_cli.py layout-apply VAULT [--game GAME] [--dry-run]`：把规则写进界面目录，旧目录以 `catalog.json.before-layout-<时间>` 留在旁边，一次替换完成；没有目录时新建一份只带规则的目录。之后用 `agent_cli.py context-rebuild VAULT [--game GAME] [--workers 2]` 重建已有场次的轨道（设置里给出可复制的命令；两场并行，可中断后重跑，已按当前 layout 建好的跳过；每场一个日志在软件目录的 `state\logs\context-rebuild\`）。源码检出里的 `scripts\apply_layout.py`、`scripts\rebuild_context_tracks.py` 只是这两条命令的包装。
+
+文字识别：开发 runtime 自带 `rapidocr_onnxruntime`；安装版在 设置 → 通用 →「识别组件」下载（约 65 MB，固定版本的 wheel 来自 files.pythonhosted.org，逐个核对 SHA-256，解压到 `models\ocr\<编号>\site\`，更新软件时保留）。`agent_cli.py ocr-status` 报告是否可用；agent 发现缺组件时只提示用户去设置里下载，不自行安装。
 
 目录有 `title_regions` 时改为两层模式，轨道 version 为 2：每 `--title-interval` 秒（默认 2，可选 1–10）只识别各标题区裁图，每 `--full-interval` 秒（默认 10，不小于标题间隔、不超过 60）在同一格点上做一次整屏识别。每帧带 `titles:[{region,text,x}]`（x 为裁图左边界的归一化坐标），只有整屏帧带 items；顶层另有 title_interval、full_interval 和所用 title_regions，interval 等于标题间隔。没有目录或目录没有 `title_regions` 时保持单层 version 1，只用 `--interval`；两种版本的轨道都可读取。
 

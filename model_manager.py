@@ -23,12 +23,17 @@ class _Paused(Exception):
 class ModelManager:
     CHUNK = 256 * 1024
     OVERLAP = 64 * 1024
+    # What a subclass for another pinned download changes (ocr_component.OcrComponent).
+    MANIFEST = 'model-manifest.json'
+    REGISTRY = 'models.json'
+    LOCK = 'models.lock'
+    THREAD = 'optional-model'
 
     def __init__(self, root, *, manifest=None, client_factory=None):
         self.root = Path(root).resolve()
-        self.registry = self.root / 'state' / 'models.json'
+        self.registry = self.root / 'state' / self.REGISTRY
         if manifest is None:
-            manifest = json.loads((self.root / 'model-manifest.json').read_text(encoding='utf-8'))
+            manifest = json.loads((self.root / self.MANIFEST).read_text(encoding='utf-8'))
         self.manifest = json.loads(json.dumps(manifest))
         self._validate_manifest()
         self.files = self.manifest['files']
@@ -37,9 +42,20 @@ class ModelManager:
         self._lock = threading.RLock()
         self._cancel = threading.Event()
         self._thread = None
-        self._state = {'state': 'missing', 'model': 'large-v3', 'path': None,
+        self._state = {'state': 'missing', 'model': self._identity()[0], 'path': None,
                        'downloaded_bytes': 0, 'total_bytes': self.total,
-                       'error': None, 'source': None, 'revision': self.manifest['revision']}
+                       'error': None, 'source': None, 'revision': self._identity()[1]}
+
+    def _identity(self):
+        """(name, pinned revision) written to and required from the registry."""
+        return 'large-v3', self.manifest['revision']
+
+    def default_directory(self):
+        return self.root / 'models' / 'large-v3'
+
+    def file_url(self, item):
+        return ('https://huggingface.co/' + self.manifest['repository'] + '/resolve/'
+                + self.manifest['revision'] + '/' + item['name'])
 
     def _validate_manifest(self):
         m = self.manifest
@@ -83,8 +99,7 @@ class ModelManager:
     def _read_ready(self):
         try:
             entry = json.loads(self.registry.read_text(encoding='utf-8'))
-            if (entry.get('schema') != 1 or entry.get('model') != 'large-v3'
-                    or entry.get('revision') != self.manifest['revision']):
+            if (entry.get('schema') != 1 or (entry.get('model'), entry.get('revision')) != self._identity()):
                 return None
             raw = Path(entry['path'])
             if entry.get('relative'):
@@ -128,7 +143,7 @@ class ModelManager:
 
     def _process_lock(self):
         self.registry.parent.mkdir(parents=True, exist_ok=True)
-        handle = open(self.registry.parent / 'models.lock', 'a+b')
+        handle = open(self.registry.parent / self.LOCK, 'a+b')
         try:
             if os.name == 'nt':
                 import msvcrt
@@ -169,13 +184,13 @@ class ModelManager:
                 finally:
                     if handle:
                         handle.close()
-            self._thread = threading.Thread(target=run, daemon=True, name='optional-model')
+            self._thread = threading.Thread(target=run, daemon=True, name=self.THREAD)
             self._thread.start()
         return {'ok': True, 'data': self.status()}
 
     def start_download(self, directory=None):
         try:
-            path = Path(directory).expanduser().resolve() if directory else self.root / 'models' / 'large-v3'
+            path = Path(directory).expanduser().resolve() if directory else self.default_directory()
             return self._launch(self._download, path, 'download')
         except (ValueError, OSError, TypeError) as exc:
             return {'ok': False, 'error': str(exc)}
@@ -234,11 +249,12 @@ class ModelManager:
             stats = self._stats(self._file(directory, item['name']))
             if any(records[item['name']][key] != value for key, value in stats.items()):
                 raise ValueError('校验期间模型文件发生变化，请重新导入。')
+        self._prepare(directory)
         relative = directory.is_relative_to(self.root)
-        entry = {'schema': 1, 'model': 'large-v3', 'revision': self.manifest['revision'],
+        entry = {'schema': 1, 'model': self._identity()[0], 'revision': self._identity()[1],
                  'source': source, 'path': str(directory.relative_to(self.root) if relative else directory),
                  'relative': relative, 'files': records}
-        temp = self.registry.with_name('models.' + uuid.uuid4().hex + '.tmp')
+        temp = self.registry.with_name(self.registry.stem + '.' + uuid.uuid4().hex + '.tmp')
         with temp.open('x', encoding='utf-8') as target:
             json.dump(entry, target, ensure_ascii=False, indent=2)
             target.flush()
@@ -246,6 +262,9 @@ class ModelManager:
         self._check_pause()
         os.replace(temp, self.registry)
         self._set(state='ready', downloaded_bytes=self.total, path=str(directory), source=source)
+
+    def _prepare(self, directory):
+        """Runs after every file is verified, before the registry publishes them."""
 
     def _import(self, directory):
         self._activate(directory, 'import')
@@ -322,8 +341,7 @@ class ModelManager:
                 existing.seek(begin)
                 old_tail = existing.read(overlap)
         headers = {'Range': f'bytes={begin}-'} if offset else {}
-        url = ('https://huggingface.co/' + self.manifest['repository'] + '/resolve/'
-               + self.manifest['revision'] + '/' + item['name'])
+        url = self.file_url(item)
         with client.stream('GET', url, headers=headers) as response:
             if response.status_code != (206 if offset else 200):
                 raise ValueError('下载服务器未正确支持此次请求，部分文件已保留。')

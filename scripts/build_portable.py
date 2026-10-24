@@ -27,7 +27,7 @@ from scripts.brand_launcher import branded_stub
 
 ROOT_FILES = (
     'app.py', 'app_paths.py', 'desktop_service.py', 'device_inventory.py', 'hotword_files.py', 'hotword_ui.py',
-    'model_manager.py', 'model-manifest.json', 'media_runtime.py', 'portable_check.py', 'portable_config.py',
+    'model_manager.py', 'model-manifest.json', 'ocr_component.py', 'docs/ocr-component.json', 'skill_install.py', 'media_runtime.py', 'portable_check.py', 'portable_config.py',
     'portable_entry.py', 'processing_worker.py', 'processing.py', 'qwen_transcription.py',
     'recorder.py', 'window_manager.py', 'review_runtime.py', 'scel_to_text.py', 'secret_store.py',
     'transcription_runtime.py', 'speaker_roles.py', 'microphone_monitor.py', 'agent_protocol.py', 'event_edits.py', 'agent_cli.py',
@@ -46,6 +46,11 @@ ROOT_FILES = (
     'docs/agent-integration.md', 'docs/visual-nodes.md',
 )
 OPTIONAL_ROOT_FILES = ('README.md',)
+# Source folder -> packaged folder. Under docs/ because updaters before 0.9.0 refuse any other new top-level folder;
+# the app installs the skills from here into the user's agent (desktop_service.install_skills).
+PACKAGED_TREES = {'skills/think-aloud-judgments': 'docs/skills/think-aloud-judgments',
+                  'skills/think-aloud-insight': 'docs/skills/think-aloud-insight',
+                  'docs/layouts': 'docs/layouts'}
 BLOCKED_PARTS = {'__pycache__', '.git', '.cache', 'cache', 'caches', 'logs', 'log',
                  'crashes', 'crashdumps', 'pip-cache', 'wheelhouse', '.pytest_cache',
                  'gpucache', 'dawncache', 'code cache', 'local storage', 'session storage'}
@@ -101,8 +106,10 @@ def collect_files(root):
         add(relative)
     for relative in OPTIONAL_ROOT_FILES:
         add(relative, False)
+    # tools/fonts/provenance.json is checked at build time below but never shipped: updaters before 0.9.0 refuse
+    # tools/fonts/ and nothing reads the record at run time (0.9.0 could not be installed from 0.8.x).
     for relative in ('tools/input/SDL2.dll', 'tools/input/provenance.json', 'licenses/SDL2-zlib.txt',
-                     'tools/fonts/provenance.json', 'licenses/Sarasa-Gothic-OFL.txt', 'licenses/Noto-Serif-CJK-OFL.txt'):
+                     'licenses/Sarasa-Gothic-OFL.txt', 'licenses/Noto-Serif-CJK-OFL.txt'):
         add(relative)
     for dirname in ('licenses', 'ui', 'runtime', 'tools/obs'):
         base = root / dirname
@@ -129,6 +136,16 @@ def collect_files(root):
                 if local.as_posix() != 'portable_mode.txt' and local.parts[0] not in {'bin', 'data', 'obs-plugins'}:
                     continue
             add(relative.as_posix())
+    for source, target in PACKAGED_TREES.items():
+        base = root / source
+        if not base.is_dir():
+            raise ValueError('Missing package directory: ' + source)
+        for file in sorted(base.rglob('*')):
+            if excluded(file.relative_to(root)) or not file.is_file():
+                continue
+            if file.is_symlink() or not file.resolve().is_relative_to(installation_root(root)):
+                raise ValueError('Symlink/path escape in package input: ' + file.relative_to(root).as_posix())
+            entries[target + '/' + file.relative_to(base).as_posix()] = file
     for required in ('ui/index.html', 'ui/review.js', 'ui/review.css', 'ui/visual-nodes.html',
                      'ui/vendor/plyr/plyr.min.js', 'ui/vendor/plyr/plyr.css', 'ui/vendor/plyr/plyr.svg',
                      'licenses/Plyr-MIT.txt', 'runtime/python.exe', 'runtime/pythonw.exe',
@@ -264,10 +281,13 @@ def write_app_update(stage, base_manifest, path):
     stage = Path(stage)
     manifest = manifest_path(stage)
     records = json.loads(manifest.read_text(encoding='utf-8'))['files']
-    base = {item['path']: item['sha256'] for item in json.loads(Path(base_manifest).read_text(encoding='utf-8'))['files']}
+    # The updater looks for one changed-files package per release, so it carries every file that differs from ANY
+    # supported base (e.g. 0.8.1 and 0.9.0); each base then finds the rest unchanged in its own installation.
+    bases = [{item['path']: item['sha256'] for item in json.loads(Path(path).read_text(encoding='utf-8'))['files']}
+             for path in ([base_manifest] if isinstance(base_manifest, (str, Path)) else base_manifest)]
     # The bundled vocabulary may be user-edited in place, so its package copy always travels.
     entries = {item['path']: stage / item['path'] for item in records
-               if base.get(item['path']) != item['sha256'] or item['path'] == 'vocabularies/uiux-terms.txt'}
+               if any(base.get(item['path']) != item['sha256'] for base in bases) or item['path'] == 'vocabularies/uiux-terms.txt'}
     entries[manifest.relative_to(stage).as_posix()] = manifest
     return write_zip(Path(path), entries, subset=True)
 
@@ -290,7 +310,10 @@ def build(root, outdir, source_dir=None, *, candidate=False, version=None, launc
     if not any(item.get('component') == 'SDL2' and item.get('sha256') == source_assets.get(item.get('filename'))
                and item.get('filename') in source_assets for item in sources['files']):
         raise ValueError('Matching SDL2 source archive missing from dependency sources')
-    fonts = json.loads(files['tools/fonts/provenance.json'].read_text(encoding='utf-8'))
+    record = root / 'tools/fonts/provenance.json'
+    if not record.is_file():
+        raise ValueError('Missing font provenance: tools/fonts/provenance.json (run scripts/fetch_fonts.py)')
+    fonts = json.loads(record.read_text(encoding='utf-8'))
     pinned = {'ui/fonts/' + item.get('filename', ''): item.get('sha256') for item in fonts.get('fonts', [])}
     if sorted(pinned) != sorted(UI_FONTS) or any(sha256(files[name]) != pinned[name] for name in UI_FONTS):
         raise ValueError('Bundled UI font differs from font provenance')

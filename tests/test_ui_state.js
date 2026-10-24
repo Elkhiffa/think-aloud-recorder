@@ -453,11 +453,17 @@ test('first-use method introduction advances without saving; device validation s
   assert.equal(f.elements.get('panelMethod').classList.contains('hidden'),false);
   assert.equal(f.elements.get('wizardNext').textContent,'开始设置');
   f.elements.get('wizardNext').onclick();
-  assert.equal(f.run('step'),1);assert.equal(f.run('currentStepKey()'),'general');
+  // 准备分析 does nothing until its button is pressed; the ticked 燕云十六声 box names the first game on leaving it.
+  assert.equal(f.run('step'),1);assert.equal(f.run('currentStepKey()'),'prepare');
+  assert.equal(f.elements.get('panelPrepare').classList.contains('hidden'),false);
+  assert.equal(f.calls.some(call=>['ocr_action','install_skills','layout_action'].includes(call.name)),false);
+  f.elements.get('prepareYanyun').checked=true;
+  f.elements.get('wizardNext').onclick();
+  assert.equal(f.run('step'),2);assert.equal(f.run('currentStepKey()'),'general');assert.equal(f.run('store.draft.game'),'燕云十六声');
   const language=f.elements.get('language');language.value='en';language.listeners.change();
-  f.elements.get('wizardBack').onclick();assert.equal(f.run('step'),0);
+  f.elements.get('wizardBack').onclick();assert.equal(f.run('step'),1);
   f.elements.get('wizardNext').onclick();assert.equal(f.run('store.draft.language'),'en');
-  f.elements.get('wizardNext').onclick();assert.equal(f.run('step'),1);
+  f.elements.get('wizardNext').onclick();assert.equal(f.run('step'),2);
   assert.ok(f.elements.get('wizardError').textContent.includes('麦克风'));
   const mic=f.elements.get('mic');mic.value='microphone';mic.listeners.change();
   f.elements.get('wizardNext').onclick();assert.equal(f.run('currentStepKey()'),'game');

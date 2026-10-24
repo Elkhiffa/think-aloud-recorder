@@ -63,6 +63,7 @@ class DeviceDefaultsTests(unittest.TestCase):
         model.status.return_value = dict(state='missing', model='large-v3', path=None)
         patches = [patch.object(bridge, 'load_settings', return_value=cfg),
                    patch.object(bridge, 'ModelManager', return_value=model),
+                   patch.object(bridge, 'OcrComponent', return_value=model),
                    patch.object(bridge.DesktopService, '_startup', return_value=None),
                    patch.object(bridge.DesktopService, '_monitor_loop', return_value=None),
                    patch.object(bridge.DesktopService, '_visible_session_paths', return_value={}),

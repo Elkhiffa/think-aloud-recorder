@@ -17,11 +17,13 @@ def _source_video(folder):
 
 
 def _ocr_engine(title=False):
-    # 路径 2：context-build 在未安装本地 OCR 的开发环境中运行。
+    # 路径 2：context-build 在没有本地 OCR 的环境中运行；安装版的 OCR 来自设置里下载的识别组件。
+    from ocr_component import MISSING, ensure_importable
+    ensure_importable()
     try:
         from rapidocr_onnxruntime import RapidOCR
     except ImportError as error:
-        raise ValueError('OCR 依赖未安装') from error
+        raise ValueError(MISSING) from error
     if not title:
         return RapidOCR()
     # 路径 2：默认检测把短边放大到 736，约 60 像素高的标题裁图会比整屏还慢；
@@ -355,3 +357,65 @@ def read_track(folder, *, start=None, end=None, compact=False, output=None):
     return dict(version=track['version'], interval=track['interval'], **layers,
                 source_video=track['source_video'],
                 frames=frames, screens=track['screens'])
+
+
+def _built_with(folder, layout):
+    try:
+        return json.loads((Path(folder) / TRACK).read_text(encoding='utf-8')).get('layout') == layout
+    except (OSError, ValueError):
+        return False
+
+
+def rebuild(vault, game=None, workers=2, progress=print):
+    """Rebuild every session's track with the catalog's layout rules, a few sessions at a time.
+
+    Sessions already built with the current layout are skipped, so an interrupted run can simply be started again.
+    Each session runs context-build in its own process (OCR memory is freed per session); one log per session in
+    state/logs/context-rebuild/ beside this app. Writes only each session's context-track.json."""
+    from concurrent.futures import ThreadPoolExecutor
+    import subprocess
+    import sys
+    import time
+    import game_catalog
+    from ocr_component import MISSING, ensure_importable
+    vault = Path(vault).resolve()
+    game = game or vault.name
+    path = game_catalog.catalog_path(vault, game)
+    if not path.is_file():
+        raise ValueError(f'资料库里没有这个游戏的界面目录：{path}')
+    layout = json.loads(path.read_text(encoding='utf-8-sig')).get('layout')
+    if layout is None:
+        raise ValueError('界面目录里还没有版式规则：先在 设置 → 游戏 里启用“界面路径识别”，或运行 agent_cli.py layout-apply。')
+    if not ensure_importable():
+        raise ValueError(MISSING)
+    app = Path(__file__).resolve().parent
+    logs = app / 'state' / 'logs' / 'context-rebuild'
+    logs.mkdir(parents=True, exist_ok=True)
+
+    def one(folder):
+        if _built_with(folder, layout):
+            return folder.name, 'skipped', 0
+        try:
+            recorded = json.loads((folder / 'session.json').read_text(encoding='utf-8-sig')).get('game')
+        except (OSError, ValueError):
+            recorded = None
+        if recorded != game:
+            # 路径 5：早期场次记的游戏名不同（如“燕云”），找不到这份目录，轨道不会带页签；单列，不算失败。
+            return folder.name, 'other-game', 0
+        started = time.time()
+        with (logs / (folder.name[:22] + '.log')).open('w', encoding='utf-8') as log:
+            code = subprocess.call([sys.executable, '-B', '-X', 'utf8', str(app / 'agent_cli.py'), 'context-build', str(folder)],
+                                   cwd=app, stdout=log, stderr=subprocess.STDOUT)
+        return folder.name, 'ok' if code == 0 and _built_with(folder, layout) else f'failed (exit {code})', round(time.time() - started)
+
+    sessions = sorted(path.parent for path in (vault / '场次').glob('*/录像.mp4'))
+    progress(f'{len(sessions)} 场')
+    rows = []
+    with ThreadPoolExecutor(max(1, workers)) as pool:
+        for name, state, seconds in pool.map(one, sessions):
+            progress(f"{time.strftime('%H:%M')} {name[:22]} {state} {seconds // 60} min")
+            rows.append(dict(session=name, state=state, seconds=seconds))
+    return dict(sessions=len(rows), built=sum(row['state'] == 'ok' for row in rows),
+                skipped=sum(row['state'] == 'skipped' for row in rows),
+                other_game=[row['session'] for row in rows if row['state'] == 'other-game'],
+                failed=[row['session'] for row in rows if row['state'] not in ('ok', 'skipped', 'other-game')], logs=str(logs))

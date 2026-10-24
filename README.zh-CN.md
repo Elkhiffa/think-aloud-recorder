@@ -8,11 +8,11 @@ Windows 游戏体验记录器：录下游戏画面与口述，在独立窗口同
 
 [English](README.md) | 简体中文
 
-[下载](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [安装分析 skill](docs/agent-integration.md#skill-安装与更新) · [0.9.0 改动汇总](docs/changes-2026-10-22.md)
+[下载](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [安装分析 skill](docs/agent-integration.md#skill-安装与更新) · [0.10.0 改动汇总](docs/changes-2026-10-24.md)
 
 </div>
 
-当前源码版本为 **0.9.0**，本轮改动见 [0.9.0 改动汇总](docs/changes-2026-10-22.md)；此前记录见 [0.8.1](docs/changes-2026-10-15.md)、[0.8.0](docs/changes-2026-10-13.md)、[0.7.8](docs/changes-2026-10-09.md)、[2026-10-08 改动汇总](docs/changes-2026-10-08.md) 和 [2026-09-28 改动汇总](docs/changes-2026-09-28.md)。
+当前源码版本为 **0.10.0**，本轮改动见 [0.10.0 改动汇总](docs/changes-2026-10-24.md)；此前记录见 [0.9.0](docs/changes-2026-10-22.md)、[0.8.1](docs/changes-2026-10-15.md)、[0.8.0](docs/changes-2026-10-13.md)、[0.7.8](docs/changes-2026-10-09.md)、[2026-10-08 改动汇总](docs/changes-2026-10-08.md) 和 [2026-09-28 改动汇总](docs/changes-2026-09-28.md)。
 
 ## 使用
 
@@ -96,7 +96,9 @@ OBS 确认录像开始时会响一声短促柔和的提示音（约 0.2 秒）�
 
 分析由外部 agent（Codex 或 Claude）按仓库里的两份 skill 完成：单场整理 [`skills/think-aloud-judgments`](skills/think-aloud-judgments) 把一场录制整理成可追溯的判断实例；跨场次分析 [`skills/think-aloud-insight`](skills/think-aloud-insight) 把实例归到议题树，并按你确认的分析简报写洞察报告。
 
-**第一次用之前先安装**：把这两个文件夹复制到 agent 的技能目录（Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`），步骤和以后怎么更新见 [Skill 安装与更新](docs/agent-integration.md#skill-安装与更新)。软件更新不会更新已安装的 skill。应用里的「记录方法」和首次设置第一步也有这个链接。
+**第一次用之前先安装**：首次设置的“准备分析”一步，一次点击就下载识别组件并装好两份 skill，还可以直接创建燕云十六声项目并装好识别规则（默认勾选）。已经设置过的电脑，在 设置 → 通用 → 记录方法 点「安装分析 skill」，就装进这台电脑已有的 agent 技能目录（Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`），旧副本先备份。软件更新后再点一次即可同步。手动安装见 [Skill 安装与更新](docs/agent-integration.md#skill-安装与更新)。
+
+情景轨道和界面路径识别需要本地文字识别：在 设置 → 通用 下载一次「识别组件」（约 65 MB，固定版本，来自 files.pythonhosted.org），更新软件时保留。
 
 推荐手动选择时机：等场次转写完成，再在主窗口或资料台点「复制整理指令」，粘贴给 agent（见[手动发起一次整理](docs/agent-integration.md#手动发起一次整理)）。只处理指定场次，完成后结束；软件和 skill 都不会自动创建会话、定时任务或常驻扫描。
 

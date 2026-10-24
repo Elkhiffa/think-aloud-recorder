@@ -8,7 +8,7 @@ A think-aloud recorder for game UX research on Windows: record gameplay with you
 
 English | [简体中文](https://github.com/Elkhiffa/think-aloud-recorder/blob/main/README.zh-CN.md)
 
-[Download](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [Install the analysis skills](docs/agent-integration.md#skill-安装与更新) · [Changes in 0.9.0](docs/changes-2026-10-22.md)
+[Download](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [Install the analysis skills](docs/agent-integration.md#skill-安装与更新) · [Changes in 0.10.0](docs/changes-2026-10-24.md)
 
 </div>
 
@@ -37,7 +37,9 @@ Two skills in [`skills/`](skills) turn sessions into analysis:
 - [`think-aloud-judgments`](skills/think-aloud-judgments): organizes one session into traceable judgment instances (when it was said, which moment it refers to, which screen, and the evidence).
 - [`think-aloud-insight`](skills/think-aloud-insight): works across sessions. It files instances under the issue tree and, from an analysis brief you confirm, writes an insight report in which every claim cites its evidence.
 
-**Install them once** by copying both folders into your agent's skill directory (`%USERPROFILE%\.claude\skills` for Claude Code, `%USERPROFILE%\.codex\skills` for Codex). Step-by-step instructions, including how to update them later, are in [Skill install and update](docs/agent-integration.md#skill-安装与更新). App updates do not update installed skills.
+**Install them once** from the app: the first-run step **准备分析** (prepare analysis) downloads the text recognition component and installs both skills in one click, and can create a 燕云十六声 project with its interface rules ready. On a computer already set up, use Settings → 通用 → 记录方法 → **安装分析 skill**, which copies both skills, which ship with the app, into the skill folders of the agents you have (`%USERPROFILE%\.claude\skills` for Claude Code, `%USERPROFILE%\.codex\skills` for Codex), backing up any older copy first. Click it again after an app update to sync them. Manual steps are in [Skill install and update](docs/agent-integration.md#skill-安装与更新).
+
+Context tracks and interface path recognition need local text recognition: download the **识别组件** (about 65 MB, pinned packages from files.pythonhosted.org) in Settings → 通用 once; it is kept across updates.
 
 When a session is ready, click **复制整理指令** (copy the organize prompt) in the main window or the desk, and paste it to your agent. The recorder never starts an agent, schedules a task or scans the library on its own.
 

@@ -135,7 +135,7 @@
     $('deskDialog').showModal();
   }
   async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();}}
-  async function copyHandoff(s){await copyText(['请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。','场次文件夹：'+s.path,'只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。'].join('\n'));toast('整理指令已复制，粘贴给 Codex 或 Claude 即可。');}
+  async function copyHandoff(s){await copyText(['请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。','场次文件夹：'+s.path,...(state.appDir?['软件目录（agent_cli.py 和 runtime 在这里）：'+state.appDir]:[]),'只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。'].join('\n'));toast('整理指令已复制，粘贴给 Codex 或 Claude 即可。');}
   function editTitle(s){
     const h1=$('detailTitle');if(!h1||state.editing)return;state.editing=true;
     h1.innerHTML='<input id="renameInput" maxlength="4096" autocomplete="off" aria-label="场次名称，留空恢复默认名称" placeholder="留空恢复默认名称">';
@@ -189,7 +189,7 @@
   async function refresh(){
     const data=await call('desk_state');
     const signature=JSON.stringify([data.sessions,data.background_jobs,data.busy,data.recording,data.game]);
-    state.game=data.game;state.busy=data.busy||data.recording;state.jobs=data.background_jobs||[];
+    state.game=data.game;state.appDir=data.app_dir;state.busy=data.busy||data.recording;state.jobs=data.background_jobs||[];
     if(signature===state.signature)return data;state.signature=signature;
     state.sessions=data.sessions||[];render();
     // Never redraw under a title being edited.

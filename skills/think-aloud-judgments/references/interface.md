@@ -2,7 +2,7 @@
 
 ## 命令
 
-在仓库根目录用 Bash 运行。路径含空格和中文，一律加引号。下面的变量由任务给出：`PY` 是 `runtime/python.exe`，`SESSION` 是场次目录，`VAULT` 是资料库目录，`WORK` 是你自己的工作目录（所有文件都放这里，不与其他会话共用）。
+在**软件目录**用 Bash 运行：整理指令里的“软件目录”，即安装版软件文件夹里的 `app` 文件夹（含 `agent_cli.py` 和 `runtime`）；源码检出是仓库根目录。路径含空格和中文，一律加引号。下面的变量由任务给出：`PY` 是软件目录下的 `runtime/python.exe`，`SESSION` 是场次目录，`VAULT` 是资料库目录，`WORK` 是你自己的工作目录（所有文件都放这里，不与其他会话共用）。
 
 ```bash
 "$PY" -B -X utf8 agent_cli.py reprocess "$SESSION" --worker "<会话标识>" --reason "<为什么重做>" --seconds 3600
@@ -49,7 +49,7 @@
 - 全库规则的门槛（用户 2026-10-22 定）：同一个误转写出现多处、每处都按上下文核对过，而且原文不是常用词（“限时”“上传”“人影”“连续冲刺”这类日常词不行）；规则只是候选：确认前，把 `transcript-fix-list` 列出的每一处命中都结合上下文（拿不准就截图看画面）核对，不该改的用 `transcript-fix-exclude` 排除，剩下的都对了才确认。整理新场次时，也用 `transcript-fix-list VAULT --status confirmed --session <场次 id>` 核对已确认规则在这一场的命中，不该改的同样排除。
 - 提议只写进资料库的 `transcript-corrections.json` 待确认，不改任何引用；用户确认后，引用自动带上 `corrected_text`。这是单场整理唯一可以写资料库根目录的地方，只能通过这条命令。
 
-情景文字是每 5 秒一帧的本地 OCR，有错字、会漏掉短暂状态，只能当线索。`frame` 截的是那一刻的静态画面，不证明前后过程。
+情景文字是每 5 秒一帧的本地 OCR，有错字、会漏掉短暂状态，只能当线索。`frame` 截的是那一刻的静态画面，不证明前后过程。`context-read` 说这一场还没有情景轨道时，先跑 `"$PY" -B -X utf8 agent_cli.py ocr-status`：`ready` 为假就告诉用户在 设置 → 通用 里下载“识别组件”，不要自己安装任何包；这一场照常用原话和 `frame` 整理。
 
 ## 结果 JSON
 
