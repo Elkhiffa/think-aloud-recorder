@@ -8,7 +8,7 @@ A think-aloud recorder for game UX research on Windows: record gameplay with you
 
 English | [简体中文](https://github.com/Elkhiffa/think-aloud-recorder/blob/main/README.zh-CN.md)
 
-[Download](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [Install the analysis skills](docs/agent-integration.md#skill-安装与更新) · [Changes in 0.10.1](docs/changes-2026-10-24.md)
+[Download](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) · [Install the analysis skills](docs/agent-integration.md#skill-安装与更新) · [Changes in 0.10.2](docs/changes-2026-10-24.md)
 
 </div>
 
@@ -25,10 +25,10 @@ The recorder has no built-in AI. Analysis is done by an external agent (Codex or
 
 1. Download the latest Windows x64 package from [Releases](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest), extract the whole folder and run `Think Aloud.exe`.
 2. The first-run setup walks through how to think aloud, the microphone and transcription method, the game and its window, and where to save. Each game gets its own library folder.
-3. Pick the game at the top of the main window and press **Record**. If something is missing (game window, microphone, model or key), the button is disabled and the reason is shown next to it.
+3. Pick the game at the top of the main window and press **Record**. If the game window or microphone is missing, the button is disabled and the reason is shown next to it. A missing model or API key does not stop recording: the session waits, and you start its transcription later.
 4. After you stop, the main window shows the latest session as saved, transcribing, and then ready to organize.
 
-Requires Windows 10/11 x64 and the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/). The recorder does not install a global Python or change system proxy settings. The interface is in Chinese.
+The recorder asks for administrator rights when it starts, so it can record keyboard and mouse input in games that run as administrator; declining keeps everything else working. Requires Windows 10/11 x64 and the [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/). The recorder does not install a global Python or change system proxy settings. The interface is in Chinese.
 
 ## After recording: the analysis skills
 
