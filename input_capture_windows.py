@@ -248,6 +248,20 @@ class ButtonStateProbe:
             self._foreground_integrity = self._integrity(pid.value)
         return self._foreground_integrity is not None and self._foreground_integrity <= self.integrity
 
+    def raised_foreground(self):
+        """True when the window in front runs above this process's level (a game started as administrator):
+        Windows then withholds that window's keyboard and mouse Raw Input from us. A token we may not read is
+        treated as above us; a normal-level process cannot read an elevated one."""
+        foreground = self.user.GetForegroundWindow()
+        if not foreground or self.integrity is None:
+            return False
+        pid = W.DWORD()
+        self.user.GetWindowThreadProcessId(foreground, C.byref(pid))
+        if pid.value != self._foreground_pid:
+            self._foreground_pid = pid.value
+            self._foreground_integrity = self._integrity(pid.value)
+        return self._foreground_integrity is None or self._foreground_integrity > self.integrity
+
 
 class Header(C.Structure):
     _fields_ = [('type', W.DWORD), ('size', W.DWORD), ('device', W.HANDLE), ('param', W.WPARAM)]
@@ -518,6 +532,7 @@ class WindowsInputSource:
         self._button_probe = None
         self._button_sample_at = 0.
         self._button_access = None
+        self._raised = False  # the window in front withholds keyboard/mouse input from this process
 
     def start(self, callback):
         self.callback = callback
@@ -628,6 +643,10 @@ class WindowsInputSource:
         self._button_sample_at = now + .1
         if not self.capture_all and not self._foreground():
             return
+        raised = self._button_probe.raised_foreground()
+        if raised != self._raised:
+            self._raised = raised
+            self._pending.append({'type': 'blocked', 'timestamp': now, 'blocked': raised})
         available = self._button_probe.available()
         if available and self._button_access is False:
             self._resume_keyboard()
@@ -683,7 +702,7 @@ class WindowsInputSource:
                 # gate already resumed. Re-sample held controls after the new
                 # validated boundary instead of losing an entire long hold.
                 self._resume_due = self.clock() + .064
-            if event['type'] in ('focus', 'connect', 'disconnect', 'coverage_gap') or self._observer.ledger.authorized(event['timestamp']):
+            if event['type'] in ('focus', 'connect', 'disconnect', 'coverage_gap', 'blocked') or self._observer.ledger.authorized(event['timestamp']):
                 self.callback(event)
             else:
                 self.callback({'type': 'coverage_gap', 'timestamp': event['timestamp'],

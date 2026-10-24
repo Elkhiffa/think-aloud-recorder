@@ -10,6 +10,7 @@ import time
 import uuid
 import re
 import hashlib
+from app_paths import open_externally
 from session_metadata import session_title, session_presentation, rename_session as rename_session_metadata
 
 _LAYOUT_LOCK = threading.Lock()
@@ -512,7 +513,7 @@ class ReviewAPI:
         try:
             if not self._folder.is_dir():
                 raise ValueError('资料文件夹已移动或不可用。')
-            os.startfile(self._folder)
+            open_externally(self._folder, os.startfile)
             return {'ok': True}
         except Exception as error:
             return {'ok': False, 'error': str(error)}
@@ -532,7 +533,7 @@ class ReviewAPI:
         try:
             if kind not in ('notes', 'transcript'):
                 raise ValueError('未知文件类型。')
-            os.startfile(contained_file(self._folder, '复盘.md' if kind == 'notes' else '逐字稿.md'))
+            open_externally(contained_file(self._folder, '复盘.md' if kind == 'notes' else '逐字稿.md'), os.startfile)
             return {'ok': True}
         except Exception as error:
             return {'ok': False, 'error': str(error)}

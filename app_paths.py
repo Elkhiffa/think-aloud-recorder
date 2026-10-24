@@ -34,3 +34,18 @@ def manifest_path(path):
 
 def metadata_path(path):
     return application_root(path) / 'portable.json'
+
+
+# Set by portable_entry.restart_elevated when the recorder runs with administrator rights.
+ELEVATED = 'THINK_ALOUD_ELEVATED'
+
+
+def open_externally(target, fallback):
+    """Open a URL, folder or file. With administrator rights it goes through the Windows shell, which starts the
+    browser or editor at the user's normal level instead of handing it these rights; otherwise fallback(target)."""
+    import os
+    if os.environ.get(ELEVATED) == '1':
+        import subprocess
+        subprocess.Popen(['explorer.exe', str(target)])
+        return True
+    return fallback(target)

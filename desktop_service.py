@@ -7,7 +7,7 @@ owns per-session processing and never writes foreground recording activity.
 """
 from copy import deepcopy
 from pathlib import Path
-from app_paths import installation_root, vocabulary_dir
+from app_paths import installation_root, open_externally, vocabulary_dir
 import importlib.util
 import json
 import os
@@ -1618,7 +1618,7 @@ class DesktopService:
 
     def open_dictionary_site(self):
         try:
-            if not webbrowser.open(SOGOU_DICTIONARIES):
+            if not open_externally(SOGOU_DICTIONARIES, webbrowser.open):
                 raise RuntimeError('未能请求浏览器打开搜狗词库下载页。')
             return ok({'requested': True})
         except Exception:
@@ -1627,7 +1627,7 @@ class DesktopService:
     def open_bailian_console(self):
         """Open only the fixed provider console; never pass credentials or state."""
         try:
-            if not webbrowser.open('https://bailian.console.aliyun.com/'):
+            if not open_externally('https://bailian.console.aliyun.com/', webbrowser.open):
                 raise RuntimeError('未能请求浏览器打开百炼控制台。')
             return ok({'requested': True})
         except Exception:
@@ -1636,7 +1636,7 @@ class DesktopService:
     def open_skill_guide(self):
         """Open only the fixed skill install guide in the repository; never pass state."""
         try:
-            if not webbrowser.open(SKILL_GUIDE):
+            if not open_externally(SKILL_GUIDE, webbrowser.open):
                 raise RuntimeError('未能请求浏览器打开 skill 安装说明。')
             return ok({'requested': True})
         except Exception:
@@ -1666,7 +1666,7 @@ class DesktopService:
     def open_layout_guide(self):
         """Open only the fixed layout rules guide in the repository; never pass state."""
         try:
-            if not webbrowser.open(LAYOUT_GUIDE):
+            if not open_externally(LAYOUT_GUIDE, webbrowser.open):
                 raise RuntimeError('未能请求浏览器打开识别规则说明。')
             return ok({'requested': True})
         except Exception:
@@ -2081,7 +2081,7 @@ class DesktopService:
             self._ensure_not_recording(session)
             result = session.package()
             self._progress('已打包并校验：' + str(result), status='打包完成')
-            os.startfile(result.parent)
+            open_externally(result.parent, os.startfile)
         return self._launch('export', work, status='正在打包并校验')
 
     def open_folder(self, id=None):
@@ -2090,7 +2090,7 @@ class DesktopService:
                 path = self._session(id).path if id is not None else Path(self._cfg['vault']).resolve()
             if not path.is_dir():
                 raise ValueError('资料目录尚未创建，请先保存设置。')
-            os.startfile(path)
+            open_externally(path, os.startfile)
             return ok({'requested': True})
         except Exception as error:
             return self._error(error)
@@ -2104,7 +2104,7 @@ class DesktopService:
                 if not files:
                     raise ValueError('此场次尚未找到原始录像。')
                 file = self._contained_file(session, '原始录像.mkv' if (session.path / '原始录像.mkv').exists() else files[0].name)
-                os.startfile(file)
+                open_externally(file, os.startfile)
                 return ok({'requested': True})
         except Exception as error:
             return self._error(error)
@@ -2311,7 +2311,7 @@ class DesktopService:
                             or not (parts.path=='/Elkhiffa/think-aloud-recorder/releases'
                                     or parts.path.startswith('/Elkhiffa/think-aloud-recorder/releases/tag/'))):
                         raise ValueError('更新发布页地址无效。')
-                    if not webbrowser.open(url):raise RuntimeError('未能打开 GitHub 发布页，请稍后重试。')
+                    if not open_externally(url, webbrowser.open):raise RuntimeError('未能打开 GitHub 发布页，请稍后重试。')
                     result=None
                 if isinstance(result,dict) and result.get('ok') is False:
                     raise RuntimeError(result.get('error') or '更新操作未完成。')
