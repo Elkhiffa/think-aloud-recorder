@@ -7,7 +7,7 @@ owns per-session processing and never writes foreground recording activity.
 """
 from copy import deepcopy
 from pathlib import Path
-from app_paths import installation_root, vocabulary_dir
+from app_paths import installation_root, open_externally, vocabulary_dir
 import importlib.util
 import json
 import os
@@ -721,6 +721,8 @@ class DesktopService:
             session = self._active
             if session is None:
                 return ok(dict(state='idle', level=0, session_id=None))
+            if session.meta.get('narration') is False:
+                return ok(dict(state='none', level=0, session_id=session.meta['id']))
             mic = session.meta.get('settings', {}).get('mic', '')
             label = self._device_labels['mic'].get(mic) or next(
                 (item.get('itemName') for item in self._devices['mic'] if item.get('itemValue') == mic), None)
@@ -986,6 +988,7 @@ class DesktopService:
             blocked = self._active is not None or self._obs_uncertain or bool(self._uncertain_ids)
             self._mark_readiness_checking(invalidate or blocked)
         errors = []
+        notices = []  # Shown under 已就绪; never block recording.
         window_selection = None
         def error(code, message, step):
             errors.append(dict(code=code, message=self._safe_text(message), step=step))
@@ -1027,7 +1030,9 @@ class DesktopService:
                             if not value or not available:
                                 label = self._device_label(key, value)
                                 if key == 'mic':
-                                    error('MIC_UNAVAILABLE', f'麦克风“{label}”未连接或不可用，请重新连接或选择麦克风。', 1)
+                                    # 路径 1：用户 2026-10-24 定：没有麦克风也能录画面和操作（远程测试、只录操作），开录前确认一次。
+                                    notices.append(dict(code='MIC_UNAVAILABLE', message='没有麦克风 · 可只录画面和操作',
+                                                        detail=f'麦克风“{label}”未连接或不可用。'))
                                 elif key == 'window':
                                     error('WINDOW_UNAVAILABLE', f'游戏窗口“{label}”未打开或已关闭，请先打开该窗口。', 1)
                                 else:
@@ -1045,12 +1050,15 @@ class DesktopService:
                 self._mark('input_capture')
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
+            # 路径 1：用户 2026-10-24 定：没配好转写也能录制（至少留下带操作记录的回看），录完再补转写。
+            # 模型或密钥缺失只是提示，不拦录制；录完的场次停在“待整理”。
             if provider == 'local' and not self._model.resolve_model():
-                error('LOCAL_MODEL_MISSING', '已选本地转写，但模型缺失、已移动或校验失效；请导入 / 下载模型，或改用 Qwen 转写。', 2)
+                notices.append(dict(code='LOCAL_MODEL_MISSING', message='本地模型未就绪 · 录完可补转写'))
             elif provider == 'qwen' and not self._has_key():
                 exists = (self.root / 'state/secrets/dashscope-beijing.dpapi').exists()
-                error('CLOUD_KEY_UNREADABLE' if exists else 'CLOUD_KEY_MISSING',
-                      '本机保存的云端密钥无法读取或解密，请重新填写密钥。' if exists else '已选云端转写，但尚未保存本机 API Key。', 2)
+                notices.append(dict(code='CLOUD_KEY_UNREADABLE' if exists else 'CLOUD_KEY_MISSING',
+                                    message='API Key 无法读取 · 录完可补转写' if exists
+                                    else 'API Key 未保存 · 录完可补转写'))
             elif provider not in ('later', 'local', 'qwen'):
                 error('TRANSCRIPTION_INVALID', '请选择有效转写方式并保存设置。', 2)
             self._mark('transcription')
@@ -1074,7 +1082,7 @@ class DesktopService:
             if not self._automatic_probe_allowed():
                 return self._defer_readiness()
             self._readiness = dict(ready=not errors, checking=False, errors=errors, checked_at=time.time(),
-                                   window_selection=window_selection)
+                                   window_selection=window_selection, notices=notices)
             # The last completed check, for the settings it checked; shown while the game is in front.
             self._last_readiness = (self._settings_key(), deepcopy(self._readiness))
             return deepcopy(self._readiness)
@@ -1618,7 +1626,7 @@ class DesktopService:
 
     def open_dictionary_site(self):
         try:
-            if not webbrowser.open(SOGOU_DICTIONARIES):
+            if not open_externally(SOGOU_DICTIONARIES, webbrowser.open):
                 raise RuntimeError('未能请求浏览器打开搜狗词库下载页。')
             return ok({'requested': True})
         except Exception:
@@ -1627,7 +1635,7 @@ class DesktopService:
     def open_bailian_console(self):
         """Open only the fixed provider console; never pass credentials or state."""
         try:
-            if not webbrowser.open('https://bailian.console.aliyun.com/'):
+            if not open_externally('https://bailian.console.aliyun.com/', webbrowser.open):
                 raise RuntimeError('未能请求浏览器打开百炼控制台。')
             return ok({'requested': True})
         except Exception:
@@ -1636,7 +1644,7 @@ class DesktopService:
     def open_skill_guide(self):
         """Open only the fixed skill install guide in the repository; never pass state."""
         try:
-            if not webbrowser.open(SKILL_GUIDE):
+            if not open_externally(SKILL_GUIDE, webbrowser.open):
                 raise RuntimeError('未能请求浏览器打开 skill 安装说明。')
             return ok({'requested': True})
         except Exception:
@@ -1666,7 +1674,7 @@ class DesktopService:
     def open_layout_guide(self):
         """Open only the fixed layout rules guide in the repository; never pass state."""
         try:
-            if not webbrowser.open(LAYOUT_GUIDE):
+            if not open_externally(LAYOUT_GUIDE, webbrowser.open):
                 raise RuntimeError('未能请求浏览器打开识别规则说明。')
             return ok({'requested': True})
         except Exception:
@@ -1725,6 +1733,9 @@ class DesktopService:
             timer.mark('readiness')
             if not readiness['ready']:
                 raise RuntimeError('\n'.join(item['message'] for item in readiness['errors']))
+            no_microphone = any(item['code'] == 'MIC_UNAVAILABLE' for item in readiness.get('notices', []))
+            if no_microphone and not without_microphone:
+                raise RuntimeError('没有检测到麦克风。确认只录画面和操作后再开始，或连接麦克风后重试。')
             selection = readiness.get('window_selection')
             if cfg.get('source') == '游戏窗口' and selection and selection['status'] == 'matched':
                 if selection['requested'] != cfg.get('window'):
@@ -1733,6 +1744,9 @@ class DesktopService:
             try:
                 session = recorder.Session.start(cfg, progress=progress, mark=timer.mark,
                                                  confirmed=lambda _: self._play_start_chime())
+                if no_microphone:
+                    # No narration track content: never transcribed; review says so.
+                    session.update(narration=False)
                 with self._lock:
                     self._active = session
                 self._report_recording_state(session, '录像已开始。')
@@ -1748,8 +1762,9 @@ class DesktopService:
         with self._lock:
             try:
                 self._guard()
-                if payload not in (None, {}):
+                if payload not in (None, {}, {'without_microphone': True}):
                     raise ValueError('开始录制只使用已保存的预设。请先保存设置，再开始。')
+                without_microphone = payload == {'without_microphone': True}
                 if not self._cfg.get('configured') or not self._cfg.get('active_preset_id'):
                     raise RuntimeError('请先完成并保存录制预设。')
                 cfg = deepcopy(self._cfg)
@@ -1812,12 +1827,22 @@ class DesktopService:
             with self._lock:
                 self._active = None
                 self._uncertain_ids.discard(session.meta['id'])
+            if session.meta.get('narration') is False:
+                session.update(state='待整理')
+                self._progress('录像已保存。这一场没有口述，不需要转写；画面和操作可以直接回看。', status='待整理')
+                return
             if cfg['transcription_provider'] == 'later':
                 session.update(state='待整理')
                 self._progress('录像已保存。可选择转写方式后再整理。', status='待整理')
                 return
             session.update(state='待整理')
-            self._require_transcription(cfg)
+            try:
+                self._require_transcription(cfg)
+            except RuntimeError as error:
+                # 转写还没准备好（没模型或没密钥）：录像照常保存，等准备好后在场次里开始转写。
+                self._progress('录像已保存。转写还没准备好：' + str(error).split('。')[0] + '；准备好后在场次里开始转写。',
+                               status='待整理')
+                return
             self._enqueue_processing(session, cfg)
             self._progress('录像已保存，已加入后台整理队列。可以开始下一段录制。', status='待开始')
         with self._lock:
@@ -1849,6 +1874,8 @@ class DesktopService:
         # now has the same name. Only the chosen transcription engine and its
         # execution options come from the current saved configuration.
         cfg = deepcopy(session.meta['settings'])
+        if session.meta.get('narration') is False:
+            raise RuntimeError('这一场录制时没有麦克风，没有可转写的口述。')
         for key in ('model', 'device', 'compute_type', 'transcription_provider', 'qwen_region', 'qwen_model'):
             if key in self._cfg:
                 cfg[key] = deepcopy(self._cfg[key])
@@ -2081,7 +2108,7 @@ class DesktopService:
             self._ensure_not_recording(session)
             result = session.package()
             self._progress('已打包并校验：' + str(result), status='打包完成')
-            os.startfile(result.parent)
+            open_externally(result.parent, os.startfile)
         return self._launch('export', work, status='正在打包并校验')
 
     def open_folder(self, id=None):
@@ -2090,7 +2117,7 @@ class DesktopService:
                 path = self._session(id).path if id is not None else Path(self._cfg['vault']).resolve()
             if not path.is_dir():
                 raise ValueError('资料目录尚未创建，请先保存设置。')
-            os.startfile(path)
+            open_externally(path, os.startfile)
             return ok({'requested': True})
         except Exception as error:
             return self._error(error)
@@ -2104,7 +2131,7 @@ class DesktopService:
                 if not files:
                     raise ValueError('此场次尚未找到原始录像。')
                 file = self._contained_file(session, '原始录像.mkv' if (session.path / '原始录像.mkv').exists() else files[0].name)
-                os.startfile(file)
+                open_externally(file, os.startfile)
                 return ok({'requested': True})
         except Exception as error:
             return self._error(error)
@@ -2311,7 +2338,7 @@ class DesktopService:
                             or not (parts.path=='/Elkhiffa/think-aloud-recorder/releases'
                                     or parts.path.startswith('/Elkhiffa/think-aloud-recorder/releases/tag/'))):
                         raise ValueError('更新发布页地址无效。')
-                    if not webbrowser.open(url):raise RuntimeError('未能打开 GitHub 发布页，请稍后重试。')
+                    if not open_externally(url, webbrowser.open):raise RuntimeError('未能打开 GitHub 发布页，请稍后重试。')
                     result=None
                 if isinstance(result,dict) and result.get('ok') is False:
                     raise RuntimeError(result.get('error') or '更新操作未完成。')

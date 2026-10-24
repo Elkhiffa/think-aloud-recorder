@@ -97,6 +97,19 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(result['gaps'][0]['type'], 'disconnect')
         self.assertEqual(result['gaps'][0]['end'], 5)
 
+    def test_elevated_game_in_front_marks_keyboard_and_mouse_gaps(self):
+        # 路径 1：燕云以管理员身份运行、本软件没有：游戏在前台时键鼠收不到，缺口如实写入，手柄照常。
+        self.button('W', 1)
+        self.send('blocked', 2, blocked=True)
+        self.button('A', 3, device='xbox')
+        self.send('blocked', 7, blocked=False)
+        self.button('A', 8, False, device='xbox')
+        result = self.capture.stop()
+        self.assertEqual([(i['code'], i['end']) for i in result['intervals']], [('W', 2), ('A', 8)])
+        gaps = sorted((g['device'], g['start'], g['end']) for g in result['gaps'] if g['type'] == 'capture' and g.get('device'))
+        self.assertEqual(gaps, [('keyboard', 2, 7), ('mouse', 2, 7)])
+        self.assertTrue(all('管理员' in g['reason'] for g in result['gaps'] if g.get('device') in ('keyboard', 'mouse')))
+
     def test_motion_idle_ends_at_last_sample_not_timeout(self):
         for t in (1, 1.03):
             self.send('motion', t, device='mouse', code='MouseMove', kind='motion', x=1, y=0, value=1, foreground=True)

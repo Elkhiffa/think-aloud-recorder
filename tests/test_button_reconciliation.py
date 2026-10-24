@@ -70,7 +70,7 @@ class ReconciliationTests(unittest.TestCase):
         source._capture_started = 100.
         source._foreground = lambda: False
         calls = []
-        source._button_probe = SimpleNamespace(available=lambda: calls.append(1) or True)
+        source._button_probe = SimpleNamespace(available=lambda: calls.append(1) or True, raised_foreground=lambda: False)
         source.user = SimpleNamespace(GetAsyncKeyState=lambda vk: 0)
         self.down(source._buttons)
         source._reconcile_buttons(queue_drained=False)

@@ -312,6 +312,8 @@ await page.waitForTimeout(160);const colors=await page.evaluate(()=>{const css=i
    assert.match(await page.locator('#inputDetail').textContent(),/长按至少 1.00 秒/);
    assert.equal(await page.locator('.key-bar').count(),1);
  });
+ // QA F1: a session that was never queued for transcription says so, instead of reading 转写中.
+ await check('never-started transcription reads 尚未转写',async()=>{await page.evaluate(()=>{window.__snapshot={...window.__snapshot,segments:[],transcription:{state:'not_started'},revision:'synthetic-not-started'};});await page.waitForFunction(()=>document.querySelector('#transcriptTab').textContent==='尚未转写',null,{timeout:8000});assert.equal(await page.locator('#transcriptTab').isDisabled(),true);assert.match(await page.locator('#currentQuoteText').textContent(),/还没有转写/);});
  await check('no browser exceptions',async()=>assert.deepEqual(errors,[]));
  await browser.close();server.close();const report={scope:'Synthetic production browser acceptance; no actual OBS/device/native capture validation.',checks,errors,passed:checks.every(c=>c.pass)};fs.writeFileSync(path.join(out,'acceptance.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));if(!report.passed)process.exitCode=1;
 }

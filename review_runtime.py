@@ -10,6 +10,7 @@ import time
 import uuid
 import re
 import hashlib
+from app_paths import open_externally
 from session_metadata import session_title, session_presentation, rename_session as rename_session_metadata
 
 _LAYOUT_LOCK = threading.Lock()
@@ -206,6 +207,12 @@ def review_payload(folder, meta, segments, *, desktop=False):
             (meta.get('transcription_state') is None and meta.get('state') == '可回看')):
         transcription_state='failed'
         transcription_error='已完成的逐字稿文件缺失，请恢复文件或重新转写；录像仍可回看。'
+    if meta.get('narration') is False:
+        # 路径 1：没有麦克风时只录了画面和操作，没有口述可转写。
+        transcription_state = 'no_narration'
+    elif transcription_state == 'pending' and meta.get('state') == '待整理' and not meta.get('background_processing'):
+        # 路径 1（QA F1）：仅录制或转写未就绪时录的场次，停在“待整理”、没有排队：不是“转写中”。
+        transcription_state = 'not_started'
     from speaker_roles import speaker_payload
     from agent_protocol import preprocessing_status
     narration = None
@@ -512,7 +519,7 @@ class ReviewAPI:
         try:
             if not self._folder.is_dir():
                 raise ValueError('资料文件夹已移动或不可用。')
-            os.startfile(self._folder)
+            open_externally(self._folder, os.startfile)
             return {'ok': True}
         except Exception as error:
             return {'ok': False, 'error': str(error)}
@@ -532,7 +539,7 @@ class ReviewAPI:
         try:
             if kind not in ('notes', 'transcript'):
                 raise ValueError('未知文件类型。')
-            os.startfile(contained_file(self._folder, '复盘.md' if kind == 'notes' else '逐字稿.md'))
+            open_externally(contained_file(self._folder, '复盘.md' if kind == 'notes' else '逐字稿.md'), os.startfile)
             return {'ok': True}
         except Exception as error:
             return {'ok': False, 'error': str(error)}

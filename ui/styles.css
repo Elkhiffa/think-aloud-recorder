@@ -86,7 +86,8 @@ button:disabled{cursor:default;opacity:.5}
 .gauge .name{font-size:var(--t1);color:var(--rec-soft)}
 .gauge-note{font-size:var(--t1);color:var(--rec-soft);margin-top:var(--s2)}
 .microphone-level{height:18px;margin-top:var(--s1);background:repeating-linear-gradient(90deg,rgba(255,251,246,.3) 0 6px,transparent 6px 9px);position:relative;overflow:hidden}
-.microphone-level span{position:absolute;inset:0;background:repeating-linear-gradient(90deg,var(--rec-ink) 0 6px,transparent 6px 9px);transform-origin:left;transform:scaleX(0);transition:transform .12s linear}
+/* The lit segments sit on the same fixed 9px grid as the track; the level only uncovers them (scaling squeezed the segments). */
+.microphone-level span{position:absolute;inset:0;background:repeating-linear-gradient(90deg,var(--rec-ink) 0 6px,transparent 6px 9px);clip-path:inset(0 100% 0 0);transition:clip-path .12s linear}
 .microphone-monitor[data-state=silent] .microphone-level,.microphone-monitor[data-state=muted] .microphone-level,.microphone-monitor[data-state=unrouted] .microphone-level{outline:2px solid var(--rec-ink);outline-offset:2px}
 .microphone-warning{font-weight:700}
 .tile.recording .rec{flex:none;margin:var(--s4) var(--s5) var(--s5);width:auto;padding:0;height:36px;border-radius:var(--r);background:var(--rec-ink);color:var(--rec);flex-direction:row;align-items:center;justify-content:center;gap:var(--s2)}

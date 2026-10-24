@@ -47,6 +47,7 @@ KINDS = {'button', 'motion', 'axis', 'trigger'}
 GAP_REASONS = {'focus': '目标窗口不在前台，操作采集已暂停',
                'disconnect': '输入设备已断开', 'capture': '操作采集不可用'}
 UNCERTAIN_INPUT = '前台归属无法确认，此次输入未记录'
+ELEVATED_FOREGROUND = '前台程序以管理员身份运行，键鼠操作未采集；以管理员身份打开 Think Aloud 可以采集'
 FOREGROUND_MISMATCH = '前台状态校验异常，此区间没有可靠操作记录'
 
 
@@ -322,6 +323,17 @@ class InputRecorder:
                 return
             if typ == 'ready':
                 self._end_gap('capture:startup', at)
+                return
+            if typ == 'blocked':
+                # 路径 1：游戏以管理员身份运行而本软件没有：Windows 不把它在前台时的键鼠输入交给我们。
+                # 如实标出缺口，不让这段时间看起来像“没有按键”。手柄不受影响。
+                for device in ('keyboard', 'mouse'):
+                    if event.get('blocked') is True:
+                        self._close_all(at, device)
+                        self._open_gaps.setdefault('blocked:' + device, {'start': at, 'type': 'capture',
+                                                                           'reason': ELEVATED_FOREGROUND, 'device': device})
+                    else:
+                        self._end_gap('blocked:' + device, at)
                 return
             if typ == 'focus':
                 self._coverage_gap = None

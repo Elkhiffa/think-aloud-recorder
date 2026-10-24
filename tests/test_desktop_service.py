@@ -450,6 +450,22 @@ class DesktopServiceTests(unittest.TestCase):
         self.assertIsNone(self.service._active)
         self.assertEqual(bridge.recorder.Session(session.path).meta['state'], '待整理')
 
+    def test_stop_without_a_ready_model_saves_and_waits_for_transcription(self):
+        # 路径 1：选了本地转写但模型还没下载就录了一场：结束时照常保存，停在“待整理”，不排队转写、不报错。
+        settings = {k: v for k, v in self.config.items() if k not in ('password', 'port', 'vault')}
+        session = self.session(state='录制中', settings=dict(settings, transcription_provider='local'))
+        self.service._active = session
+        self.service._cfg['transcription_provider'] = 'local'
+        with patch.object(session, 'stop') as stop, patch.object(bridge, 'process_isolated') as process:
+            self.assertTrue(self.service.stop_recording()['ok'])
+            self.wait()
+        stop.assert_called_once()
+        process.assert_not_called()
+        self.assertIsNone(self.service._active)
+        self.assertEqual(bridge.recorder.Session(session.path).meta['state'], '待整理')
+        self.assertIn('转写还没准备好', self.service.get_state()['data']['activity']['status']
+                      + self.service.get_state()['data']['activity']['detail'])
+
     def test_failed_stop_retains_ownership_when_obs_unreachable(self):
         session = self.session(state='录制中')
         self.service._active = session
@@ -1896,33 +1912,68 @@ class DesktopServiceTests(unittest.TestCase):
         self.devices['mic'] = []
         state = self.readiness()
         self.assertFalse(state['ready'])
-        self.assertEqual({x['code'] for x in state['errors']}, {'WINDOW_UNAVAILABLE', 'MIC_UNAVAILABLE'})
+        # A missing window blocks; a missing microphone is a notice (user decision 2026-10-24: record picture and input).
+        self.assertEqual({x['code'] for x in state['errors']}, {'WINDOW_UNAVAILABLE'})
         self.assertTrue(all(x['step'] == 1 for x in state['errors']))
         self.assertIn('Synthetic window', str(state['errors']))
-        self.assertIn('Synthetic microphone', str(state['errors']))
+        self.assertEqual([x['code'] for x in state['notices']], ['MIC_UNAVAILABLE'])
+        self.assertIn('Synthetic microphone', state['notices'][0]['detail'])
         self.devices.update(available)
         self.assertTrue(self.readiness()['ready'])
+        self.assertEqual(self.readiness()['notices'], [])
 
-    def test_readiness_distinguishes_cloud_key_missing_and_unreadable(self):
+    def test_recording_without_a_microphone_needs_confirmation_and_is_never_transcribed(self):
+        # 路径 1：远程访问时没有麦克风：开录前确认一次，只录画面和操作；结束后不转写，回看说“没有口述”。
+        self.devices['mic'] = []
+        session = self.session(state='录制中')
+        with patch.object(bridge.recorder.Session, 'start', return_value=session) as start, \
+                patch.object(bridge, 'process_isolated') as process:
+            refused = self.service.start_recording({})
+            self.wait()
+            start.assert_not_called()
+            activity = self.service.get_state()['data']['activity']
+            self.assertIn('没有检测到麦克风', str(refused) + activity['status'] + activity['detail'])
+            self.assertTrue(self.service.start_recording({'without_microphone': True})['ok'])
+            self.wait()
+            start.assert_called_once()
+            self.assertIs(bridge.recorder.Session(session.path).meta['narration'], False)
+            self.assertEqual(self.service.get_microphone_state()['data']['state'], 'none')
+            with patch.object(session, 'stop'):
+                self.assertTrue(self.service.stop_recording()['ok'])
+                self.wait()
+            process.assert_not_called()
+        self.assertEqual(bridge.recorder.Session(session.path).meta['state'], '待整理')
+        self.assertIn('没有口述', self.service.get_state()['data']['activity']['status']
+                      + self.service.get_state()['data']['activity']['detail'])
+        self.assertFalse(self.service.process_session(session.meta['id'])['ok'])
+
+    def test_missing_cloud_key_is_a_notice_not_a_blocker(self):
+        # 路径 1：用户 2026-10-24 定：录制时 API 还没配好也能录，录完再补转写。
         self.service._cfg['transcription_provider'] = 'qwen'
-        self.assertEqual(self.readiness()['errors'][0]['code'], 'CLOUD_KEY_MISSING')
+        state = self.readiness()
+        self.assertTrue(state['ready'])
+        self.assertEqual([n['code'] for n in state['notices']], ['CLOUD_KEY_MISSING'])
         key = self.root / 'state/secrets/dashscope-beijing.dpapi'
         key.parent.mkdir(parents=True)
         key.write_bytes(b'invalid synthetic encrypted blob')
         state = self.readiness()
-        self.assertEqual(state['errors'][0]['code'], 'CLOUD_KEY_UNREADABLE')
-        self.assertEqual(state['errors'][0]['step'], 2)
+        self.assertTrue(state['ready'])
+        self.assertEqual([n['code'] for n in state['notices']], ['CLOUD_KEY_UNREADABLE'])
         with patch.object(bridge.secret_store, 'has_key', return_value=True):
-            self.assertTrue(self.readiness()['ready'])
+            self.assertEqual(self.readiness()['notices'], [])
 
-    def test_readiness_local_requires_model_but_later_does_not(self):
+    def test_missing_local_model_is_a_notice_not_a_blocker(self):
         self.service._cfg['transcription_provider'] = 'local'
-        self.assertEqual(self.readiness()['errors'][0]['code'], 'LOCAL_MODEL_MISSING')
+        state = self.readiness()
+        self.assertTrue(state['ready'])
+        self.assertEqual([n['code'] for n in state['notices']], ['LOCAL_MODEL_MISSING'])
         self.model.resolve_model.return_value = self.root / 'verified-model'
-        self.assertTrue(self.readiness()['ready'])
+        self.assertEqual(self.readiness()['notices'], [])
         self.service._cfg['transcription_provider'] = 'later'
         self.model.resolve_model.return_value = None
-        self.assertTrue(self.readiness()['ready'])
+        state = self.readiness()
+        self.assertTrue(state['ready'])
+        self.assertEqual(state['notices'], [])
 
     def test_readiness_requires_saved_preset_and_checks_real_output_access(self):
         self.service._cfg['active_preset_id'] = None
