@@ -115,7 +115,7 @@ class DeskAPI:
                     view['instances'] = [{key: row.get(key) for key in INSTANCE_FIELDS if key in row}
                                          for row in result['instances']]
             return _ok(dict(id=ident, state=status.get('state'), label=status.get('label', ''), kinds=status.get('kinds') or {},
-                            result=view, activities=status.get('activities') or [],
+                            result=view, activities=status.get('activities') or [], bugs=status.get('bugs') or {},
                             insights=self._session_insights(meta.get('id', ident))))
         except Exception as error:
             return _error(error)

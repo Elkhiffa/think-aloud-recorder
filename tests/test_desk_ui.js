@@ -128,12 +128,14 @@ test('the detail shows the same 问题 / 体验事件 views as review; a click o
     instances:[{id:'i1',event_id:'e1',kind:'confusion',said:[{start:12,end:14,text:'What now?'}],refers_to:{start:12,end:14,basis:'same_time'},statement:'Lost after the bag filled.',screen:'bag'},
       {id:'i2',event_id:'e2',kind:'observation',said:[{start:90,end:91,text:'Map opens.'}],refers_to:{start:90,end:91,basis:'same_time'},statement:'Noted the map.',screen:''}],coverage:null};
   const f=await fixture({sessions:[{id:'done',game:'Game',state:'可回看',can_review:true,preprocessing:{state:'complete',kinds:{confusion:1,observation:1}}}]});
-  f.data.details.done={id:'done',state:'complete',label:'',kinds:{confusion:1,observation:1},result,activities:[{name:'Bag',event_ids:['e1']}],insights:[]};
+  f.data.details.done={id:'done',state:'complete',label:'',kinds:{confusion:1,observation:1},result,activities:[{name:'Bag',event_ids:['e1']}],bugs:{i1:'suspected'},insights:[]};
   await f.select('done');
   const detail=f.el('sessionDetail').innerHTML,views=f.el('deskFindings').innerHTML;
   assert.match(detail,/data-dview="problems"[^>]*>问题 1</);assert.match(detail,/data-dview="events"[^>]*>体验事件 2</);
   assert.match(views,/What now\?/);assert.match(views,/Lost after the bag filled\./);assert.match(views,/Bag &lt;full&gt;/);
   assert.match(views,/data-filter="other"[^>]*>其他 <b>1<\/b>/);
+  // A bug the desk was told about joins the Bug group and keeps a mark in its own kind group.
+  assert.match(views,/data-filter="bug"[^>]*>Bug <b>1<\/b>/);assert.match(views,/fd-bug-mark is-suspected">疑似 Bug</);
   const container=f.el('deskFindings');container.contains=()=>true;
   const seek={dataset:{seek:'12',event:'e1'},disabled:false,hasAttribute:()=>false};
   container.listeners.click({target:{closest:selector=>selector==='button'?seek:null}});await settle();

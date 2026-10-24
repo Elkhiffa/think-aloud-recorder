@@ -801,7 +801,7 @@
           onSeek:time=>seekKeep(time,false),
           onEdit:id=>{const current=data.preprocessing;editEvent(current.result.events.find(event=>event.id===id),current.editing);},
           onView:view=>{if(state.tab!==view)setTab(view);}});
-        panel.classList.add('findings');findings.update({result,activities:info.activities||[]});findings.setTime(video.currentTime||0);
+        panel.classList.add('findings');findings.update({result,activities:info.activities||[],bugs:info.bugs||{}});findings.setTime(video.currentTime||0);
         if(!focusApplied&&data.initial_focus?.event){focusApplied=true;const id=data.initial_focus.event;root.requestAnimationFrame(()=>findings.openEvent(id,{playhead:true}));}
         return;
       }

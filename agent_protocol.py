@@ -628,6 +628,15 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
             if row.get('kind') not in ('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion',
                                        'self_correction', 'observation'):
                 raise ValueError('判断实例类型无效。')
+            # 路径 3：bug 与类型并列（设计没问题、实现出了问题）。明说的同时挂 BUG 标签，疑似的不挂；旧结果只有标签，按明说。
+            said_bug = any(tag == 'BUG' or tag.startswith('BUG.') for tag in tags)
+            bug = row.get('bug', 'explicit' if said_bug else None)
+            if bug not in (None, 'explicit', 'suspected'):
+                raise ValueError('判断实例的 bug 只能是 explicit（记录者明说）或 suspected（agent 判断）。')
+            if bug == 'explicit' and not said_bug:
+                raise ValueError('明说的 bug 要同时在 issue_tags 里写 BUG。')
+            if bug == 'suspected' and said_bug:
+                raise ValueError('疑似 bug 不挂 BUG 标签：BUG 表示记录者明说是 bug。')
             if row.get('confidence') not in ('high', 'medium', 'low'):
                 raise ValueError('判断实例的 confidence 必须是 high、medium 或 low。')
             refs = []
@@ -650,6 +659,8 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                                                ('screen_context', screen_context)) if val}
             if proposed:
                 extra['screen_proposed'] = True
+            if bug:
+                extra['bug'] = bug
             instances.append(dict(id=ident, event_id=row['event_id'], said=said, refers_to=refers_to, **extra,
                                   screen=screen, elements=list(selected_elements), kind=row['kind'],
                                   statement=_text(row.get('statement'), 300, '判断陈述'), issue_tags=list(tags),
@@ -1167,8 +1178,40 @@ def preprocessing_status(folder, meta=None, include_result=False):
     if value.get('state') == 'complete':
         # Path 1: review and the desk tag a result's events with the session's activity names. The names live in
         # session.json, outside this cache, and count only while they were made for the result shown.
-        value['activities'] = current_activities(folder, meta, (value.get('editing') or {}).get('result_sha256'))
+        digest = (value.get('editing') or {}).get('result_sha256')
+        value['activities'] = current_activities(folder, meta, digest)
+        # Path 1: review and the desk show bugs beside the problem kinds; the library's BUG links live outside this cache.
+        value['bugs'] = current_bugs(folder, value['result'], digest)
     return value
+
+
+def current_bugs(folder, result, result_sha256=None):
+    """Instance id -> 'explicit' | 'suspected': the result's own bug marks, plus support links under BUG in the
+    library that still point at this result. A link under a sub-issue titled 疑似… is suspected; explicit wins."""
+    bugs = {row['id']: row['bug'] for row in result.get('instances') or [] if row.get('bug')}
+    try:
+        from issue_registry import read_links, read_registry
+        vault = Path(folder).resolve().parent.parent
+        issues = {row['id']: row for row in read_registry(vault)['issues']}
+        links = read_links(vault)['links']
+        digest = result_sha256 or _file_hash(_path(folder, RESULT))
+    except (OSError, ValueError, KeyError, TypeError):
+        return bugs  # An unreadable issue table leaves the session's own marks.
+    ids = {row['id'] for row in result.get('instances') or []}
+    for link in links:
+        if (not isinstance(link, dict) or link.get('session_id') != result.get('session_id') or link.get('result_sha256') != digest
+                or link.get('instance_id') not in ids or link.get('role', 'support') != 'support'):
+            continue
+        chain, ident = [], link.get('issue')
+        while ident in issues and ident not in chain:
+            chain.append(ident)
+            ident = issues[ident].get('parent')
+        if 'BUG' not in chain:
+            continue
+        level = 'suspected' if any(str(issues[i].get('title', '')).startswith('疑似') for i in chain if i != 'BUG') else 'explicit'
+        if bugs.get(link['instance_id']) != 'explicit':
+            bugs[link['instance_id']] = level
+    return bugs
 
 
 def current_activities(folder, meta, result_sha256=None):

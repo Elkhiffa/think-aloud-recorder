@@ -106,6 +106,61 @@ class JudgmentInstanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '类型无效'):
             agent.validate_result(self.folder, candidate)
 
+    def test_bug_is_marked_beside_the_kind_explicit_or_suspected(self):
+        """触发路径：单场整理把“设计没问题、实现出了问题”的判断标成 bug → 回看里 Bug 组和它原本的类型组都列出。"""
+        candidate = self.candidate()
+        candidate['instances'][0]['issue_tags'] = ['BUG']
+        self.assertEqual(agent.validate_result(self.folder, candidate)['instances'][0]['bug'], 'explicit',
+                         'an older result with only the BUG tag reads as explicit')
+        candidate['instances'][0].update(issue_tags=[], bug='suspected')
+        instance = agent.validate_result(self.folder, candidate)['instances'][0]
+        self.assertEqual((instance['bug'], instance['kind']), ('suspected', 'confusion'), 'the kind stays as judged')
+        candidate['instances'][0]['bug'] = 'explicit'
+        with self.assertRaisesRegex(ValueError, '同时在 issue_tags 里写 BUG'):
+            agent.validate_result(self.folder, candidate)
+        candidate['instances'][0].update(bug='suspected', issue_tags=['BUG'])
+        with self.assertRaisesRegex(ValueError, '疑似 bug 不挂 BUG'):
+            agent.validate_result(self.folder, candidate)
+        candidate['instances'][0].update(bug='maybe', issue_tags=[])
+        with self.assertRaisesRegex(ValueError, 'explicit（记录者明说）或 suspected'):
+            agent.validate_result(self.folder, candidate)
+        candidate['instances'][0].pop('bug')
+        self.assertNotIn('bug', agent.validate_result(self.folder, candidate)['instances'][0])
+
+    def test_review_bugs_join_session_marks_and_library_bug_links(self):
+        """触发路径：用户打开回看或资料库详情 → Bug 组既有单场标的，也有洞察里挂到 BUG 的；疑似子议题算疑似，明说优先，
+        反例和挂在旧结果上的对应不算。跨场次整理用 instances-query --bug 取单场标的候选。"""
+        from issue_registry import query_instances
+        candidate = self.candidate()
+        second = dict(candidate['instances'][0], id='i2', said=[dict(kind='quote', ref='t000001')],
+                      refers_to=dict(start=2, end=4, basis='same_time'), issue_tags=[], statement='入口点了没反应。')
+        third = dict(second, id='i3', statement='入口文字被裁掉一半。')
+        candidate['instances'][0].update(issue_tags=[], bug='suspected')
+        candidate['instances'] += [second, third]
+        job = agent.claim(self.folder, 'synthetic-v2-worker')
+        agent.submit(self.folder, job['token'], candidate)
+        digest = agent._file_hash(agent._path(self.folder, agent.RESULT))
+        registry = recorder.read(self.vault / 'issues.json')
+        registry['issues'] += [dict(id='BUG', title='Bug', description='', status='confirmed'),
+                               dict(id='BUG.1', parent='BUG', title='入口没反应', description='', status='confirmed'),
+                               dict(id='BUG.2', parent='BUG', title='疑似：入口文字被裁切', description='', status='confirmed')]
+        recorder.write(self.vault / 'issues.json', registry)
+        link = lambda instance, issue, role='support', at=digest: dict(issue=issue, session_id='fixture', instance_id=instance,
+                                                                     result_sha256=at, reason='合成理由', role=role)
+        recorder.write(self.vault / 'issue-links.json', dict(version=1, links=[
+            link('i1', 'BUG.1'),                      # the library says explicit: wins over the session's suspected
+            link('i3', 'BUG.2'),                      # under a 疑似 sub-issue: suspected
+            link('i2', 'BUG.1', role='counter'),      # counter evidence is not a bug
+            link('i2', 'BUG.2', at='0' * 64),     # bound to an older result: no longer counts
+            link('i2', 'TA-01')]))
+        state = agent.preprocessing_status(self.folder, include_result=True)
+        self.assertEqual(state['bugs'], {'i1': 'explicit', 'i3': 'suspected'})
+        self.assertNotIn('bugs', agent.preprocessing_status(self.folder))
+        self.assertEqual([row['instance_id'] for row in query_instances(self.vault, bug='suspected')], ['i1'])
+        self.assertEqual([row['instance_id'] for row in query_instances(self.vault, bug='any')], ['i1'])
+        self.assertEqual(query_instances(self.vault, bug='explicit'), [])
+        self.assertEqual(session_review_payload(self.folder)['preprocessing']['bugs'], state['bugs'])
+
     def test_unknown_issue_tag_is_rejected(self):
         """触发路径：agent 自造一个不在 issues.json 里的标签 → 按议题筛选时这条实例永远查不到。"""
         candidate = self.candidate()

@@ -421,7 +421,7 @@ def screen_names(vault, game):
     return names
 
 
-def query_instances(vault, issue=None, screen=None, element=None, kind=None, session=None):
+def query_instances(vault, issue=None, screen=None, element=None, kind=None, session=None, bug=None):
     rows = []
     requested = set(issue or [])
     # 路径 2/3：查洞察或议题时一并带出它下面所有层级。
@@ -457,6 +457,9 @@ def query_instances(vault, issue=None, screen=None, element=None, kind=None, ses
                 continue
             if kind is not None and instance['kind'] != kind:
                 continue
+            # 路径 3：跨场次整理按单场标的 bug 取候选（any = 明说和疑似都要）。
+            if bug is not None and (not instance.get('bug') if bug == 'any' else instance.get('bug') != bug):
+                continue
             row = dict(session_id=meta['id'], instance_id=instance['id'],
                        said_start=min(said['start'] for said in instance['said']),
                        refers_start=instance['refers_to']['start'], refers_end=instance['refers_to']['end'],
@@ -466,7 +469,7 @@ def query_instances(vault, issue=None, screen=None, element=None, kind=None, ses
                        refers_basis=instance['refers_to']['basis'], catalog_screen=catalog_screen,
                        # 画面证据里 agent 核对过的时刻，比所指区间的起点更能代表界面本身。
                        frame_at=next((row['start'] for row in instance['evidence'] if row['kind'] == 'video'), None),
-                       **{key: instance[key] for key in ('route', 'screen_proposed', 'screen_context', 'compare_to')
+                       **{key: instance[key] for key in ('route', 'screen_proposed', 'screen_context', 'compare_to', 'bug')
                           if key in instance})
             rows.append((str(meta.get('created') or meta['id']), row))
     # 指向本场之前的实例没有本场所指时间，按说出口的时间排序。

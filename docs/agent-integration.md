@@ -141,7 +141,7 @@ issues-dismiss VAULT ID
 issues-link VAULT --file LINKS.json | --issue ID --session SESSION --instance INSTANCE [--reason TEXT] [--role support|counter]
 issues-unlink VAULT ID --session SESSION --instance INSTANCE
 issues-unlink VAULT --file UNLINKS.json   # [{issue,session_id,instance_id}]，任何一条不存在整批都不写
-instances-query VAULT [--issue ID]... [--screen ID] [--element ID] [--kind KIND] [--session ID]
+instances-query VAULT [--issue ID]... [--screen ID] [--element ID] [--kind KIND] [--session ID] [--bug explicit|suspected|any]
 bug-hits VAULT
 insight-validate VAULT REPORT
 catalog-confirm VAULT GAME --proposed NAME (--new ID [--name NAME] | --into ID)
