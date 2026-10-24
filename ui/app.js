@@ -249,7 +249,7 @@ function showMicrophone(data={state:'connecting',level:0}){
  $('#microphoneMonitor').dataset.state=state;
  if(data.name)$('#microphoneMonitor').title=data.name;
  const value=['signal','quiet','silent','loud'].includes(state)&&Number.isFinite(data.level)?Math.max(0,Math.min(1,data.level)):0;
- $('#microphoneFill').style.transform=`scaleX(${value})`;
+ $('#microphoneFill').style.clipPath=`inset(0 ${((1-value)*100).toFixed(1)}% 0 0)`;
  $('#microphoneLevel').setAttribute('aria-valuenow',Math.round(value*100));
  $('#microphoneLevel').setAttribute('aria-valuetext',copy[0]);
 }
