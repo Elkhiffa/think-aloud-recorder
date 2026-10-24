@@ -15,10 +15,27 @@ class DesktopShellTests(unittest.TestCase):
         with TemporaryDirectory() as d:
             with app.instance_lock(Path(d)):
                 with self.assertRaisesRegex(RuntimeError, "已经运行"):
-                    with app.instance_lock(Path(d)):
+                    with app.instance_lock(Path(d), wait=.5):
                         self.fail("second instance admitted")
-            with app.instance_lock(Path(d)):
+            with app.instance_lock(Path(d), wait=0):
                 pass
+
+    def test_reopening_right_after_closing_waits_for_the_closing_window(self):
+        # 路径 1：关窗口后马上重开，旧窗口还在停录制引擎、持有锁；新窗口等它退出后正常启动，不再提示“已经运行”。
+        with TemporaryDirectory() as d:
+            held, release = threading.Event(), threading.Event()
+
+            def closing_window():
+                with app.instance_lock(Path(d), wait=0):
+                    held.set()
+                    release.wait(5)
+            thread = threading.Thread(target=closing_window)
+            thread.start()
+            held.wait(5)
+            threading.Timer(.6, release.set).start()
+            with app.instance_lock(Path(d), wait=5):
+                self.assertTrue(release.is_set())
+            thread.join(5)
 
     def test_shell_uses_local_ui_native_frame_and_webview2(self):
         webview = Mock()

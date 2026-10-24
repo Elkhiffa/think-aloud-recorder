@@ -12,6 +12,28 @@ Every native call runs on the window's UI thread.
 import ctypes
 from ctypes import wintypes
 
+
+# Window sizes vs page sizes. pywebview sizes a form by the window's DPI, but WebView2 can render the page at a
+# different scale: on a home PC (2026-10-24) the form had a 720x520 client area while the page rendered at 1.46x,
+# so it laid out in 494x357 and the home cards overlapped. The page's devicePixelRatio (zoom is fixed at 1) is the
+# scale it actually renders at, so the client area is the design size times that ratio.
+
+def page_factor(pixel_ratio, window_dpi):
+    """How much larger the form must be than pywebview made it (1 when the page renders at the window's scale)."""
+    window_scale = (window_dpi or 96) / 96
+    return pixel_ratio / window_scale if pixel_ratio and pixel_ratio > 0 else 1.0
+
+
+def physical_size(client_size, pixel_ratio, window_dpi):
+    """The client area that gives the page exactly client_size layout pixels."""
+    scale = pixel_ratio if pixel_ratio and pixel_ratio > 0 else (window_dpi or 96) / 96
+    return round(client_size[0] * scale), round(client_size[1] * scale)
+
+
+def fit(size, work):
+    """Never larger than the monitor's work area."""
+    return min(size[0], work[0]), min(size[1], work[1])
+
 WM_SYSCOMMAND = 0x0112
 SC_MINIMIZE, SC_MAXIMIZE, SC_RESTORE, SC_CLOSE = 0xF020, 0xF030, 0xF120, 0xF060
 GWL_STYLE, WS_THICKFRAME, WS_MAXIMIZEBOX, WS_MINIMIZEBOX = -16, 0x00040000, 0x00010000, 0x00020000
@@ -26,6 +48,8 @@ _user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
 _user32.SetWindowLongPtrW.argtypes = (wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t)
 _user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
 _user32.SetWindowPos.argtypes = (wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT)
+_user32.GetDpiForWindow.argtypes = (wintypes.HWND,)
+_user32.GetDpiForWindow.restype = wintypes.UINT
 _user32.IsZoomed.argtypes = (wintypes.HWND,)
 _user32.IsIconic.argtypes = (wintypes.HWND,)
 _user32.MonitorFromWindow.argtypes = (wintypes.HWND, wintypes.DWORD)
@@ -88,9 +112,14 @@ class WindowChrome:
         if getattr(self, '_prepared', False):
             return
         self._prepared = True
+        try:
+            # Called from the page-loaded event, off the UI thread, so the page can answer.
+            ratio = float(self._window.evaluate_js('window.devicePixelRatio') or 0) or None
+        except Exception:
+            ratio = None
 
         def apply():
-            from System.Drawing import Size
+            from System.Drawing import Point, Size
             native = self._native()
             hwnd = self._hwnd()
             style = _user32.GetWindowLongPtrW(hwnd, GWL_STYLE)
@@ -105,11 +134,31 @@ class WindowChrome:
             self._inset = (max(0, (outer.right - outer.left - inner.right) // 2),
                            max(0, (outer.bottom - outer.top - inner.bottom) // 2))
             dx, dy = self._inset
-            if client_size:
-                native.Size = Size(client_size[0] + 2 * dx, client_size[1] + 2 * dy)
+            window_dpi = _user32.GetDpiForWindow(wintypes.HWND(hwnd))
+            factor = page_factor(ratio, window_dpi)
+            info = _MonitorInfo(cbSize=ctypes.sizeof(_MonitorInfo))
+            monitor = _user32.MonitorFromWindow(wintypes.HWND(hwnd), 2)
+            work = info.rcWork if monitor and _user32.GetMonitorInfoW(monitor, ctypes.byref(info)) else None
+            area = (work.right - work.left, work.bottom - work.top) if work else (1 << 30, 1 << 30)
             minimum = native.MinimumSize
             if minimum.Width and minimum.Height:
-                native.MinimumSize = Size(minimum.Width + 2 * dx, minimum.Height + 2 * dy)
+                native.MinimumSize = Size(*fit((round(minimum.Width * factor) + 2 * dx,
+                                                round(minimum.Height * factor) + 2 * dy), area))
+            if client_size:
+                width, height = physical_size(client_size, ratio, window_dpi)
+            elif abs(factor - 1) > .02:
+                width, height = round(inner.right * factor), round(inner.bottom * factor)
+            else:
+                width = height = None  # The page already renders at the window's scale: keep pywebview's size.
+            if width:
+                width, height = fit((width + 2 * dx, height + 2 * dy), area)
+                native.Size = Size(width, height)
+                if work:
+                    # A grown window keeps its top-left corner; pull it back inside the work area.
+                    left = max(work.left, min(native.Left, work.right - width))
+                    top = max(work.top, min(native.Top, work.bottom - height))
+                    if (left, top) != (native.Left, native.Top):
+                        native.Location = Point(left, top)
             try:
                 core = native.browser.webview.CoreWebView2
                 core.Settings.IsNonClientRegionSupportEnabled = True
