@@ -53,7 +53,7 @@
   function title(s){const named=s.session_name||(s.title&&s.title!==s.game?s.title:'');if(named)return {named:true,text:named};const titles=(s.preprocessing?.event_titles||[]).filter(Boolean);const d=new Date(s.created);return {named:false,text:titles.length?titles.join('、'):(Number.isNaN(d.getTime())?'未命名的记录':pad(d.getHours())+':'+pad(d.getMinutes())+' 开始的记录')};}
   function clock(value){const n=Math.max(0,Math.floor(Number(value)||0));return Math.floor(n/3600)+':'+pad(Math.floor(n/60)%60)+':'+pad(n%60);}
   function short(value){const n=Math.max(0,Math.floor(Number(value)||0));return n>=3600?clock(n):pad(Math.floor(n/60))+':'+pad(n%60);}
-  const bar=(kinds,big)=>{const present=Object.keys(KIND).filter(k=>kinds[k]);return present.length?`<div class="fp${big?' big':''}">${present.map(k=>`<i class="k-${k}" data-flex="${kinds[k]}"></i>`).join('')}</div>`:'';};
+  const bar=kinds=>{const present=Object.keys(KIND).filter(k=>kinds[k]);return present.length?`<div class="fp">${present.map(k=>`<i class="k-${k}" data-flex="${kinds[k]}"></i>`).join('')}</div>`:'';};
   function visible(){
     const q=state.search.trim().toLowerCase();
     let rows=state.sessions.filter(s=>(state.filter==='all'||status(s)===state.filter)
@@ -109,14 +109,12 @@
     else if(detail.state!=='complete'||!detail.result)body=`<p class="d-note">${escape(detail.label||'这一场还没有整理结果。')} 复制整理指令，粘贴给 Codex 或 Claude 整理后，原话和问题分布会出现在这里。</p>`;
     else{
       const kinds=detail.kinds||{},total=Object.keys(KIND).reduce((n,k)=>n+(kinds[k]||0),0),version2=Findings.isVersion2(detail.result);
-      const legend=Object.entries(KIND).filter(([k])=>kinds[k]).map(([k,label])=>`<span class="k-${k}"><b>${kinds[k]}</b> ${label}</span>`).join('');
       if(!version2)state.findings.view='events';
       // The same two views as review (ui/findings.js); a click opens review on the matching tab.
       const view=state.findings.view,tab=(name,label)=>`<button type="button" role="tab" data-dview="${name}" aria-selected="${view===name}" class="${view===name?'on':''}">${label}</button>`;
       const tabs=`<div class="d-tabs" role="tablist" aria-label="整理结果">${version2?tab('problems',`问题 ${total}`):''}${tab('events',`体验事件 ${detail.result.events.length}`)}</div>`;
       const ins=detail.insights.length?`<ul class="lns">${detail.insights.slice(0,8).map(i=>`<li><button class="ln ins" data-issue="${escape(i.id)}" title="在洞察里查看"><span class="tx">${escape(i.title)}</span><span class="ct">${i.count}</span>${GO}</button></li>`).join('')}</ul>`:'<p class="note">这一场的证据还没有挂到洞察下。</p>';
-      body=(version2?`<div class="d-sum">${bar(kinds,true)}<div class="d-sum-row"><span class="total"><b>${total}</b> 个问题</span><span class="kleg">${legend}</span></div></div>`:'')
-        +`${tabs}<div id="deskFindings" class="d-findings"></div>`
+      body=`${tabs}<div id="deskFindings" class="d-findings"></div>`
         +`<section class="grp"><div class="gh"><span class="name">关联洞察</span></div>${ins}</section>`;
     }
     const notes=(job?`<p class="d-note">${escape(job.state==='queued'?'等待转写，前面的场次完成后继续。':job.detail||'正在转写，可以继续录制。')}</p>`:'')+(s.error?`<p class="d-note warn">${escape(s.error)}</p>`:'');

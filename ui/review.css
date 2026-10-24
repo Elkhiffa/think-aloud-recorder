@@ -44,8 +44,6 @@ h1{margin:0;font-size:22px;font-weight:600;color:var(--heading);white-space:nowr
 .review-wordmark{font:500 20px/1.2 Georgia,"Times New Roman",serif;color:var(--heading);letter-spacing:-.4px}
 .session-info{font-size:14px;color:var(--muted);margin:4px 0 0;font-variant-numeric:tabular-nums}
 .session-info:empty{display:none}
-.review-session .session-content{font-size:13px;line-height:1.65;color:var(--muted);white-space:normal;overflow-wrap:anywhere;margin:4px 0 0;max-width:none}
-.review-session .session-content:empty{display:none}
 .session-info .preprocessing-count{display:inline-block;margin-left:8px;white-space:nowrap}
 #testLabel{font-size:13px;white-space:nowrap;color:var(--muted)}
 .review-layout{flex:1;min-height:0;display:grid;--splitter-size:24px;grid-template-columns:minmax(0,var(--video-share,1.45fr)) var(--splitter-size) minmax(0,var(--text-share,1fr));gap:0;padding:16px 24px}
@@ -300,7 +298,7 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
 /* The footage owns its rectangle. Transport and spoken context live outside it. */
 .review-header{padding:16px 24px;gap:24px;align-items:flex-start}
 .review-header-actions{gap:16px;align-self:center}
-.review-brand{gap:16px}.review-session .session-content{max-width:none;width:100%;margin-top:8px}
+.review-brand{gap:16px}
 .review-layout{padding:16px 24px;--splitter-size:24px}
 .video-column{gap:8px;container-type:inline-size}
 .video-slot{background:transparent;overflow:visible;border-radius:4px}
@@ -403,7 +401,7 @@ h2{font-size:22px;line-height:1.4;margin:0;font-weight:600;color:var(--heading)}
  .review-layout{padding:8px 16px;--splitter-size:16px}
  .review-companion{flex-basis:168px}.review-tabs{gap:16px}
  .review-tabs button{font-size:13px}
- .review-session .session-content{font-size:12px;max-height:40px;overflow:auto}
+
  .speaker-summary{font-size:12px}.video-column{gap:8px}
 }
 
@@ -439,7 +437,6 @@ h1,.review-header h1{font:700 22px/1.35 "Noto Serif SC","Source Han Serif SC","M
 .session-meta-row #fileActionsToggle{border-left:1px solid var(--paper)}
 #copyPath{border-radius:var(--r-sm) 0 0 var(--r-sm)}#fileActionsToggle{border-radius:0 var(--r-sm) var(--r-sm) 0}
 #copyPath.copied,.session-meta-row #copyPath.copied{background:var(--fill2);color:var(--ink)}
-.review-session .session-content{color:var(--muted);display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
 .review-header-actions{align-self:flex-start}
 .review-header .win{display:flex;margin-left:var(--s2);align-self:flex-start;margin-top:-12px;margin-right:-24px}
 .review-header .win button{width:46px;height:40px;border:0;border-radius:0;background:none;color:var(--ink);font:10px/40px "Segoe Fluent Icons","Segoe MDL2 Assets";padding:0}
@@ -518,7 +515,7 @@ h1,.review-header h1{font:700 22px/1.35 "Noto Serif SC","Source Han Serif SC","M
 .speaker-choice input{accent-color:var(--ink)}
 .speaker-tag.is-recorder{color:var(--ink)}
 /* 字号：标题 22、小标题 14 粗、正文 14、注释 12 */
-body,#search,#empty,.review-session .session-content,.file-toolbar button,.rename-form button,.event-context,.event-footnote,.event-evidence,
+body,#search,#empty,.file-toolbar button,.rename-form button,.event-context,.event-footnote,.event-evidence,
 .speaker-reason,.speaker-choice small,.quote-popover p,.playback-popup button,.speaker-current,.video-slot .plyr__controls,.alignment-heading,
 .line,.event-evidence-row .event-quote,#currentQuoteText{font-size:14px}
 .event-dialog h2{font:700 22px/1.35 "Noto Serif SC","Source Han Serif SC","Microsoft YaHei UI",serif}

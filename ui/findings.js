@@ -67,7 +67,7 @@
     }
     function filterBar(scope){
       const count=counts(scope);
-      const chips=GROUPS.map(group=>`<button type="button" class="fd-chip k-${group}" data-filter="${group}" aria-pressed="${state.filter.has(group)}"${count[group]?'':' disabled'}>${GROUP_LABEL[group]} <b>${count[group]}</b></button>`).join('');
+      const chips=GROUPS.filter(group=>count[group]||state.filter.has(group)).map(group=>`<button type="button" class="fd-chip k-${group}" data-filter="${group}" aria-pressed="${state.filter.has(group)}">${GROUP_LABEL[group]} <b>${count[group]}</b></button>`).join('');
       const activity=state.activity?`<button type="button" class="fd-chip fd-activity-chip" data-clear-activity title="取消活动筛选">活动：${escape(state.activity)} <span aria-hidden="true">×</span></button>`:'';
       return `<div class="fd-bar" role="group" aria-label="按问题类型筛选">${chips}${activity}</div>`;
     }

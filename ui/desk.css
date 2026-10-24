@@ -49,7 +49,7 @@ button:disabled{cursor:default;opacity:.5}
 .list{container-type:inline-size}
 .fbar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);padding:var(--s4) var(--s4) var(--s3)}
 .fsp{flex:1}
-.search{display:flex;align-items:center;gap:var(--s2);height:32px;flex:1 1 120px;min-width:120px;max-width:200px;padding:0 var(--s3);border-radius:var(--r);background:var(--fill);color:var(--muted)}
+.search{display:flex;align-items:center;gap:var(--s2);height:32px;flex:1 1 140px;min-width:140px;max-width:200px;padding:0 var(--s3);border-radius:var(--r);background:var(--fill);color:var(--muted)}
 .search svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.8}
 .search input{flex:1;min-width:0;height:100%;border:0;background:none;color:var(--ink);font:inherit;outline:none}
 .search:focus-within{outline:2px solid var(--ink)}
@@ -93,7 +93,6 @@ button:disabled{cursor:default;opacity:.5}
 .srow .c-st.running{color:var(--muted)}
 .fp{display:flex;height:6px;gap:2px;border-radius:3px;overflow:hidden}
 .fp i{display:block;background:var(--kc,var(--k-other))}
-.fp.big{height:8px;border-radius:4px}
 @container (max-width:640px){.cols{grid-template-columns:44px minmax(0,1fr) 60px 112px 64px}.c-start{display:none}}
 
 /* 详情：元信息 → 标题 → 操作 → 四类比例 → 按类型的原话 → 关联洞察 → 体验事件 */
@@ -109,14 +108,6 @@ button:disabled{cursor:default;opacity:.5}
 .d-acts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
 .d-note{margin-top:var(--s2);font-size:var(--t1);color:var(--muted)}
 .d-note.warn{color:var(--warn)}
-.d-sum{margin-top:var(--s5)}
-.d-sum .note{margin-top:var(--s1)}
-.d-sum-row{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s3);margin-top:var(--s2);flex-wrap:wrap}
-.d-sum-row .total{font-size:var(--t1);color:var(--muted)}
-.d-sum-row .total b{font-size:var(--t2);color:var(--ink)}
-.kleg{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s4);font-size:var(--t1)}
-.kleg span{color:var(--kc)}
-.kleg b{font-size:var(--t2)}
 .grp{margin-top:var(--s5)}
 /* 问题类型：只有标题行是左侧强色竖条加同色相浅底；原话在纸面上。超过 3 条时点标题行展开全部，再点收起 */
 .kqs{display:grid;gap:var(--s4);margin-top:var(--s5)}
