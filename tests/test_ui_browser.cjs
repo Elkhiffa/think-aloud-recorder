@@ -795,7 +795,11 @@ async function settingsChecks(context, origin) {
   });
   await pageCheck(page, 'Bailian console uses a native link action; general vocabulary accepts multiple files', async () => {
     await openSettings(page, 'general');
-    await page.getByRole('link', { name: /百炼控制台/ }).click();
+    assert.equal(await page.locator('#bailianConsole').getAttribute('href'), 'https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key');
+    assert.match(await page.locator('#cloudKeyHelp').innerText(), /顶部「模型」.*左侧栏最下方「API Key」/);
+    await page.locator('#cloudControls').scrollIntoViewIfNeeded();
+    await screen(page, 'settings-api-key-720x520');
+    await page.getByRole('link', { name: '获取 API Key' }).click();
     assert.equal((await calls(page, 'open_bailian_console')).length, 1);
     assert.equal(await page.locator('#hotwordFiles .chip').count(), 1);
     await page.locator('#chooseHotwordFiles').click();

@@ -1635,7 +1635,7 @@ class DesktopService:
     def open_bailian_console(self):
         """Open only the fixed provider console; never pass credentials or state."""
         try:
-            if not open_externally('https://bailian.console.aliyun.com/', webbrowser.open):
+            if not open_externally('https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key', webbrowser.open):
                 raise RuntimeError('未能请求浏览器打开百炼控制台。')
             return ok({'requested': True})
         except Exception:
