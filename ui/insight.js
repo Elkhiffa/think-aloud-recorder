@@ -90,14 +90,14 @@
   function issueSection(node,level=1){
     const status=node.status==='candidate'?' <span class="badge">待你定</span>':'';
     const title=node.id==='BUG'?'BUG':escape(node.title);
-    let body=kindChips(node)+(node.description?`<p class="desc">${describe(node.description,node.id)}</p>`:'');
+    let body=node.description?`<p class="desc">${describe(node.description,node.id)}</p>`:'';
     // 洞察 and 议题 levels list the busiest first; 子议题 keep the analyst's order.
     const children=level<=1?byCount(node.children):node.children;
     for(const child of children)body+=issueSection(child,level+1);
     const own=node.support.length+node.counter.length;
     if(own&&(node.children.length||level===1)){
       const name=node.children.length?'未归入下级':'证据';
-      body+=`<section class="group level-${level+1}" id="issue-${escape(node.id)}-own" data-issue="${escape(node.id)}">${row('issue-'+node.id+'-own',name,`${own} 条`,false,level+1)}<div id="issue-${escape(node.id)}-own-body" hidden>${evidenceBlock(node)}</div></section>`;
+      body+=`<section class="group level-${level+1}" id="issue-${escape(node.id)}-own" data-issue="${escape(node.id)}">${row('issue-'+node.id+'-own',name,node.children.length?`${own} 条`:'',false,level+1)}<div id="issue-${escape(node.id)}-own-body" hidden>${evidenceBlock(node)}</div></section>`;
     }else if(own)body+=evidenceBlock(node);
     let extra=0;
     if(node.id==='BUG'&&state.overview.bug_unorganized.length&&!filtering()){
@@ -153,16 +153,6 @@
   function prune(node){
     const keep=link=>passes(key(link.session_id,link.instance_id));
     return {...node,support:node.support.filter(keep),counter:node.counter.filter(keep),children:node.children.map(prune).filter(child=>total(child))};
-  }
-  function kindCounts(node,found=new Map()){
-    for(const link of node.support.concat(node.counter)){const row=state.instances.get(key(link.session_id,link.instance_id));if(row)found.set(row.kind,(found.get(row.kind)||0)+1);}
-    node.children.forEach(child=>kindCounts(child,found));
-    return found;
-  }
-  function kindChips(node){
-    const found=[...kindCounts(node)].sort((a,b)=>b[1]-a[1]);
-    if(!found.length)return '';
-    return '<p class="kinds">'+found.map(([kind,n])=>`<button type="button" class="kind-chip kind-${escape(kind)}${state.filters.kinds.has(kind)?' active':''}" data-kind="${escape(kind)}" aria-pressed="${state.filters.kinds.has(kind)}">${escape(KIND[kind]||kind)} ${n}</button>`).join('')+'</p>';
   }
   const tagName=id=>state.tags.find(tag=>tag.id===id)?.name||id;
   function renderKindBar(){

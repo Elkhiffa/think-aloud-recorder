@@ -197,7 +197,7 @@ async function main(){
   await check('screen library: tag cards filter the tree, kind chips stack, filters clear',async()=>{
     await page.locator('#tabEvidence').click();await page.locator('#tabLibrary').click();
     assert.equal(await page.locator('#report').isHidden(),true);
-    assert.deepEqual(await page.locator('.lib-toggle>span:first-child').allTextContents(),['跨系统','活动 / 玩法','系统']);
+    assert.deepEqual(await page.locator('#libraryList .lib-toggle>span:first-child').allTextContents(),['跨系统','活动 / 玩法','系统']);
     assert.deepEqual(await page.locator('#lib-play .tag-name').allTextContents(),['江湖弈','武林录']);
     assert.equal(await page.locator('#lib-play .tag-card[data-tag="jhy"] .n').textContent(),'2');
     const coverBox=await page.locator('.tag-card[data-tag="jhy"] .cover').boundingBox(),nameBox=await page.locator('.tag-card[data-tag="jhy"] .tag-name').boundingBox();
@@ -207,7 +207,8 @@ async function main(){
     assert.equal(await page.locator('#issue-BUG').count(),0);
     assert.deepEqual(await page.locator('#evidenceList .card').evaluateAll(cards=>cards.map(card=>card.dataset.key).sort()),[S1+'/i1',S2+'/i7'].sort());
     await page.locator('#expandAll').click();
-    await page.locator('#issue-TA-01-body>.kinds [data-kind="obstacle"]').click();
+    assert.equal(await page.locator('#evidenceList .kind-chip').count(),0,'the kind bar is the one place kinds are counted and picked');
+    await page.locator('#kindBar [data-kind="obstacle"]').click();
     assert.deepEqual(await page.locator('#evidenceList .card').evaluateAll(cards=>cards.map(card=>card.dataset.key)),[S2+'/i7']);
     assert.equal(await page.locator('#kindBar [data-kind="obstacle"]').getAttribute('aria-pressed'),'true');
     await page.locator('.tag-card[data-tag="wll"]').click();
