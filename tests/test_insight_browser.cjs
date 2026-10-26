@@ -297,6 +297,15 @@ async function main(){
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true);
     await page.screenshot({path:path.join(out,'insight-800.png')});
   });
+  await check('a long sub-issue title ends in an ellipsis instead of widening the pane',async()=>{
+    // Trigger path: the agent names a sub-issue with a long sentence; the open 洞察 body must not grow past the pane.
+    await page.evaluate(()=>{window.__overview.issues[0].children[1].title='一个很长很长的子议题标题，'.repeat(8);});
+    await page.locator('#refresh').click();await page.waitForFunction(()=>document.querySelector('[id="issue-TA-01.1"]>.row .label')?.textContent.startsWith('一个很长'));
+    const fit=await page.locator('#evidencePane').evaluate(pane=>({scroll:pane.scrollWidth,client:pane.clientWidth,
+      title:(()=>{const label=document.querySelector('[id="issue-TA-01.1"]>.row .label');return label.scrollWidth>label.clientWidth;})()}));
+    assert.ok(fit.scroll<=fit.client,`no horizontal scroll in the evidence pane (${fit.scroll} > ${fit.client})`);
+    assert.equal(fit.title,true,'the long title is clipped with an ellipsis');
+  });
   assert.deepEqual(result.errors,[]);
 }
 main().then(()=>{fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));},error=>{result.errors.push(String(error.stack||error));fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(result,null,2));console.error(error);process.exitCode=1;}).finally(async()=>{await browser?.close();server.close();});
