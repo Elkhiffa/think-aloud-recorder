@@ -214,7 +214,7 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible,.p
 .level-3>.row{background:var(--sheet)}
 .issue{padding:0}
 .issue+.issue{margin-top:var(--s4)}
-.issue>div[id$="-body"],.group>div[id$="-body"],.group>ul.hits{display:grid;gap:var(--s2);padding:var(--s2) 0 0 var(--s3)}
+.issue>div[id$="-body"],.group>div[id$="-body"],.group>ul.hits{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s2);padding:var(--s2) 0 0 var(--s3)}
 .group>div[id$="-body"]:not([hidden]),.group>ul.hits:not([hidden]){padding-bottom:var(--s2)}
 .group{margin:0;padding:0}
 .group+.group{margin-top:calc(var(--s1) - var(--s2))}
