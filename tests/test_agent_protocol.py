@@ -843,6 +843,30 @@ class AgentProtocolTests(unittest.TestCase):
             agent.preprocessing_status(self.folder, self.meta)
         status.assert_called_once()
 
+    def test_saved_result_is_reused_after_restart_until_a_file_or_version_changes(self):
+        """触发路径：用户 → 重启应用后第一次打开洞察 / 界面库 → 各场整理结果上次已核对且未改动 → 直接读本机保存的核对结果；结果文件改动或应用升级后重新核对 → 不修第一次打开要逐场重读全部操作记录，真实资料库约 29 秒。"""
+        self.complete()
+        store = self.root / 'state' / 'results'
+        store.parent.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(setattr, agent, '_RESULT_STORE', None)
+        agent.configure_result_store(store, 'v1')
+        agent._CACHE.clear()
+        first = agent.preprocessing_status(self.folder, self.meta, include_result=True)
+        self.assertEqual(len(list(store.glob('*.json'))), 1)
+        agent._CACHE.clear()
+        with patch.object(agent, '_status', side_effect=AssertionError('the saved check is reused')):
+            self.assertEqual(agent.preprocessing_status(self.folder, self.meta, include_result=True), first)
+        agent._CACHE.clear()
+        agent.configure_result_store(store, 'v2')
+        with patch.object(agent, '_status', wraps=agent._status) as status:
+            agent.preprocessing_status(self.folder, self.meta)
+        status.assert_called_once()
+        agent._CACHE.clear()
+        result = json.loads((self.folder / agent.RESULT).read_text(encoding='utf-8'))
+        result['events'][0]['evidence'] = [dict(kind='quote', ref='missing')]
+        recorder.write(self.folder / agent.RESULT, result)
+        self.assertEqual(agent.preprocessing_status(self.folder, self.meta)['state'], 'invalid')
+
     def test_invalid_status_is_not_revalidated_every_poll(self):
         """触发路径：用户 → 主窗口每秒刷新场次列表 → 某场整理结果格式无效且未再改动 → 不重复读取校验 → 不修会每轮重读该场全部素材。"""
         self.complete()

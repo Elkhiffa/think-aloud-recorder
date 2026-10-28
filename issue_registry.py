@@ -37,9 +37,9 @@ def _identifier(value):
     raise ValueError('议题 id 必须是 TA- 开头的用户编号、N- 加三位数字、BUG，或它们后接一到两段 .n 的下级编号。')
 
 
-def _depth(rows, ident):
+def _depth(rows, ident, parents=None):
     """Levels from the top down to this issue (top = 1); rejects cycles."""
-    parents = {row['id']: row.get('parent') for row in rows}
+    parents = parents if parents is not None else {row['id']: row.get('parent') for row in rows}
     seen, current = set(), ident
     while current is not None:
         if current in seen:
@@ -99,10 +99,11 @@ def read_registry(vault):
         if parent is not None and (not isinstance(parent, str) or ident == BUG):
             raise ValueError('议题 parent 必须是上级编号，BUG 不能有上级：' + ident)
     # 路径 2/3：洞察 → 议题 → 子议题最多三层；编号是工作代号，挪动层级后前缀不必等于上级。
+    parents = {row['id']: row.get('parent') for row in data['issues']}
     for row in data['issues']:
         if row.get('parent') and row['parent'] not in identifiers:
             raise ValueError('议题的上级不存在：' + row['id'])
-        if _depth(data['issues'], row['id']) > DEPTH:
+        if _depth(data['issues'], row['id'], parents) > DEPTH:
             raise ValueError('议题最多三层：' + row['id'])
     # 路径 3：BUG 是固定议题，单场次整理可直接引用，未写入过的资料库也能读到它。
     if BUG not in identifiers:
@@ -126,7 +127,7 @@ def _complete_results(vault):
     sessions = {}
     for path in sorted((Path(vault).resolve() / '场次').glob('*/session.json')):
         meta = json.loads(path.read_text(encoding='utf-8-sig'))
-        state = protocol.preprocessing_status(path.parent, include_result=True)
+        state = protocol.preprocessing_status(path.parent, include_result=True, annotate=False)
         if state['state'] != 'complete':
             continue
         instances = state['result'].get('instances', [])
@@ -421,14 +422,14 @@ def screen_names(vault, game):
     return names
 
 
-def query_instances(vault, issue=None, screen=None, element=None, kind=None, session=None, bug=None):
+def query_instances(vault, issue=None, screen=None, element=None, kind=None, session=None, bug=None, sessions=None):
     rows = []
     requested = set(issue or [])
     # 路径 2/3：查洞察或议题时一并带出它下面所有层级。
     registry = read_registry(vault)['issues']
     for ident in list(requested):
         requested |= descendants(registry, ident)
-    sessions = _complete_results(vault)
+    sessions = _complete_results(vault) if sessions is None else sessions
     linked = {}
     for link in read_links(vault)['links']:
         if _active(link, sessions):
