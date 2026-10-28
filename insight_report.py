@@ -166,11 +166,11 @@ def session_labels(session_ids):
             for day, group in days.items() for ident in group}
 
 
-def bug_hits(vault):
+def bug_hits(vault, sessions=None):
     """Recorder utterances naming a bug or the implementation, matched to instances by transcript reference."""
     from speaker_roles import speaker_payload, valid_speaker
     vault = Path(vault).resolve()
-    sessions = issues._complete_results(vault)
+    sessions = issues._complete_results(vault) if sessions is None else sessions
     bug_links = {(link['session_id'], link['instance_id']) for link in issues.read_links(vault)['links']
                  if link['issue'].partition('.')[0] == issues.BUG and issues._active(link, sessions)}
     rows = []
@@ -208,7 +208,8 @@ def bug_hits(vault):
 def evidence(vault):
     """Issue -> sub-issue -> support / counter instance rows for the insight view."""
     registry = issues.read_registry(vault)['issues']
-    rows = issues.query_instances(vault)
+    sessions = issues._complete_results(vault)
+    rows = issues.query_instances(vault, sessions=sessions)
     by_issue = {row['id']: dict(row, support=[], counter=[], children=[]) for row in registry}
     for row in rows:
         for link in row['issue_links']:
@@ -230,7 +231,7 @@ def evidence(vault):
         else:
             tree.append(node)
     instances = {(row['session_id'], row['instance_id']): row for row in rows}
-    hits = [row for row in bug_hits(vault) if row['state'] != 'linked']
+    hits = [row for row in bug_hits(vault, sessions) if row['state'] != 'linked']
     return dict(issues=tree, instances=list(instances.values()), bug_unorganized=hits,
                 session_labels=session_labels(sorted({row['session_id'] for row in rows}
                                                      | {row['session_id'] for row in hits})))

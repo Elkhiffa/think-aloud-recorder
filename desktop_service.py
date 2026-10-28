@@ -158,9 +158,9 @@ class DesktopService:
         self._updates = UpdateManager(self.root)
         import agent_protocol
         # Path 4: an upgraded app does not trust statuses checked by older validation rules.
-        self._status_store = agent_protocol.StatusStore(
-            self.root / 'state/preprocessing-status.json',
-            f"{agent_protocol.STATUS_CACHE_VERSION}:{self._updates.snapshot().get('current_version')}")
+        checked_by = f"{agent_protocol.STATUS_CACHE_VERSION}:{self._updates.snapshot().get('current_version')}"
+        self._status_store = agent_protocol.StatusStore(self.root / 'state/preprocessing-status.json', checked_by)
+        agent_protocol.configure_result_store(self.root / 'state/results', checked_by)
         self._activity = dict(busy=False, kind='idle', status='待开始', detail='',
                               active_id=None, elapsed_seconds=0)
         self._launch('recovery', self._startup, status='检查上次场次')

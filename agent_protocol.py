@@ -28,6 +28,7 @@ FILES = ('录像.mp4', '口述.flac', '录像.whisper.json',
 MAX_RESULT = 2 * 1024 * 1024
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
+_RESULT_STORE = None  # (directory, version) once the desktop app configures it
 STATUS_CACHE_VERSION = 1
 CHECKING = dict(state='checking', label='核对中', reason='正在核对整理结果，完成后显示问题分布。')
 
@@ -1143,8 +1144,51 @@ def _library_stats(folder, meta):
     return [_file_stat(vault / FILE), catalog, _file_stat(vault / transcript_corrections.FILE)]
 
 
-def preprocessing_status(folder, meta=None, include_result=False):
-    """Bounded cache: polling never re-reads an unchanged large sidecar."""
+def configure_result_store(path, version):
+    """Path 4: validated results also live in the app state directory (never in the vault), so the first insight
+    or review read after a restart does not re-check every reference again; another app version keeps none."""
+    global _RESULT_STORE
+    _RESULT_STORE = (Path(path), str(version))
+
+
+def _store_file(key):
+    return _RESULT_STORE[0] / (hashlib.sha256(key.encode('utf-8')).hexdigest()[:32] + '.json')
+
+
+def _stored_result(key, signature):
+    if _RESULT_STORE is None:
+        return None
+    try:
+        data = json.loads(_store_file(key).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None  # A missing or partial entry only means one fresh check.
+    if (isinstance(data, dict) and data.get('version') == _RESULT_STORE[1] and data.get('key') == key
+            and data.get('signature') == signature and isinstance(data.get('value'), dict)):
+        return data['value']
+    return None
+
+
+def _store_result(key, signature, value):
+    # Only finished checks are kept: leases expire by the clock, and the other states are cheap to recompute.
+    if _RESULT_STORE is None or value.get('state') != 'complete' or 'expires_at' in value.get('reanalysis', {}):
+        return
+    path = _store_file(key)
+    tmp = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+        path.parent.mkdir(exist_ok=True)  # Inside the app's state directory, never recreating a removed app root.
+        tmp.write_text(json.dumps(dict(version=_RESULT_STORE[1], key=key, signature=signature, value=value),
+                                  ensure_ascii=False), encoding='utf-8')
+        os.replace(tmp, path)
+    except OSError:
+        pass  # An unwritable state directory only costs the next start a fresh check.
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def preprocessing_status(folder, meta=None, include_result=False, annotate=True):
+    """Bounded cache: polling never re-reads an unchanged large sidecar.
+
+    annotate adds what review and the desk draw beside the result (activity names, bugs); library queries skip it."""
     try:
         meta, material, revision, complete = _identity(folder, meta)
         stats = _stats(folder, (READY, STATE, RESULT, 'experience-event-edits.json', ANALYSIS_CONTEXT))
@@ -1162,11 +1206,14 @@ def preprocessing_status(folder, meta=None, include_result=False):
         else:
             value = None
     if value is None:
-        try:
-            value = _status(folder, meta)
-        except Exception:
-            # Path 1: an invalid result stays invalid until one of its files changes; polling does not revalidate it.
-            value = _unavailable(folder)
+        value = _stored_result(key, signature)
+        if value is None:
+            try:
+                value = _status(folder, meta)
+            except Exception:
+                # Path 1: an invalid result stays invalid until one of its files changes; polling does not revalidate it.
+                value = _unavailable(folder)
+            _store_result(key, signature, value)
         with _CACHE_LOCK:
             _CACHE[key] = (signature, _expiry(value), value)
             _CACHE.move_to_end(key)
@@ -1175,7 +1222,7 @@ def preprocessing_status(folder, meta=None, include_result=False):
     if not include_result:
         return deepcopy({k: v for k, v in value.items() if k != 'result'})
     value = deepcopy(value)
-    if value.get('state') == 'complete':
+    if annotate and value.get('state') == 'complete':
         # Path 1: review and the desk tag a result's events with the session's activity names. The names live in
         # session.json, outside this cache, and count only while they were made for the result shown.
         digest = (value.get('editing') or {}).get('result_sha256')

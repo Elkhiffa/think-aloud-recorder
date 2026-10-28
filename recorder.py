@@ -77,6 +77,15 @@ def _obs_receipt(root, owned=None, status='running'):
                     parent_pid=owned['parent_pid']))
 
 
+def _obs_listening(port):
+    """Whether anything listens on this local port; when that cannot be read, the handshake decides."""
+    try:
+        return any(item.status==psutil.CONN_LISTEN and item.laddr and item.laddr[1]==port
+                   for item in psutil.net_connections(kind='tcp'))
+    except Exception:
+        return True
+
+
 def _recover_owned_obs(root, cfg):
     """Reattach only a previous run's exact child from this installation.
 
@@ -219,7 +228,10 @@ def _connect_obs(launch,progress,*,continue_if=None):
     root=ROOT.resolve()
     owned=_recover_owned_obs(root,c)
     _check_obs_continuation(continue_if)
-    try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=8)
+    try:
+        # Nothing listening: launch at once instead of waiting out a refused loopback connect (about 2 s on Windows).
+        if not _obs_listening(c['port']):raise ConnectionRefusedError('录制引擎没有在监听端口。')
+        r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=8)
     except Exception:
         if not launch:raise
         _check_obs_continuation(continue_if)
@@ -242,13 +254,18 @@ def _connect_obs(launch,progress,*,continue_if=None):
                 process.wait(timeout=5)
                 raise RuntimeError('无法保存录制引擎的进程归属，已取消启动。') from error
             _owned_obs[root]=owned
-        for _ in range(45):
+        # Watch the port and shake hands once it listens. The limit stays what the old 45 one-second retries
+        # really took: each also waited out a refused connect, about 3 s per try.
+        r,deadline=None,time.monotonic()+135
+        for _ in range(675):
             _check_obs_continuation(continue_if)
-            time.sleep(1)
+            time.sleep(.2)
             _check_obs_continuation(continue_if)
-            try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=2);break
-            except Exception:pass
-        else:
+            if _obs_listening(c['port']):
+                try:r=obs.ReqClient(host='127.0.0.1',port=c['port'],password=c['password'],timeout=2);break
+                except Exception:pass
+            if time.monotonic()>deadline:break
+        if r is None:
             if owned is not None and owned['process'].poll() is None:
                 raise RuntimeError('上次启动的录制引擎仍在运行，但无法连接。请先确认它已退出。')
             raise RuntimeError('专用 OBS 未能连接。请查看 tools/obs/config/obs-studio/logs。')

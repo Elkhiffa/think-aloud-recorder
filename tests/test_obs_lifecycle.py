@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import recorder
 
+OBS_LISTENING = recorder._obs_listening  # the real check, before setUp patches it
 
 class ObsLifecycleTests(unittest.TestCase):
     def setUp(self):
@@ -46,14 +47,16 @@ class ObsLifecycleTests(unittest.TestCase):
                         patch.object(recorder.obs, 'ReqClient', return_value=self.connection),
                         patch.object(recorder.time, 'sleep'),
                         patch.object(recorder.subprocess, 'Popen', return_value=self.process),
-                        patch.object(recorder, '_request_obs_window_close', return_value=True)]
+                        patch.object(recorder, '_request_obs_window_close', return_value=True),
+                        # Most cases let the synthetic handshake decide; the port cases below set this themselves.
+                        patch.object(recorder, '_obs_listening', return_value=True)]
         self.mocks = [item.start() for item in self.patches]
         self.stock_patch=patch.object(recorder,'_stock_obs_environment',return_value=True)
         self.stock=self.stock_patch.start()
         self.addCleanup(self.stock_patch.stop)
         for item in self.patches:
             self.addCleanup(item.stop)
-        self.req, self.popen, self.native_close = self.mocks[5], self.mocks[7], self.mocks[8]
+        self.req, self.popen, self.native_close, self.listening = self.mocks[5], self.mocks[7], self.mocks[8], self.mocks[9]
 
     def launch(self):
         self.req.side_effect = [ConnectionRefusedError('synthetic unavailable'), self.connection]
@@ -161,10 +164,35 @@ class ObsLifecycleTests(unittest.TestCase):
     def test_failed_startup_retries_remain_bounded_and_do_not_spawn_again(self):
         self.req.side_effect=ConnectionRefusedError('unavailable')
         with self.assertRaisesRegex(RuntimeError,'仍在运行'):recorder.client()
-        self.assertEqual(self.req.call_count,46)
-        self.assertEqual([call.kwargs['timeout'] for call in self.req.call_args_list],[8]+[2]*45)
+        self.assertEqual(self.req.call_count,676)
+        self.assertEqual([call.kwargs['timeout'] for call in self.req.call_args_list],[8]+[2]*675)
         self.popen.assert_called_once()
         self.connection.base_client.ws.settimeout.assert_not_called()
+
+    def test_closed_port_launches_without_a_refused_handshake(self):
+        # 路径 1：开软件后第一次检查时 OBS 还没启动；Windows 上连没人监听的本机端口要约 2 秒才报拒绝。
+        self.listening.side_effect=[False,False,False,True]
+        self.assertIs(recorder.client(),self.connection)
+        self.popen.assert_called_once()
+        self.assertEqual([call.kwargs['timeout'] for call in self.req.call_args_list],[2])
+        self.assertEqual([call.args[0] for call in self.mocks[6].call_args_list],[.2,.2,.2])
+
+    def test_startup_wait_ends_by_the_clock_even_when_each_handshake_is_slow(self):
+        # 路径 1：端口已在监听但握手一直失败时，等待仍以约 135 秒为限，不按次数累加每次 2 秒的握手。
+        self.req.side_effect=ConnectionRefusedError('unavailable')
+        clock=iter(range(0,1000,50))
+        with patch.object(recorder.time,'monotonic',side_effect=lambda:next(clock)):
+            with self.assertRaisesRegex(RuntimeError,'仍在运行'):recorder.client()
+        self.assertEqual(self.req.call_count,4)
+
+    def test_unreadable_connection_table_leaves_the_handshake_to_decide(self):
+        with patch.object(recorder.psutil,'net_connections',side_effect=recorder.psutil.AccessDenied()):
+            self.assertTrue(OBS_LISTENING(11223))
+        with patch.object(recorder.psutil,'net_connections',return_value=[
+                SimpleNamespace(status=recorder.psutil.CONN_LISTEN,laddr=('0.0.0.0',11223)),
+                SimpleNamespace(status=recorder.psutil.CONN_ESTABLISHED,laddr=('127.0.0.1',4455))]):
+            self.assertTrue(OBS_LISTENING(11223))
+            self.assertFalse(OBS_LISTENING(4455))
 
     def test_closed_root_cannot_relaunch_on_late_request(self):
         self.assertEqual(recorder.shutdown_owned_obs(self.root), {'status': 'not_owned'})
