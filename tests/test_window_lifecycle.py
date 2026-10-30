@@ -202,8 +202,10 @@ class DeskWindowTests(unittest.TestCase):
         self.assertEqual(self.manager.review_count(), 2, 'the update flow closes both like reviews')
 
     def test_a_judgment_link_selects_its_evidence_in_the_insight_window(self):
-        self.manager.open_desk('D:/库/燕云十六声', 'insight', ('s1', 'i"1', 'TA-01'))
-        self.windows[0].evaluate_js.assert_called_once_with('window.insightBridge&&window.insightBridge.showInstance("s1","i\\"1","TA-01")')
+        self.manager.open_desk('D:/库/燕云十六声', 'insight', ('s1', 'i1', 'TA-01'))
+        api = self.manager._desks['insight'][1]
+        self.assertEqual(api.focus, ('s1', 'i1', 'TA-01'), 'the page takes it once its library is read, even after a reload')
+        self.windows[0].evaluate_js.assert_called_once_with('window.insightBridge&&window.insightBridge.pull()')
 
     def test_both_windows_follow_the_game_and_close_with_the_last_one(self):
         self.manager.open_desk('D:/库/燕云十六声', 'sessions')

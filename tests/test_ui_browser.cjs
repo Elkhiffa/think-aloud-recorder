@@ -1354,6 +1354,7 @@ async function deskPage(context, origin, desk = deskState(), viewport = { width:
       if (method === 'thumbnail') return ok('data:image/gif;base64,R0lGODlhAQABAAAAACw=');
       if (method === 'win_set_frame_color' || method === 'ready') return ok({});
       if (method === 'get_layout') return ok(copy(f.layout));
+      if (method === 'take_focus') { const focus = f.focus || null; f.focus = null; return ok(focus); }
       f.calls.push({ method, args });
       if (method === 'save_layout') { f.layout[args[0]] = args[1]; return ok(null); }
       if (method === 'session_detail') return f.details[args[0]] ? ok(copy(f.details[args[0]])) : { ok: false, error: '合成测试：没有这一场的整理结果。' };
@@ -1585,7 +1586,7 @@ async function deskChecks(context, origin) {
       await q.setViewportSize({ width: 1240, height: 900 }); await q.locator('#insightSplit').focus(); await q.keyboard.press('End');
       assert.equal(await q.locator('.right-col').evaluate(n => n.offsetWidth), 400, 'the evidence column keeps 400 px');
       assert.equal((await deskCalls(q, 'save_layout')).at(-1)[0], 'insight');
-      await q.evaluate(() => window.insightBridge.showInstance('d1', 'i1', 'TA-01'));
+      await q.evaluate(() => { window.__deskFixture.focus = ['d1', 'i1', 'TA-01']; return window.insightBridge.pull(); });
       assert.equal(await q.locator('#evidenceList .card[data-key]').first().evaluate(n => n.classList.contains('flash')), true, 'a 洞察 link selects that evidence');
       await screen(q, 'desk-insight-1240x900');
     } finally { await q.close(); }

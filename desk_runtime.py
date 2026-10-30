@@ -18,7 +18,7 @@ INSTANCE_FIELDS = ('id', 'event_id', 'kind', 'said', 'refers_to', 'compare_to', 
 DESK_METHODS = ('ready', 'get_overview', 'read_report', 'add_feedback', 'set_cover', 'edit_feedback', 'remove_feedback',
                 'thumbnail', 'open_review', 'desk_state', 'session_detail', 'review_session', 'rename_session',
                 'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task', 'show_in_insight',
-                'get_layout', 'save_layout')
+                'get_layout', 'save_layout', 'take_focus')
 LAYOUT_KEYS = ('sessions', 'insight')
 _LAYOUT_LOCK = threading.Lock()
 
@@ -151,6 +151,13 @@ class DeskAPI:
 
     def show_in_insight(self, session_id, instance_id, issue):
         return self._service.show_in_insight(session_id, instance_id, issue)
+
+    def take_focus(self):
+        """The 洞察 page asks for the evidence to select once its library is read. The window manager leaves it here
+        rather than pushing it into the page: a newly created window loads its page twice, and a push into the first
+        load is lost."""
+        focus, self.focus = getattr(self, 'focus', None), None
+        return _ok(list(focus) if focus else None)
 
     # ---- the column split of both windows, kept in the app's state folder for every game ----
     def _layout_file(self):

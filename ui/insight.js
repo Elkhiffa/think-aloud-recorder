@@ -621,9 +621,14 @@
     if(api)return;
     api=window.pywebview.api;
     api.ready().catch(()=>{});
-    loaded=load();
+    loaded=load();pull();
   }
-  // A judgment's 洞察 link in the 场次库 window lands here once the library has been read.
-  window.insightBridge={async showInstance(sessionId,instanceId,issue){await loaded;goToInstance(sessionId,instanceId,issue||null);}};
+  // A judgment's 洞察 link in the 场次库 window: the evidence waits in the window's bridge until the library is read.
+  async function pull(){
+    if(!api?.take_focus)return;
+    await loaded;
+    try{const focus=await call('take_focus');if(focus)goToInstance(focus[0],focus[1],focus[2]||null);}catch(error){status(error.message,true);}
+  }
+  window.insightBridge={pull};
   if(window.pywebview?.api)start();else window.addEventListener('pywebviewready',start);
 })();

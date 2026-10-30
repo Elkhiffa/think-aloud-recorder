@@ -65,6 +65,10 @@ class DeskInsightLinkTests(unittest.TestCase):
             desk = self.desk(folder)
             desk.show_in_insight('s1', 'i1', 'TA-01')
             desk._service.show_in_insight.assert_called_once_with('s1', 'i1', 'TA-01')
+            self.assertEqual(desk.take_focus(), {'ok': True, 'data': None})
+            desk.focus = ('s1', 'i1', 'TA-01')
+            self.assertEqual(desk.take_focus(), {'ok': True, 'data': ['s1', 'i1', 'TA-01']})
+            self.assertEqual(desk.take_focus()['data'], None, 'taken once')
 
 
 class DeskLayoutTests(unittest.TestCase):

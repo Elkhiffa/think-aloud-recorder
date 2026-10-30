@@ -41,9 +41,9 @@ button:disabled{cursor:default;opacity:.5}
 
 /* 场次库：左边表格，右边这一场的详情；两块纸面放在窗口纸色上，中间是分隔条（ui/split.js 设 --first） */
 .lib{flex:1;min-height:0;display:grid;grid-template-columns:var(--first,64fr) var(--s4) minmax(0,36fr);padding:var(--s1) var(--s4) var(--s4)}
-/* 分隔条：平时只是两块纸面之间的空隙，悬停或聚焦时出现一道竖线 */
+/* 分隔条：两栏之间的空隙，中间常驻一道浅色短竖线（同回看的分隔条），悬停、拖动时加深，聚焦时墨色 */
 .split-handle{display:flex;align-items:center;justify-content:center;cursor:col-resize;touch-action:none;user-select:none;outline:none}
-.split-handle::before{content:"";width:2px;height:40px;border-radius:1px;background:transparent;transition:background .15s}
+.split-handle::before{content:"";width:3px;height:40px;border-radius:2px;background:var(--rule);transition:background .15s}
 .split-handle:hover::before,.split-handle:focus-visible::before,.resizing-columns .split-handle::before{background:var(--faint)}
 .split-handle:focus-visible::before{background:var(--ink)}
 .resizing-columns,.resizing-columns *{cursor:col-resize!important;user-select:none!important}

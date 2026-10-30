@@ -368,7 +368,6 @@ class WindowManager:
     def open_desk(self, vault, tab='sessions', focus=None):
         """One window per tab; a second request brings it forward. `focus` = (session, instance, issue) selects that
         evidence in the 洞察 window, for a judgment's 洞察 link in the 场次库 window."""
-        import json
         from pathlib import Path
         with self._lock:
             if self._updating:
@@ -422,7 +421,8 @@ class WindowManager:
             if api._error:
                 raise RuntimeError(api._error)
         if focus is not None:
-            window.evaluate_js('window.insightBridge&&window.insightBridge.showInstance(%s,%s,%s)' % tuple(json.dumps(v) for v in focus))
+            api.focus = focus
+            window.evaluate_js('window.insightBridge&&window.insightBridge.pull()')
         return {'ready': True}
 
     @staticmethod
