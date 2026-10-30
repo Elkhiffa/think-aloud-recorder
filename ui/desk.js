@@ -65,7 +65,7 @@
     return `<div class="srow cols${state.selected===s.id?' sel':''}" data-session="${escape(s.id)}" role="button" tabindex="0">`
       +`<span class="day">${valid?pad(d.getMonth()+1)+'/'+pad(d.getDate()):''}</span>`
       +`<span class="c-start">${valid?pad(d.getHours())+':'+pad(d.getMinutes()):''}</span>`
-      +`<span class="nm${t.named?'':' auto'}" title="${escape(t.text)}">${escape(t.text)}</span>`
+      +`<span class="nmc"><span class="nm${t.named?'':' auto'}" title="${escape(t.text)}">${escape(t.text)}</span>${s.acceptance?'<span class="acc">验收</span>':''}</span>`
       +`<span class="dur">${clock(s.duration)}</span>${counts}`
       +`<span class="c-st${st==='running'||st==='checking'?' running':''}">${escape(label)}</span></div>`;
   }
@@ -93,12 +93,12 @@
     const locked=state.busy||!!job,done=status(s)==='done';
     const end=valid?new Date(d.getTime()+(Number(s.duration)||0)*1000):null;
     const meta=[valid?`${d.getMonth()+1}月${d.getDate()}日 周${WEEK[d.getDay()]}`:'',valid?`${pad(d.getHours())}:${pad(d.getMinutes())}–${pad(end.getHours())}:${pad(end.getMinutes())}`:'',clock(s.duration)].filter(Boolean).join(' · ');
-    const actions=`<div class="d-acts"><button class="btn solid" data-act="review"${s.can_review===false?' disabled':''}>${PLAY}回看</button>${done?'':`<button class="btn sm" data-act="handoff">复制整理指令</button>`}`
+    const actions=`<div class="d-acts"><button class="btn solid" data-act="review"${s.can_review===false?' disabled':''}>${PLAY}回看</button>${done?`<button class="btn sm" data-act="copy-export">复制导出指令</button>`:`<button class="btn sm" data-act="handoff">复制整理指令</button>`}`
       +`<button class="btn sm" data-act="copy" id="copyPath">复制资料库路径</button>`
       +`<span class="pop"><button class="btn sm" data-act="more" aria-haspopup="true" aria-expanded="false">更多</button><span class="pop-menu right hidden" id="moreMenu"><button data-act="folder">打开资料文件夹</button><button data-act="process"${locked?' disabled':''}>重新整理</button><button data-act="export"${locked?' disabled':''}>导出</button><button data-act="raw">原始录像</button><button data-act="recover"${locked?' disabled':''}>恢复云端任务</button></span></span></div>`;
     let body='';
     if(!detail)body='<p class="d-note">正在读取这一场的整理结果…</p>';
-    else if(detail.state!=='complete'||!detail.result)body=`<p class="d-note">${escape(detail.label||'这一场还没有整理结果。')} 复制整理指令，粘贴给 Codex 或 Claude 整理后，原话和问题分布会出现在这里。</p>`;
+    else if(detail.state!=='complete'||!detail.result)body=`<p class="d-note">${escape(detail.label||'这一场还没有整理结果。')} 复制整理指令，粘贴给 CodeMaker、Codex 或 Claude 整理后，原话和问题分布会出现在这里。</p>`;
     else{
       const kinds=detail.kinds||{},total=Object.keys(KIND).reduce((n,k)=>n+(kinds[k]||0),0),version2=Findings.isVersion2(detail.result);
       if(!version2)state.findings.view='events';
@@ -108,7 +108,10 @@
       body=`${tabs}<div id="deskFindings" class="d-findings"></div>`;
     }
     const notes=(job?`<p class="d-note">${escape(job.state==='queued'?'等待转写，前面的场次完成后继续。':job.detail||'正在转写，可以继续录制。')}</p>`:'')+(s.error?`<p class="d-note warn">${escape(s.error)}</p>`:'');
-    $('sessionDetail').innerHTML=`<div class="d-head"><p class="d-meta">${escape(meta)}</p><h1 id="detailTitle"><span class="tt">${escape(t.text)}</span><button class="edit" data-act="rename" title="重命名" aria-label="重命名">${PENCIL}</button></h1>${actions}${notes}</div>${body}`;
+    // Version acceptance: single-session analysis and export only; insight leaves it out.
+    const accept=`<div class="d-accept"><label title="只做单场整理和导出，不进洞察"><input type="checkbox" data-accept${s.acceptance?' checked':''}>版本验收</label>`
+      +(s.acceptance?`<input id="acceptTarget" maxlength="120" autocomplete="off" placeholder="验收对象（选填，如玩法名）" aria-label="验收对象" value="${escape(s.acceptance_target||'')}">`:'')+'</div>';
+    $('sessionDetail').innerHTML=`<div class="d-head"><p class="d-meta">${escape(meta)}</p><h1 id="detailTitle"><span class="tt">${escape(t.text)}</span><button class="edit" data-act="rename" title="重命名" aria-label="重命名">${PENCIL}</button></h1>${actions}${accept}${notes}</div>${body}`;
     sizes($('sessionDetail'));
     if(detail?.state==='complete'&&detail.result){
       if(state.kinds.size)state.findings.filter=new Set(state.kinds);
@@ -126,7 +129,9 @@
     $('deskDialog').showModal();
   }
   async function copyText(text){try{await navigator.clipboard.writeText(text);}catch(_){const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();}}
-  async function copyHandoff(s){await copyText(['请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。','场次文件夹：'+s.path,...(state.appDir?['软件目录（agent_cli.py 和 runtime 在这里）：'+state.appDir]:[]),'只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。'].join('\n'));toast('整理指令已复制，粘贴给 Codex 或 Claude 即可。');}
+  // An organized session goes to a team spreadsheet through the think-aloud-export skill; the table link is the colleague's.
+  async function copyExport(s){await copyText(['请用 Think Aloud 的导出方法（think-aloud-export），把这一场的问题导出到团队表格：新建一张同格式的表，不改公共表。','公共表链接：（粘贴组内公共表的链接，可注明 sheet 名）','场次编号：'+s.id,'场次文件夹：'+s.path,'资料库：'+String(s.path).replace(/[\\/]场次[\\/][^\\/]+$/,''),...(state.appDir?['软件目录（agent_cli.py 和 runtime 在这里）：'+state.appDir]:[]),'完成后告诉我新表链接、导出了几行、哪些格子要我定。'].join(String.fromCharCode(10)));toast('导出指令已复制，粘上公共表链接后发给 CodeMaker、Codex 或 Claude。');}
+  async function copyHandoff(s){await copyText(['请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。','场次文件夹：'+s.path,...(state.appDir?['软件目录（agent_cli.py 和 runtime 在这里）：'+state.appDir]:[]),'只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。'].join('\n'));toast('整理指令已复制，粘贴给 CodeMaker、Codex 或 Claude 即可。');}
   function editTitle(s){
     const h1=$('detailTitle');if(!h1||state.editing)return;state.editing=true;
     h1.innerHTML='<input id="renameInput" maxlength="4096" autocomplete="off" aria-label="场次名称，留空恢复默认名称" placeholder="留空恢复默认名称">';
@@ -142,6 +147,7 @@
     try{
       if(name==='review'){await call('review_session',s.id);return;}
       if(name==='handoff'){await copyHandoff(s);return;}
+      if(name==='copy-export'){await copyExport(s);return;}
       if(name==='folder'){await call('open_folder',s.id);return;}
       if(name==='copy'){await copyText(s.path);const button=$('copyPath');if(button){button.textContent='已复制';setTimeout(()=>{if(button.isConnected)button.textContent='复制资料库路径';},2000);}return;}
       if(name==='raw'){await call('open_raw',s.id);return;}
@@ -152,7 +158,9 @@
     }catch(error){toast(error.message);}
   }
   // A small menu under its button: 问题类型 and 更多. A click elsewhere closes both.
-  function toggleMenu(button,menu,open){open=open??menu.classList.contains('hidden');menu.classList.toggle('hidden',!open);button.setAttribute('aria-expanded',String(open));}
+  function toggleMenu(button,menu,open){open=open??menu.classList.contains('hidden');menu.classList.toggle('hidden',!open);button.setAttribute('aria-expanded',String(open));
+    // 更多 hangs from its right edge; when the action row wraps it sits on the left, and the menu opens rightwards instead.
+    if(open&&menu.classList.contains('right')){menu.classList.remove('flip');const panel=menu.closest('.panel');if(panel&&menu.getBoundingClientRect().left<panel.getBoundingClientRect().left)menu.classList.add('flip');}}
   document.addEventListener('click',event=>{
     if(!event.target.closest('#kindMenu,#kindToggle'))toggleMenu($('kindToggle'),$('kindMenu'),false);
     const more=$('moreMenu');if(more&&!event.target.closest('#moreMenu,[data-act="more"]'))toggleMenu(document.querySelector('[data-act="more"]'),more,false);
@@ -167,6 +175,21 @@
   $('searchInput').oninput=()=>{state.search=$('searchInput').value;renderList();};
   $('sessionScroll').addEventListener('click',event=>{const row=event.target.closest('[data-session]');if(row)select(row.dataset.session);});
   $('sessionScroll').addEventListener('keydown',event=>{const row=event.target.closest('[data-session]');if(row&&(event.key==='Enter'||event.key===' ')){event.preventDefault();select(row.dataset.session);}});
+  async function saveAcceptance(s,on,target){
+    try{await call('set_acceptance',s.id,on,target);state.signature='';await refresh();}catch(error){toast(error.message);}
+  }
+  $('sessionDetail').addEventListener('change',event=>{
+    const s=state.sessions.find(row=>row.id===state.selected);if(!s||!event.target.matches('[data-accept]'))return;
+    saveAcceptance(s,event.target.checked,s.acceptance_target||'');
+  });
+  // The target is saved on Enter or leaving the field; while typing, polling leaves the detail alone (same as renaming).
+  $('sessionDetail').addEventListener('focusin',event=>{if(event.target.id==='acceptTarget')state.editing=true;});
+  $('sessionDetail').addEventListener('keydown',event=>{if(event.target.id==='acceptTarget'&&event.key==='Enter'){event.preventDefault();event.target.blur();}});
+  $('sessionDetail').addEventListener('focusout',event=>{
+    if(event.target.id!=='acceptTarget')return;state.editing=false;
+    const s=state.sessions.find(row=>row.id===state.selected),value=event.target.value.trim();
+    if(s&&value!==(s.acceptance_target||''))saveAcceptance(s,true,value);
+  });
   $('sessionDetail').addEventListener('click',event=>{
     const s=state.sessions.find(row=>row.id===state.selected);if(!s)return;
     const button=event.target.closest('[data-act]');

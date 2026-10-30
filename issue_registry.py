@@ -122,11 +122,18 @@ def read_links(vault):
     return data
 
 
-def _complete_results(vault):
-    """Map session id -> (result digest, instance ids, instances) for complete sessions."""
+def _complete_results(vault, excluded=None):
+    """Map session id -> (result digest, instance ids, instances) for complete sessions.
+
+    Version-acceptance sessions are left out: they get single-session analysis and export only. Their ids go into
+    `excluded` when a set is given."""
     sessions = {}
     for path in sorted((Path(vault).resolve() / '场次').glob('*/session.json')):
         meta = json.loads(path.read_text(encoding='utf-8-sig'))
+        if meta.get('acceptance') is True:
+            if excluded is not None:
+                excluded.add(meta.get('id'))
+            continue
         state = protocol.preprocessing_status(path.parent, include_result=True, annotate=False)
         if state['state'] != 'complete':
             continue
@@ -145,11 +152,15 @@ def _active(link, sessions):
 def list_issues(vault):
     data = read_registry(vault)
     links = read_links(vault)['links']
-    sessions = _complete_results(vault) if links else {}
+    excluded = set()
+    sessions = _complete_results(vault, excluded) if links else {}
     for row in data['issues']:
         mine = [link for link in links if link['issue'] == row['id']]
         active = sum(_active(link, sessions) for link in mine)
-        row['links_active'], row['links_stale'] = active, len(mine) - active
+        # Path 1: links into a session later marked as version acceptance are set aside, not stale: unlinking them
+        # would lose them when the mark is removed again.
+        aside = sum(link['session_id'] in excluded for link in mine)
+        row['links_active'], row['links_excluded'], row['links_stale'] = active, aside, len(mine) - active - aside
     return data
 
 
@@ -160,7 +171,8 @@ def link_instances(vault, rows):
     with metadata_lock(vault):
         known = {row['id'] for row in read_registry(vault)['issues']}
         data = read_links(vault)
-        sessions = _complete_results(vault)
+        excluded = set()
+        sessions = _complete_results(vault, excluded)
         index = {(link['issue'], link['session_id'], link['instance_id']): link for link in data['links']}
         added = 0
         for row in rows:
@@ -170,6 +182,8 @@ def link_instances(vault, rows):
             issue, session_id, instance_id = row.get('issue'), row.get('session_id'), row.get('instance_id')
             if issue not in known:
                 raise ValueError('议题不存在：' + str(issue))
+            if session_id in excluded:
+                raise ValueError(f'这一场标为版本验收，不参与跨场次分析：{session_id}')
             if session_id not in sessions or instance_id not in sessions[session_id][1]:
                 raise ValueError(f'实例不存在或场次未完成整理：{session_id}/{instance_id}')
             reason = row.get('reason', '')

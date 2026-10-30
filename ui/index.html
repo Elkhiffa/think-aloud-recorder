@@ -34,7 +34,7 @@
             <p class="method-description">录下你看到的画面，也留下当时的判断与感受。可以像右边这样，自然地说。</p>
             <p class="method-note"><strong>说当下的真实想法就好。</strong>可以停顿、犹豫，也可以改口。不必持续说话，不必把每个操作都念出来；困惑、预期落差和情绪，同样值得留下。</p></section>
           <section class="method-part"><p class="method-lead">录完以后</p>
-            <p class="method-description">转写完成后，交给 Codex 或 Claude 整理：单场用 <span class="skill-name">think-aloud-judgments</span>，跨场次用 <span class="skill-name">think-aloud-insight</span>。首次使用前先安装。</p>
+            <p class="method-description">转写完成后，交给 CodeMaker、Codex 或 Claude 整理：单场用 <span class="skill-name">think-aloud-judgments</span>，跨场次用 <span class="skill-name">think-aloud-insight</span>。首次使用前先安装。</p>
             <div class="button-row"><button class="btn" type="button" data-install-skills>安装分析 skill</button><button class="link" type="button" data-open-skill-guide>安装说明</button></div></section>
         </div>
         <div class="method-grid">
@@ -55,7 +55,7 @@
       <div class="field danger-zone" data-in="game-delete"><span class="label">删除游戏</span><div><button class="link danger" id="deleteGame" type="button">删除这个游戏</button><p class="hint">只移除软件里的设置和入口；资料文件夹默认保留。</p></div></div>
     </div>
     <div class="panel hidden" id="panelPrepare">
-      <div class="field" data-in="prepare-tools"><span class="label">分析工具</span><div><p class="hint">交给 Codex 或 Claude 整理前，要下载识别组件（约 65 MB）并安装两份分析 skill。</p><div class="button-row"><button class="btn" id="prepareAnalysis" type="button">准备分析</button><span class="hint" id="prepareStatus" role="status"></span></div><ul class="skill-results hidden" id="prepareResults"></ul><p class="hint">可以跳过，以后在 设置 → 通用 里补做。</p></div></div>
+      <div class="field" data-in="prepare-tools"><span class="label">分析工具</span><div><p class="hint">交给 CodeMaker、Codex 或 Claude 整理前，要下载识别组件（约 65 MB）并安装两份分析 skill。</p><div class="button-row"><button class="btn" id="prepareAnalysis" type="button">准备分析</button><span class="hint" id="prepareStatus" role="status"></span></div><ul class="skill-results hidden" id="prepareResults"></ul><p class="hint">可以跳过，以后在 设置 → 通用 里补做。</p></div></div>
       <div class="field" data-in="prepare-yanyun"><span class="label">燕云十六声</span><div><label class="check"><input id="prepareYanyun" type="checkbox" checked><span>创建“燕云十六声”项目并安装识别规则</span></label><p class="hint">资料库建在软件文件夹旁边的 think-aloud-database。识别规则需要每款游戏单独定制，目前只内置了燕云十六声。<button class="link" type="button" data-open-layout-guide>规则怎么写</button></p></div></div>
     </div>
     <div class="panel hidden" id="panelGeneral">
