@@ -27,5 +27,21 @@ class WindowSizeTests(unittest.TestCase):
         self.assertEqual(fit((1051, 759), (1920, 1040)), (1051, 759))
 
 
+
+class WindowEdgeTests(unittest.TestCase):
+    def test_title_bar_stays_paper_and_the_outline_is_a_weak_edge(self):
+        """路径 1：场次库叠在洞察上（10-30 截图），两层纸色窗口之间看不出边界。"""
+        from unittest.mock import patch
+        import window_chrome
+        chrome = object.__new__(window_chrome.WindowChrome)
+        chrome._frame_color = '#F8F5EF'
+        with patch.object(window_chrome, '_dwm') as dwm:
+            chrome._tint(1)
+        colors = {call.args[1]: call.args[2].value for call in dwm.call_args_list}
+        rgb = lambda value: '#%02X%02X%02X' % (value & 255, value >> 8 & 255, value >> 16 & 255)
+        self.assertEqual(rgb(colors[window_chrome.DWMWA_CAPTION_COLOR]), '#F8F5EF')
+        self.assertEqual(rgb(colors[window_chrome.DWMWA_BORDER_COLOR]), '#D5D3CE')
+
+
 if __name__ == '__main__':
     unittest.main()

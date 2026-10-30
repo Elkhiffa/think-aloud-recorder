@@ -60,12 +60,16 @@ class _MonitorInfo(ctypes.Structure):
     _fields_ = [('cbSize', wintypes.DWORD), ('rcMonitor', wintypes.RECT), ('rcWork', wintypes.RECT), ('dwFlags', wintypes.DWORD)]
 
 
-def _colorref(value):
+def _colorref(value, shade=1.0):
     value = value.lstrip('#')
     if len(value) != 6 or any(c not in '0123456789abcdefABCDEF' for c in value):
         raise ValueError('颜色格式应为 #RRGGBB。')
-    red, green, blue = int(value[0:2], 16), int(value[2:4], 16), int(value[4:6], 16)
+    red, green, blue = (round(int(value[i:i + 2], 16) * shade) for i in (0, 2, 4))
     return ctypes.c_uint(red | green << 8 | blue << 16)
+
+
+# The window outline is the paper a little darker, so stacked Think Aloud windows keep a visible edge (10-30).
+EDGE_SHADE = .86
 
 
 def _dwm(hwnd, attribute, value):
@@ -201,9 +205,9 @@ class WindowChrome:
         native.BeginInvoke(Action(fix))
 
     def _tint(self, hwnd):
-        color = _colorref(self._frame_color)
-        _dwm(hwnd, DWMWA_CAPTION_COLOR, color)
-        _dwm(hwnd, DWMWA_BORDER_COLOR, color)
+        # The caption stays paper, so no system line runs along the title bar; the border is a weak outline.
+        _dwm(hwnd, DWMWA_CAPTION_COLOR, _colorref(self._frame_color))
+        _dwm(hwnd, DWMWA_BORDER_COLOR, _colorref(self._frame_color, EDGE_SHADE))
 
     def _limit_maximize(self):
         """Maximized size = current monitor's work area (WinForms applies it in WM_GETMINMAXINFO)."""
@@ -227,7 +231,7 @@ class WindowChrome:
         prop.SetValue(native, bounds)
 
     def win_set_frame_color(self, color):
-        """The page calls this when its theme changes, so the top border matches the paper."""
+        """The page calls this when its theme changes: the caption matches the paper, the outline follows it."""
         _colorref(color)
         self._frame_color = color
         hwnd = self._hwnd()
