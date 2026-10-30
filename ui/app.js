@@ -417,7 +417,7 @@ function confirmDeleteGame(){
  const preset=store.presets.find(p=>p.id===store.editingId);if(!preset||!store.canConfigure||deletingGame)return;
  const name=preset.name;
  showDialog('删除游戏“'+name+'”？',
-  '<p>会从软件里移除这个游戏：游戏窗口、游戏词库和补充词条的设置，以及页签和资料台里的入口。</p>'+
+  '<p>会从软件里移除这个游戏：游戏窗口、游戏词库和补充词条的设置，以及页签、场次库与洞察里的入口。</p>'+
   '<p>资料文件夹默认保留，里面的录像、逐字稿和整理结果都不动：</p><p class="path-text">'+escapeHTML(preset.vault||'')+'</p>'+
   '<label class="check"><input type="checkbox" id="deleteData"><span>同时把资料文件夹移到回收站</span></label>'+
   '<div class="delete-data hidden" id="deleteDataConfirm"><p class="inline-error">文件夹里的全部场次、录像、逐字稿、整理结果和洞察报告会一起移走，可以从回收站还原。</p><label for="deleteConfirmName">输入游戏名称“'+escapeHTML(name)+'”确认</label><input id="deleteConfirmName" autocomplete="off" spellcheck="false"></div>'+

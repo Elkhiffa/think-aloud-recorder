@@ -69,6 +69,7 @@ class WindowManager:
         self._closing = False
         self._shutdown_thread = None
         self._viewers = {}
+        self._desks = {}  # 'sessions' / 'insight' -> (window, api, chrome)
         self._viewer_changed = threading.Condition(self._lock)
         self._main_gone = threading.Event()
         self._updating = False
@@ -361,75 +362,89 @@ class WindowManager:
                 pass  # Cosmetic: the page's own window buttons still work.
         window.events.loaded += prepare
 
-    def open_desk(self, vault, tab='sessions'):
-        """The desk (资料台) is a single window: a second request switches its tab and brings it forward."""
-        import json
+    # 场次库 and 洞察 are separate windows since 10-30: the library no longer depends on an optional analysis.
+    DESK_PAGES = {'sessions': ('场次库', 'desk.html', (1040, 600)), 'insight': ('洞察', 'desk-insight.html', (900, 600))}
+
+    def open_desk(self, vault, tab='sessions', focus=None):
+        """One window per tab; a second request brings it forward. `focus` = (session, instance, issue) selects that
+        evidence in the 洞察 window, for a judgment's 洞察 link in the 场次库 window."""
         from pathlib import Path
         with self._lock:
             if self._updating:
                 raise RuntimeError('应用正在退出以完成更新。')
-            desk = getattr(self, '_desk', None)
+            desk = self._desks.get(tab)
+        word, page, min_size = self.DESK_PAGES[tab]
         if desk is not None:
             window, api, chrome = desk
-            api.tab = tab
             if api.vault != Path(vault).resolve():
-                api.rebind(vault)
-                window.evaluate_js('location.reload()')
-            else:
-                window.evaluate_js('window.deskShow&&window.deskShow(%s)' % json.dumps(tab))
+                self._rebind_desk(window, api, vault, word)
             try:
                 chrome.bring_to_front()
             except Exception:
                 pass
-            return {'ready': True}
-        from desk_runtime import DeskAPI
-        from window_chrome import CHROME_METHODS, WindowChrome
-        api = DeskAPI(self.service, vault, self.service.root, tab)
-        chrome = WindowChrome(frame_color='#f3ede1')
-        for name in CHROME_METHODS:
-            setattr(api, name, getattr(chrome, name))
-        window = self.webview.create_window(
-            '资料台 · ' + Path(vault).name, url=(self.service.root / 'ui' / 'desk.html').as_uri(),
-            js_api=api, **self._review_window_options(), min_size=(960, 600),
-            frameless=True, easy_drag=False, shadow=True, resizable=True, text_select=True, background_color='#f3ede1')
-        chrome.bind(window)
+        else:
+            from desk_runtime import DeskAPI
+            from window_chrome import CHROME_METHODS, WindowChrome
+            api = DeskAPI(self.service, vault, self.service.root, tab)
+            chrome = WindowChrome(frame_color='#f3ede1')
+            for name in CHROME_METHODS:
+                setattr(api, name, getattr(chrome, name))
+            options = self._review_window_options()
+            if tab == 'sessions':
+                # The library is a list and a detail, not a player: it opens smaller than review.
+                options.update(width=min(options['width'], 1280), height=min(options['height'], 800))
+            window = self.webview.create_window(
+                Path(vault).name + ' · ' + word, url=(self.service.root / 'ui' / page).as_uri(),
+                js_api=api, **options, min_size=min_size,
+                frameless=True, easy_drag=False, shadow=True, resizable=True, text_select=True, background_color='#f3ede1')
+            chrome.bind(window)
 
-        def prepare():
-            try:
-                chrome.prepare()
-            except Exception:
-                pass  # Cosmetic: the page's own window buttons still work.
-        window.events.loaded += prepare
-        with self._lock:
-            self._viewers[window.uid] = window
-            self._desk = (window, api, chrome)
+            def prepare():
+                try:
+                    chrome.prepare()
+                except Exception:
+                    pass  # Cosmetic: the page's own window buttons still work.
+            window.events.loaded += prepare
+            with self._lock:
+                self._viewers[window.uid] = window
+                self._desks[tab] = (window, api, chrome)
 
-        def closed():
-            with self._viewer_changed:
-                self._viewers.pop(window.uid, None)
-                if getattr(self, '_desk', None) and self._desk[0] is window:
-                    self._desk = None
-                self._viewer_changed.notify_all()
-        window.events.closed += closed
-        if not api._ready.wait(15):
-            raise RuntimeError('资料台尚未确认加载完成，请查看新窗口中的提示。')
-        if api._error:
-            raise RuntimeError(api._error)
+            def closed():
+                with self._viewer_changed:
+                    self._viewers.pop(window.uid, None)
+                    if self._desks.get(tab, (None,))[0] is window:
+                        del self._desks[tab]
+                    self._viewer_changed.notify_all()
+            window.events.closed += closed
+            if not api._ready.wait(15):
+                raise RuntimeError(word + '窗口尚未确认加载完成，请查看新窗口中的提示。')
+            if api._error:
+                raise RuntimeError(api._error)
+        if focus is not None:
+            api.focus = focus
+            window.evaluate_js('window.insightBridge&&window.insightBridge.pull()')
         return {'ready': True}
 
-    def desk_follow(self, vault):
-        """Called after the main window switches game: an open desk moves to that game's library."""
+    @staticmethod
+    def _rebind_desk(window, api, vault, word):
         from pathlib import Path
-        desk = getattr(self, '_desk', None)
-        if desk is None:
-            return
-        window, api, _ = desk
-        if vault is None:
-            window.destroy()  # the last game was deleted: there is no library to show
-            return
-        if api.vault != Path(vault).resolve():
-            api.rebind(vault)
-            window.evaluate_js('location.reload()')
+        api.rebind(vault)
+        try:
+            window.set_title(Path(vault).name + ' · ' + word)
+        except Exception:
+            pass  # The page's own title bar shows the game either way.
+        window.evaluate_js('location.reload()')
+
+    def desk_follow(self, vault):
+        """Called after the main window switches game: open 场次库 / 洞察 windows move to that game's library."""
+        from pathlib import Path
+        with self._lock:
+            desks = list(self._desks.items())
+        for tab, (window, api, _) in desks:
+            if vault is None:
+                window.destroy()  # the last game was deleted: there is no library to show
+            elif api.vault != Path(vault).resolve():
+                self._rebind_desk(window, api, vault, self.DESK_PAGES[tab][0])
 
     def review_count(self):
         with self._lock:return len(self._viewers)

@@ -1335,16 +1335,17 @@ const deskDetails = {
     result: { coverage: null, events: [{ id: 'e1', title: '清河任务', start: 0, end: 120, summary: '合成概述：接任务后在清河找人。' }, { id: 'e2', title: '野外探索', start: 120, end: 300, summary: '' }],
       instances: [deskInstance('i1', 'e1', 'confusion', 12.5, '这个标记是什么意思我没看懂'), deskInstance('i2', 'e1', 'obstacle', 30, '找不到返回的地方只能重进'),
         deskInstance('i3', 'e1', 'obstacle', 95, '背包满了又不能直接丢东西'), deskInstance('i4', 'e2', 'suggestion', 130, '这里可以加个提示'), deskInstance('i5', 'e2', 'suggestion', 200, '地图可以标一下')] },
-    activities: [{ name: '清河', event_ids: ['e1'] }], insights: [{ id: 'TA-01', title: '目标明确仍有摩擦', count: 2 }] },
-  d2: { id: 'd2', state: 'none', label: '这一场还没有整理结果。', kinds: {}, result: null, activities: [], insights: [] },
+    activities: [{ name: '清河', event_ids: ['e1'] }],
+    instance_issues: { i2: [{ id: 'TA-01', title: '目标明确仍有摩擦', role: 'support' }], i3: [{ id: 'TA-01', title: '目标明确仍有摩擦', role: 'counter' }] } },
+  d2: { id: 'd2', state: 'none', label: '这一场还没有整理结果。', kinds: {}, result: null, activities: [], instance_issues: {} },
 };
 const deskOverview = { vault: '合成资料库', reports: [{ name: 'r.md', modified: 1, bytes: 10 }], feedback: [], tag_groups: [], tags: [], instance_tags: {}, session_labels: { d1: '0922' },
   instances: [{ session_id: 'd1', instance_id: 'i1', said_start: 30, refers_start: 28, refers_end: 31, refers_basis: 'same_time', screen: 'bag', catalog_screen: 'bag', elements: [], kind: 'obstacle', statement: '合成陈述', issue_tags: [], issue_links: [], event_id: 'e1', event_title: '清河任务' }],
   issues: [{ id: 'TA-01', title: '目标明确仍有摩擦', description: '合成议题', status: 'confirmed', support: [{ session_id: 'd1', instance_id: 'i1', reason: '合成理由' }], counter: [], children: [] }], bug_unorganized: [] };
-async function deskPage(context, origin, desk = deskState(), viewport = { width: 1240, height: 900 }) {
+async function deskPage(context, origin, desk = deskState(), viewport = { width: 1240, height: 900 }, layout = {}, url = '/ui/desk.html') {
   const page = await context.newPage(); await page.setViewportSize(viewport);
-  await page.addInitScript(({ desk, details, overview }) => {
-    const f = window.__deskFixture = { desk, details, overview, calls: [], reads: 0 };
+  await page.addInitScript(({ desk, details, overview, layout }) => {
+    const f = window.__deskFixture = { desk, details, overview, layout, calls: [], reads: 0 };
     const copy = value => JSON.parse(JSON.stringify(value)), ok = data => ({ ok: true, data });
     window.pywebview = { api: new Proxy({}, { get: (_, method) => async (...args) => {
       if (method === 'desk_state') { f.reads++; return ok(copy(f.desk)); }
@@ -1352,14 +1353,19 @@ async function deskPage(context, origin, desk = deskState(), viewport = { width:
       if (method === 'read_report') return ok({ name: 'r.md', text: '# 合成报告', citations: [] });
       if (method === 'thumbnail') return ok('data:image/gif;base64,R0lGODlhAQABAAAAACw=');
       if (method === 'win_set_frame_color' || method === 'ready') return ok({});
+      if (method === 'get_layout') return ok(copy(f.layout));
+      if (method === 'take_focus') { const focus = f.focus || null; f.focus = null; return ok(focus); }
       f.calls.push({ method, args });
+      if (method === 'save_layout') { f.layout[args[0]] = args[1]; return ok(null); }
       if (method === 'session_detail') return f.details[args[0]] ? ok(copy(f.details[args[0]])) : { ok: false, error: '合成测试：没有这一场的整理结果。' };
       if (method === 'rename_session') { f.desk.sessions.find(row => row.id === args[0]).session_name = args[1]; return ok({}); }
-      if (['review_session', 'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task', 'open_review', 'win_minimize', 'win_toggle_maximize', 'win_close'].includes(method)) return ok({});
+      if (['review_session', 'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task', 'open_review', 'show_in_insight', 'win_minimize', 'win_toggle_maximize', 'win_close'].includes(method)) return ok({});
       throw new Error('Synthetic desk harness did not authorize native action: ' + String(method));
     } }) };
-  }, { desk, details: deskDetails, overview: deskOverview });
-  await page.goto(origin + '/ui/desk.html'); await page.locator('#sessionScroll .srow').first().waitFor({ state: 'attached' });
+  }, { desk, details: deskDetails, overview: deskOverview, layout });
+  await page.goto(origin + url);
+  if (url === '/ui/desk.html') await page.locator('#sessionScroll .srow').first().waitFor({ state: 'attached' });
+  else await page.locator('#evidenceList .card').first().waitFor({ state: 'attached' });
   return page;
 }
 const deskCalls = (page, method) => page.evaluate(name => window.__deskFixture.calls.filter(call => call.method === name).map(call => call.args), method);
@@ -1367,21 +1373,21 @@ const deskRows = page => page.locator('#sessionScroll .srow').evaluateAll(nodes 
 async function deskChecks(context, origin) {
   const page = await deskPage(context, origin);
   await check('desk lists sessions by month, newest first, with sticky month headings and the game in the title bar', async () => {
-    assert.equal(await page.locator('#deskGame').innerText(), '示例游戏 · 合成测试');
+    assert.equal(await page.locator('#deskGame').innerText(), '示例游戏 · 合成测试 场次库');
+    assert.equal(await page.locator('.dtabs').count(), 0, 'the library is its own window, without a 洞察 tab');
     assert.deepEqual(await page.locator('#sessionScroll .month').evaluateAll(n => n.map(x => x.textContent)), ['2026 年 9 月3 场', '2026 年 8 月2 场']);
     assert.deepEqual(await deskRows(page), ['d1', 'd2', 'd3', 'd4', 'd5']);
     assert.equal(await page.locator('#sessionScroll .month').first().evaluate(n => getComputedStyle(n).position), 'sticky');
     const d4 = page.locator('#sessionScroll [data-session="d4"]');
     assert.equal(await d4.locator('.nm').innerText(), '萌宠争锋、城镇养成');
     assert.equal(await d4.locator('.nm').evaluate(n => n.classList.contains('auto')), true, 'an unnamed session shows its activities in quiet type');
-    assert.deepEqual(await d4.locator('span').allInnerTexts(), ['08/28', '萌宠争锋、城镇养成', '19:40', '1:10:10', '7', '']);
+    assert.deepEqual(await d4.locator('span').allInnerTexts(), ['08/28', '19:40', '萌宠争锋、城镇养成', '1:10:10', '7', '']);
     assert.equal(await d4.locator('.pc b').innerText(), '7', 'problem count covers the four problem kinds only');
     assert.deepEqual(await d4.locator('.fp i').evaluateAll(n => n.map(i => [i.className, i.style.flex.split(' ')[0]])), [['k-confusion', '4'], ['k-cost', '3']]);
     assert.equal(await page.locator('#sessionScroll [data-session="d1"] .pc b').innerText(), '3');
     assert.equal(await page.locator('#sessionScroll [data-session="d2"] .c-st').innerText(), '转写中', 'a session with a running job is transcribing');
     assert.equal(await page.locator('#sessionScroll [data-session="d3"] .c-st').innerText(), '转写失败');
     assert.equal(await page.locator('#sessionScroll [data-session="d2"] .pc b').count(), 0, 'unorganized sessions show no problem count');
-    assert.equal(await page.locator('#deskTabSessions').getAttribute('aria-selected'), 'true');
     await noHorizontalOverflow(page);
     await screen(page, 'desk-sessions-1240x900');
   });
@@ -1400,6 +1406,10 @@ async function deskChecks(context, origin) {
     assert.equal(await page.locator('#kindMenu').isVisible(), true, 'the menu stays open while choosing');
     assert.deepEqual(await page.locator('#kindMenu input:checked').evaluateAll(n => n.map(b => b.dataset.kind)), ['obstacle', 'cost']);
     assert.equal(await page.locator('#kindToggle').innerText(), '问题类型 · 2');
+    assert.deepEqual(await page.locator('#sessionScroll .pc').allInnerTexts(), ['2/3', '3/7'], 'rows count only the picked kinds, out of all problems');
+    assert.deepEqual(await page.locator('#sessionScroll [data-session="d4"] .fp i').evaluateAll(n => n.map(i => [i.className, getComputedStyle(i).opacity])), [['k-confusion dim', '0.25'], ['k-cost', '1']]);
+    const chips = () => page.locator('#sessionDetail .fd-chip').evaluateAll(n => n.map(b => [b.dataset.filter, b.disabled, b.getAttribute('aria-pressed')]));
+    assert.deepEqual(await chips(), [['confusion', true, 'false'], ['obstacle', true, 'true'], ['cost', true, 'true'], ['other', true, 'false']], 'the detail follows the desk filter and cannot change it');
     await screen(page, 'desk-kind-menu-1240x900');
     await page.locator('#sessionScroll').click({ position: { x: 4, y: 4 } }); assert.equal(await page.locator('#kindMenu').isVisible(), false, 'a click elsewhere closes it');
     await page.locator('#stateChips [data-filter="running"]').click(); assert.match(await page.locator('#sessionScroll').innerText(), /没有符合筛选的场次/);
@@ -1407,6 +1417,7 @@ async function deskChecks(context, origin) {
     await page.locator('#kindToggle').click(); await page.locator('#kindMenu [data-kind="obstacle"]').uncheck(); await page.locator('#kindMenu [data-kind="cost"]').uncheck();
     assert.equal(await page.locator('#kindToggle').innerText(), '问题类型');
     assert.deepEqual(await deskRows(page), ['d1', 'd2', 'd3', 'd4', 'd5']);
+    assert.deepEqual((await chips()).map(([, disabled, pressed]) => [disabled, pressed]), [[false, 'false'], [false, 'false'], [false, 'false']], 'without a desk filter the detail filters on its own again');
     await page.locator('#kindToggle').click();
   });
   await check('sorting by problems drops month headings; keyboard selection works; search filters names and activities', async () => {
@@ -1426,10 +1437,13 @@ async function deskChecks(context, origin) {
     assert.equal(await page.locator('#sessionDetail h1').innerText(), '清河探索与初次止戈');
     assert.equal(await page.locator('#sessionDetail .d-meta').innerText(), '9月22日 周二 · 10:30–11:32 · 1:02:05');
     assert.deepEqual(await page.locator('#sessionDetail [data-dview]').allInnerTexts(), ['问题 3', '体验事件 2']);
+    assert.deepEqual(await page.locator('#sessionDetail [data-dview].on').evaluate(n => { const s = getComputedStyle(n); return [s.boxShadow, s.borderRadius, s.fontWeight]; }),
+      ['rgb(34, 30, 25) 0px -2px 0px 0px inset', '0px', '700'], 'detail tabs use a square ink underline');
+    const x = sel => page.locator('#sessionScroll [data-session="d1"] ' + sel).evaluate(n => n.getBoundingClientRect().left);
+    assert.ok(await x('.day') < await x('.c-start') && await x('.c-start') < await x('.nm'), 'start time sits between the date and the title');
     assert.deepEqual(await page.locator('#sessionDetail .fd-view>.fd-group .fd-gh').evaluateAll(n => n.map(x => x.querySelector('.fd-name').textContent + x.querySelector('small').textContent)), ['困惑1', '阻碍2', '其他2']);
     assert.equal(await page.locator('#sessionDetail .d-sum').count(), 0, 'the tabs and kind chips carry the distribution once');
     assert.deepEqual(await page.locator('#sessionDetail .fd-chip').evaluateAll(n => n.map(x => x.dataset.filter)), ['confusion', 'obstacle', 'other'], 'kinds with nothing to show have no chip');
-    assert.deepEqual(await page.locator('#sessionDetail .ln.ins').evaluateAll(n => n.map(x => [x.querySelector('.tx').textContent, x.querySelector('.ct').textContent])), [['目标明确仍有摩擦', '2']]);
     assert.equal(await page.locator('[data-act="handoff"]').count(), 0, 'organized sessions need no hand-off');
     await page.locator('#sessionDetail .fd-at[data-seek="30"]').click();
     assert.deepEqual((await deskCalls(page, 'open_review')).at(-1), ['d1', 30, 'problems', ''], 'a problem opens review on 问题 at the moment it was said');
@@ -1513,16 +1527,29 @@ async function deskChecks(context, origin) {
     await page.evaluate(() => { window.__deskFixture.desk.busy = false; window.__deskFixture.desk.recording = false; });
     await page.waitForFunction(() => document.querySelector('#sessionDetail [data-act="process"]')?.disabled === false, null, { timeout: 8000 });
   });
-  await check('insight links in a session open the insight tab; the tabs switch back', async () => {
-    await page.locator('#sessionDetail .ln.ins[data-issue="TA-01"]').click();
-    await page.waitForFunction(() => !document.querySelector('#paneInsight').classList.contains('hidden'));
-    assert.equal(await page.locator('#paneSessions').isVisible(), false);
-    assert.equal(await page.locator('#deskTabInsight').getAttribute('aria-selected'), 'true');
-    await screen(page, 'desk-insight-1240x900');
-    await page.locator('#deskTabSessions').click();
-    assert.equal(await page.locator('#paneSessions').isVisible(), true); assert.equal(await page.locator('#deskTabSessions').getAttribute('aria-selected'), 'true');
-    await page.locator('#deskTabInsight').click(); assert.equal(await page.locator('#paneInsight').isVisible(), true);
-    await page.locator('#deskTabSessions').click();
+  await check('a judgment cited by an insight carries its 洞察 link; a click opens the insight window on it', async () => {
+    assert.equal(await page.locator('#sessionDetail .grp').count(), 0, 'no 关联洞察 section: the library does not depend on insight');
+    assert.deepEqual(await page.locator('#sessionDetail .fd-insight-link').allInnerTexts(), ['洞察：目标明确仍有摩擦', '反例 · 洞察：目标明确仍有摩擦']);
+    const reviews = (await deskCalls(page, 'open_review')).length;
+    await page.locator('#sessionDetail [data-item="i2"] .fd-insight-link').click();
+    assert.deepEqual((await deskCalls(page, 'show_in_insight')).at(-1), ['d1', 'i2', 'TA-01']);
+    assert.equal((await deskCalls(page, 'open_review')).length, reviews, 'the link does not also open review');
+  });
+  await check('the column split drags between pixel minimums, follows the arrow keys and is saved', async () => {
+    const handle = page.locator('#deskSplit'), widths = () => page.evaluate(() => [document.querySelector('.list').offsetWidth, document.querySelector('#sessionDetail').offsetWidth]);
+    assert.equal(await handle.getAttribute('role'), 'separator');
+    const at = await handle.boundingBox(), y = at.y + at.height / 2;
+    await page.mouse.move(at.x + at.width / 2, y); await page.mouse.down(); await page.mouse.move(10, y, { steps: 4 }); await page.mouse.up();
+    assert.equal((await widths())[0], 620, 'the list stops at 620 px');
+    const left = await handle.boundingBox();
+    await page.mouse.move(left.x + left.width / 2, y); await page.mouse.down(); await page.mouse.move(1230, y, { steps: 4 }); await page.mouse.up();
+    assert.equal((await widths())[1], 360, 'the detail stops at 360 px');
+    await screen(page, 'desk-split-narrow-detail-1240x900');
+    await handle.focus(); await page.keyboard.press('Home'); assert.equal((await widths())[0], 620);
+    await page.keyboard.press('ArrowRight'); assert.ok((await widths())[0] > 620, 'an arrow key widens the list');
+    const saved = await deskCalls(page, 'save_layout');
+    assert.ok(saved.length >= 3 && saved.every(([key, ratio]) => key === 'sessions' && ratio > 0 && ratio < 1), JSON.stringify(saved));
+    await page.keyboard.press('Enter');
   });
   await check('desk window buttons hand off to the native frame', async () => {
     for (const name of ['min', 'max', 'close']) await page.locator(`.tb [data-win="${name}"]`).click();
@@ -1530,7 +1557,7 @@ async function deskChecks(context, origin) {
   });
   await page.close();
   await check('a session whose result is still being checked reads 核对中 and counts as neither organized nor waiting', async () => {
-    // 触发路径：用户 → 打开资料台 → 场次列表先返回、结果在后台核对（state=checking）→ 状态列“核对中” → 不修会被算进“待整理”。
+    // 触发路径：用户 → 打开场次库 → 场次列表先返回、结果在后台核对（state=checking）→ 状态列“核对中” → 不修会被算进“待整理”。
     const sessions = deskSessions().map(row => row.id === 'd1' ? { ...row, preprocessing: { state: 'checking', label: '核对中' } } : row);
     const p = await deskPage(context, origin, deskState({ sessions }));
     try {
@@ -1539,18 +1566,30 @@ async function deskChecks(context, origin) {
       assert.deepEqual(await p.locator('#stateChips button').evaluateAll(n => n.map(x => x.textContent)), ['全部 5', '已整理 2', '待整理 0', '转写中 1', '失败 1']);
     } finally { await p.close(); }
   });
-  await check('desk opens on the requested tab and fits its 960×600 minimum', async () => {
-    const p = await deskPage(context, origin, deskState({ tab: 'insight' }), { width: 960, height: 600 });
+  await check('a saved split is applied on open; both windows fit their minimum sizes', async () => {
+    const p = await deskPage(context, origin, deskState(), { width: 1040, height: 600 }, { sessions: 0.9 });
     try {
-      await p.waitForFunction(() => !document.querySelector('#paneInsight').classList.contains('hidden'));
-      await noHorizontalOverflow(p); await screen(p, 'desk-insight-960x600');
-      await p.locator('#deskTabSessions').click(); await p.locator('#sessionDetail .fd-group').first().waitFor();
+      await p.locator('#sessionDetail .fd-group').first().waitFor();
+      await p.waitForFunction(() => document.querySelector('#sessionDetail').offsetWidth === 360);
       await noHorizontalOverflow(p);
       for (const selector of ['#sessionScroll', '#sessionDetail', '.tb [data-win="close"]', '#kindToggle', '#sortSelect']) await assertInsideViewport(p, selector);
+      assert.equal(await p.locator('#sessionScroll [data-session="d1"] .c-start').isVisible(), true, 'the start column stays at the minimum width');
       assert.ok((await box(p, '#sessionScroll [data-session="d1"] .nm')).width >= 120, 'session names keep room at the minimum size');
-      assert.equal(await p.locator('#sessionScroll [data-session="d1"] .c-start').isVisible(), false, 'the start column gives way first');
-      await screen(p, 'desk-sessions-960x600');
+      await screen(p, 'desk-sessions-1040x600');
     } finally { await p.close(); }
+    const q = await deskPage(context, origin, deskState(), { width: 900, height: 600 }, { insight: 0.3 }, '/ui/desk-insight.html');
+    try {
+      await q.waitForFunction(() => document.querySelector('#deskGame').textContent.endsWith('洞察') && document.querySelector('.left-col').offsetWidth === 440);
+      assert.equal(await q.locator('#deskGame').innerText(), '示例游戏 · 合成测试 洞察');
+      assert.ok(await q.locator('.right-col').evaluate(n => n.offsetWidth) >= 400);
+      await noHorizontalOverflow(q); await screen(q, 'desk-insight-900x600');
+      await q.setViewportSize({ width: 1240, height: 900 }); await q.locator('#insightSplit').focus(); await q.keyboard.press('End');
+      assert.equal(await q.locator('.right-col').evaluate(n => n.offsetWidth), 400, 'the evidence column keeps 400 px');
+      assert.equal((await deskCalls(q, 'save_layout')).at(-1)[0], 'insight');
+      await q.evaluate(() => { window.__deskFixture.focus = ['d1', 'i1', 'TA-01']; return window.insightBridge.pull(); });
+      assert.equal(await q.locator('#evidenceList .card[data-key]').first().evaluate(n => n.classList.contains('flash')), true, 'a 洞察 link selects that evidence');
+      await screen(q, 'desk-insight-1240x900');
+    } finally { await q.close(); }
   });
 }
 

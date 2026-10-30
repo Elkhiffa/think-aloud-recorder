@@ -1,13 +1,14 @@
-"""Bridge for the desk window (资料台): the 场次 tab and the 洞察 tab of the current game.
+"""Bridge for the 场次库 and 洞察 windows of the current game; each window has its own instance.
 
-The insight half is the existing InsightAPI, bound to the game's library. The session half reads
-the recorder's own session list and delegates every action back to DesktopService, so recording
-locks, background jobs and close guards stay in one place. The desk follows the main window's
+The insight methods are the existing InsightAPI, bound to the game's library. The session methods read
+the recorder's own session list and delegate every action back to DesktopService, so recording
+locks, background jobs and close guards stay in one place. Both windows follow the main window's
 current game: `rebind` swaps the library without recreating the window.
 """
 import json
 import math
 from pathlib import Path
+import threading
 
 from insight_runtime import InsightAPI
 
@@ -16,7 +17,10 @@ EVENT_FIELDS = ('id', 'title', 'start', 'end', 'summary', 'issue', 'notes', 'man
 INSTANCE_FIELDS = ('id', 'event_id', 'kind', 'said', 'refers_to', 'compare_to', 'statement', 'screen')
 DESK_METHODS = ('ready', 'get_overview', 'read_report', 'add_feedback', 'set_cover', 'edit_feedback', 'remove_feedback',
                 'thumbnail', 'open_review', 'desk_state', 'session_detail', 'review_session', 'rename_session',
-                'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task')
+                'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task', 'show_in_insight',
+                'get_layout', 'save_layout', 'take_focus')
+LAYOUT_KEYS = ('sessions', 'insight')
+_LAYOUT_LOCK = threading.Lock()
 
 
 def _ok(data=None):
@@ -25,6 +29,10 @@ def _ok(data=None):
 
 def _error(error):
     return {'ok': False, 'error': str(error)[:2000]}
+
+
+def _valid_ratio(ratio):
+    return type(ratio) in (int, float) and math.isfinite(ratio) and .05 <= ratio <= .95
 
 
 class DeskAPI:
@@ -41,7 +49,7 @@ class DeskAPI:
         if previous is not None and previous._ready.is_set():
             self._insight._ready.set()
 
-    # ---- 洞察 tab: the existing insight bridge, always for the current library ----
+    # ---- 洞察 window: the existing insight bridge, always for the current library ----
     @property
     def _ready(self):
         return self._insight._ready
@@ -84,9 +92,9 @@ class DeskAPI:
             return _error(ValueError('回看页签无效。'))
         return self._service.review_at(session_id, at, dict(tab=tab, event=event_id))
 
-    # ---- 场次 tab ----
+    # ---- 场次库 window ----
     def desk_state(self):
-        """The same session rows as the main window, plus which tab to show and the game name."""
+        """The same session rows as the main window, plus the game name."""
         state = self._service.get_state()
         if not state.get('ok'):
             return state
@@ -98,7 +106,7 @@ class DeskAPI:
                         insight=data.get('insight'), app_dir=data.get('app_dir')))
 
     def session_detail(self, ident):
-        """The result in the shape review reads (ui/findings.js), its activities, and which insights cite this session."""
+        """The result in the shape review reads (ui/findings.js), its activities, and the insight issues citing each judgment."""
         try:
             from agent_protocol import preprocessing_status
             import recorder
@@ -114,33 +122,71 @@ class DeskAPI:
                 if 'instances' in result:
                     view['instances'] = [{key: row.get(key) for key in INSTANCE_FIELDS if key in row}
                                          for row in result['instances']]
+            issues = self._instance_issues(result, (status.get('editing') or {}).get('result_sha256')) if isinstance(result, dict) else {}
             return _ok(dict(id=ident, state=status.get('state'), label=status.get('label', ''), kinds=status.get('kinds') or {},
                             result=view, activities=status.get('activities') or [], bugs=status.get('bugs') or {},
-                            insights=self._session_insights(meta.get('id', ident))))
+                            instance_issues=issues))
         except Exception as error:
             return _error(error)
 
-    def _session_insights(self, session_id):
+    def _instance_issues(self, result, digest):
+        """Instance id -> the insight issues citing it, for its 洞察 link. Only links bound to the result shown count
+        (issue_registry._active); a library without insight work gives {} and the window shows nothing of it."""
         try:
-            issues = json.loads((self.vault / 'issues.json').read_text(encoding='utf-8-sig'))['issues']
-            links = json.loads((self.vault / 'issue-links.json').read_text(encoding='utf-8-sig'))['links']
+            from issue_registry import read_links, read_registry
+            links = read_links(self.vault)['links']
+            if not links:
+                return {}
+            titles = {row['id']: row.get('title', row['id']) for row in read_registry(self.vault)['issues']}
         except (OSError, ValueError, KeyError, TypeError):
-            return []
-        rows = {row['id']: row for row in issues if isinstance(row, dict) and row.get('id')}
-
-        def top(ident):
-            seen = set()
-            while rows.get(ident, {}).get('parent') and ident not in seen:
-                seen.add(ident)
-                ident = rows[ident]['parent']
-            return ident
-        counts = {}
+            return {}
+        ids = {row.get('id') for row in result.get('instances') or []}
+        found = {}
         for link in links:
-            if isinstance(link, dict) and link.get('session_id') == session_id and link.get('issue') in rows:
-                key = top(link['issue'])
-                counts[key] = counts.get(key, 0) + 1
-        return [dict(id=key, title=rows[key].get('title', key), count=count)
-                for key, count in sorted(counts.items(), key=lambda item: -item[1])]
+            if (isinstance(link, dict) and link.get('session_id') == result.get('session_id') and link.get('result_sha256') == digest
+                    and link.get('instance_id') in ids and link.get('issue') in titles):
+                found.setdefault(link['instance_id'], []).append(
+                    dict(id=link['issue'], title=titles[link['issue']], role=link.get('role', 'support')))
+        return found
+
+    def show_in_insight(self, session_id, instance_id, issue):
+        return self._service.show_in_insight(session_id, instance_id, issue)
+
+    def take_focus(self):
+        """The 洞察 page asks for the evidence to select once its library is read. The window manager leaves it here
+        rather than pushing it into the page: a newly created window loads its page twice, and a push into the first
+        load is lost."""
+        focus, self.focus = getattr(self, 'focus', None), None
+        return _ok(list(focus) if focus else None)
+
+    # ---- the column split of both windows, kept in the app's state folder for every game ----
+    def _layout_file(self):
+        return self._root / 'state' / 'desk-layout.json'
+
+    def _read_layout(self):
+        try:
+            values = json.loads(self._layout_file().read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {}
+        return ({key: value for key, value in values.items() if key in LAYOUT_KEYS and _valid_ratio(value)}
+                if isinstance(values, dict) else {})
+
+    def get_layout(self):
+        with _LAYOUT_LOCK:
+            return _ok(self._read_layout())
+
+    def save_layout(self, key, ratio):
+        try:
+            if key not in LAYOUT_KEYS or not _valid_ratio(ratio):
+                raise ValueError('分栏比例无效。')
+            from recorder import write
+            with _LAYOUT_LOCK:
+                values = self._read_layout()
+                values[key] = ratio
+                write(self._layout_file(), values)
+            return _ok()
+        except Exception as error:
+            return _error(error)
 
     def review_session(self, ident):
         return self._service.open_review(ident)

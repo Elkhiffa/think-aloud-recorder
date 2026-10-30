@@ -167,5 +167,60 @@ class LifecycleTests(unittest.TestCase):
         self.assertFalse(manager.close_main())
 
 
+class DeskWindowTests(unittest.TestCase):
+    """触发路径：主窗口点「场次库」「洞察」；场次库里点判断上的「洞察：…」链接；主窗口切换或删除游戏。"""
+    def setUp(self):
+        from pathlib import Path
+        from unittest.mock import patch
+        self.windows = []
+
+        def create_window(title, **options):
+            window = Mock(title=title, options=options, uid='w%d' % len(self.windows))
+            window.events.loaded, window.events.closed = Event(), Event()
+            self.windows.append(window)
+            return window
+
+        def desk(service, vault, root, tab):
+            return Mock(vault=Path(vault).resolve(), tab=tab, _error=None, **{'_ready.wait.return_value': True})
+        self.manager = WindowManager(Mock(root=Path('C:/app')), SimpleNamespace(screens=[], create_window=create_window))
+        for target, value in (('desk_runtime.DeskAPI', desk), ('window_chrome.WindowChrome', Mock)):
+            patcher = patch(target, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_sessions_and_insight_open_one_window_each_and_a_second_click_brings_it_forward(self):
+        self.manager.open_desk('D:/库/燕云十六声', 'sessions')
+        self.manager.open_desk('D:/库/燕云十六声', 'insight')
+        self.manager.open_desk('D:/库/燕云十六声', 'sessions')
+        self.assertEqual([w.title for w in self.windows], ['燕云十六声 · 场次库', '燕云十六声 · 洞察'])
+        sessions, insight = self.windows
+        self.assertTrue(sessions.options['url'].endswith('/ui/desk.html'))
+        self.assertTrue(insight.options['url'].endswith('/ui/desk-insight.html'))
+        self.assertEqual((sessions.options['width'], sessions.options['height']), (1280, 800), 'the library opens smaller than review')
+        self.assertEqual(sessions.options['min_size'], (1040, 600))
+        self.assertEqual(insight.options['min_size'], (900, 600))
+        self.assertEqual(self.manager.review_count(), 2, 'the update flow closes both like reviews')
+
+    def test_a_judgment_link_selects_its_evidence_in_the_insight_window(self):
+        self.manager.open_desk('D:/库/燕云十六声', 'insight', ('s1', 'i1', 'TA-01'))
+        api = self.manager._desks['insight'][1]
+        self.assertEqual(api.focus, ('s1', 'i1', 'TA-01'), 'the page takes it once its library is read, even after a reload')
+        self.windows[0].evaluate_js.assert_called_once_with('window.insightBridge&&window.insightBridge.pull()')
+
+    def test_both_windows_follow_the_game_and_close_with_the_last_one(self):
+        self.manager.open_desk('D:/库/燕云十六声', 'sessions')
+        self.manager.open_desk('D:/库/燕云十六声', 'insight')
+        self.manager.desk_follow('D:/库/另一个游戏')
+        for window, word in zip(self.windows, ('场次库', '洞察')):
+            window.set_title.assert_called_once_with('另一个游戏 · ' + word)
+            window.evaluate_js.assert_called_once_with('location.reload()')
+        self.manager.desk_follow(None)
+        for window in self.windows:
+            window.destroy.assert_called_once()
+        for window in self.windows:
+            window.events.closed.handler()
+        self.assertEqual(self.manager._desks, {})
+
+
 if __name__ == '__main__':
     unittest.main()
