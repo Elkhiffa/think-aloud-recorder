@@ -159,7 +159,7 @@ test('session dates use local minute precision and never leak raw or invalid val
   const timestamp='2026-09-20T17:26:53.973896+08:00',local=new Date(timestamp),pad=n=>String(n).padStart(2,'0');
   const f=await fixture({sessions:[{id:'dated',game:'Dated session',created:timestamp,duration:3725,state:'待整理'},{id:'undated',game:'Undated',created:'未记录时间',duration:10,state:'待整理'}]});
   const list=f.el('sessionScroll').innerHTML,detail=f.el('sessionDetail').innerHTML,week='日一二三四五六'[local.getDay()],hm=`${pad(local.getHours())}:${pad(local.getMinutes())}`;
-  assert.ok(list.includes(`<span class="day">${pad(local.getMonth()+1)}/${pad(local.getDate())}</span>`));assert.ok(list.includes(`<span class="c-start">${hm}</span><span class="dur">1:02:05</span>`));
+  assert.ok(list.includes(`<span class="day">${pad(local.getMonth()+1)}/${pad(local.getDate())}</span>`));assert.ok(list.includes(`<span class="day">${pad(local.getMonth()+1)}/${pad(local.getDate())}</span><span class="c-start">${hm}</span><span class="nm`));assert.ok(list.includes('</span><span class="dur">1:02:05</span>'));
   const end=new Date(local.getTime()+3725000);
   assert.ok(detail.includes(`${local.getMonth()+1}月${local.getDate()}日 周${week} · ${hm}–${pad(end.getHours())}:${pad(end.getMinutes())} · 1:02:05`));
   for(const html of [list,detail]){assert.ok(!html.includes(timestamp));assert.ok(!html.includes(`${hm}:${pad(local.getSeconds())}`));}

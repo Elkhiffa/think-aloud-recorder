@@ -1374,7 +1374,7 @@ async function deskChecks(context, origin) {
     const d4 = page.locator('#sessionScroll [data-session="d4"]');
     assert.equal(await d4.locator('.nm').innerText(), '萌宠争锋、城镇养成');
     assert.equal(await d4.locator('.nm').evaluate(n => n.classList.contains('auto')), true, 'an unnamed session shows its activities in quiet type');
-    assert.deepEqual(await d4.locator('span').allInnerTexts(), ['08/28', '萌宠争锋、城镇养成', '19:40', '1:10:10', '7', '']);
+    assert.deepEqual(await d4.locator('span').allInnerTexts(), ['08/28', '19:40', '萌宠争锋、城镇养成', '1:10:10', '7', '']);
     assert.equal(await d4.locator('.pc b').innerText(), '7', 'problem count covers the four problem kinds only');
     assert.deepEqual(await d4.locator('.fp i').evaluateAll(n => n.map(i => [i.className, i.style.flex.split(' ')[0]])), [['k-confusion', '4'], ['k-cost', '3']]);
     assert.equal(await page.locator('#sessionScroll [data-session="d1"] .pc b').innerText(), '3');
@@ -1400,6 +1400,10 @@ async function deskChecks(context, origin) {
     assert.equal(await page.locator('#kindMenu').isVisible(), true, 'the menu stays open while choosing');
     assert.deepEqual(await page.locator('#kindMenu input:checked').evaluateAll(n => n.map(b => b.dataset.kind)), ['obstacle', 'cost']);
     assert.equal(await page.locator('#kindToggle').innerText(), '问题类型 · 2');
+    assert.deepEqual(await page.locator('#sessionScroll .pc').allInnerTexts(), ['2/3', '3/7'], 'rows count only the picked kinds, out of all problems');
+    assert.deepEqual(await page.locator('#sessionScroll [data-session="d4"] .fp i').evaluateAll(n => n.map(i => [i.className, getComputedStyle(i).opacity])), [['k-confusion dim', '0.25'], ['k-cost', '1']]);
+    const chips = () => page.locator('#sessionDetail .fd-chip').evaluateAll(n => n.map(b => [b.dataset.filter, b.disabled, b.getAttribute('aria-pressed')]));
+    assert.deepEqual(await chips(), [['confusion', true, 'false'], ['obstacle', true, 'true'], ['cost', true, 'true'], ['other', true, 'false']], 'the detail follows the desk filter and cannot change it');
     await screen(page, 'desk-kind-menu-1240x900');
     await page.locator('#sessionScroll').click({ position: { x: 4, y: 4 } }); assert.equal(await page.locator('#kindMenu').isVisible(), false, 'a click elsewhere closes it');
     await page.locator('#stateChips [data-filter="running"]').click(); assert.match(await page.locator('#sessionScroll').innerText(), /没有符合筛选的场次/);
@@ -1407,6 +1411,7 @@ async function deskChecks(context, origin) {
     await page.locator('#kindToggle').click(); await page.locator('#kindMenu [data-kind="obstacle"]').uncheck(); await page.locator('#kindMenu [data-kind="cost"]').uncheck();
     assert.equal(await page.locator('#kindToggle').innerText(), '问题类型');
     assert.deepEqual(await deskRows(page), ['d1', 'd2', 'd3', 'd4', 'd5']);
+    assert.deepEqual((await chips()).map(([, disabled, pressed]) => [disabled, pressed]), [[false, 'false'], [false, 'false'], [false, 'false']], 'without a desk filter the detail filters on its own again');
     await page.locator('#kindToggle').click();
   });
   await check('sorting by problems drops month headings; keyboard selection works; search filters names and activities', async () => {
@@ -1426,6 +1431,10 @@ async function deskChecks(context, origin) {
     assert.equal(await page.locator('#sessionDetail h1').innerText(), '清河探索与初次止戈');
     assert.equal(await page.locator('#sessionDetail .d-meta').innerText(), '9月22日 周二 · 10:30–11:32 · 1:02:05');
     assert.deepEqual(await page.locator('#sessionDetail [data-dview]').allInnerTexts(), ['问题 3', '体验事件 2']);
+    const underline = loc => loc.evaluate(n => { const s = getComputedStyle(n); return [s.boxShadow, s.borderRadius, s.fontWeight]; });
+    assert.deepEqual(await underline(page.locator('#sessionDetail [data-dview].on')), await underline(page.locator('#deskTabSessions')), 'detail tabs use the square title-bar underline');
+    const x = sel => page.locator('#sessionScroll [data-session="d1"] ' + sel).evaluate(n => n.getBoundingClientRect().left);
+    assert.ok(await x('.day') < await x('.c-start') && await x('.c-start') < await x('.nm'), 'start time sits between the date and the title');
     assert.deepEqual(await page.locator('#sessionDetail .fd-view>.fd-group .fd-gh').evaluateAll(n => n.map(x => x.querySelector('.fd-name').textContent + x.querySelector('small').textContent)), ['困惑1', '阻碍2', '其他2']);
     assert.equal(await page.locator('#sessionDetail .d-sum').count(), 0, 'the tabs and kind chips carry the distribution once');
     assert.deepEqual(await page.locator('#sessionDetail .fd-chip').evaluateAll(n => n.map(x => x.dataset.filter)), ['confusion', 'obstacle', 'other'], 'kinds with nothing to show have no chip');

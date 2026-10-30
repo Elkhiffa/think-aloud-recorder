@@ -32,6 +32,8 @@
   // ---- session rows ----
   const pad=n=>String(n).padStart(2,'0');
   const problems=s=>Object.keys(KIND).reduce((n,k)=>n+((s.preprocessing?.kinds||{})[k]||0),0);
+  // With 问题类型 picked, a row counts only those kinds and the detail follows the same filter.
+  const matched=s=>state.kinds.size?[...state.kinds].reduce((n,k)=>n+((s.preprocessing?.kinds||{})[k]||0),0):problems(s);
   const jobFor=s=>state.jobs.find(j=>String(j.session_id)===String(s.id));
   function status(s){
     if(s.error||/失败|错误|failed|error/i.test(String(s.state||'')))return 'failed';
@@ -53,13 +55,13 @@
   function title(s){const named=s.session_name||(s.title&&s.title!==s.game?s.title:'');if(named)return {named:true,text:named};const titles=(s.preprocessing?.event_titles||[]).filter(Boolean);const d=new Date(s.created);return {named:false,text:titles.length?titles.join('、'):(Number.isNaN(d.getTime())?'未命名的记录':pad(d.getHours())+':'+pad(d.getMinutes())+' 开始的记录')};}
   function clock(value){const n=Math.max(0,Math.floor(Number(value)||0));return Math.floor(n/3600)+':'+pad(Math.floor(n/60)%60)+':'+pad(n%60);}
   function short(value){const n=Math.max(0,Math.floor(Number(value)||0));return n>=3600?clock(n):pad(Math.floor(n/60))+':'+pad(n%60);}
-  const bar=kinds=>{const present=Object.keys(KIND).filter(k=>kinds[k]);return present.length?`<div class="fp">${present.map(k=>`<i class="k-${k}" data-flex="${kinds[k]}"></i>`).join('')}</div>`:'';};
+  const bar=kinds=>{const present=Object.keys(KIND).filter(k=>kinds[k]);return present.length?`<div class="fp">${present.map(k=>`<i class="k-${k}${state.kinds.size&&!state.kinds.has(k)?' dim':''}" data-flex="${kinds[k]}"></i>`).join('')}</div>`:'';};
   function visible(){
     const q=state.search.trim().toLowerCase();
     let rows=state.sessions.filter(s=>(state.filter==='all'||status(s)===state.filter)
       &&(!state.kinds.size||[...state.kinds].some(k=>(s.preprocessing?.kinds||{})[k]))
       &&(!q||(title(s).text+' '+(s.activity_details||'')).toLowerCase().includes(q)));
-    if(state.sort==='problems')rows=[...rows].sort((a,b)=>problems(b)-problems(a));
+    if(state.sort==='problems')rows=[...rows].sort((a,b)=>matched(b)-matched(a));
     return rows;
   }
   function renderFilters(){
@@ -70,11 +72,12 @@
   }
   function item(s){
     const d=new Date(s.created),valid=!Number.isNaN(d.getTime()),t=title(s),st=status(s),label=statusLabel(s);
-    const counts=st==='done'?`<span class="pc"><b>${problems(s)}</b>${bar(s.preprocessing?.kinds||{})}</span>`:'<span></span>';
+    const counts=st==='done'?`<span class="pc">${state.kinds.size?`<span class="of"><b>${matched(s)}</b>/${problems(s)}</span>`:`<b>${problems(s)}</b>`}${bar(s.preprocessing?.kinds||{})}</span>`:'<span></span>';
     return `<div class="srow cols${state.selected===s.id?' sel':''}" data-session="${escape(s.id)}" role="button" tabindex="0">`
       +`<span class="day">${valid?pad(d.getMonth()+1)+'/'+pad(d.getDate()):''}</span>`
+      +`<span class="c-start">${valid?pad(d.getHours())+':'+pad(d.getMinutes()):''}</span>`
       +`<span class="nm${t.named?'':' auto'}" title="${escape(t.text)}">${escape(t.text)}</span>`
-      +`<span class="c-start">${valid?pad(d.getHours())+':'+pad(d.getMinutes()):''}</span><span class="dur">${clock(s.duration)}</span>${counts}`
+      +`<span class="dur">${clock(s.duration)}</span>${counts}`
       +`<span class="c-st${st==='running'||st==='checking'?' running':''}">${escape(label)}</span></div>`;
   }
   function renderList(){
@@ -121,7 +124,8 @@
     $('sessionDetail').innerHTML=`<div class="d-head"><p class="d-meta">${escape(meta)}</p><h1 id="detailTitle"><span class="tt">${escape(t.text)}</span><button class="edit" data-act="rename" title="重命名" aria-label="重命名">${PENCIL}</button></h1>${actions}${notes}</div>${body}`;
     sizes($('sessionDetail'));
     if(detail?.state==='complete'&&detail.result){
-      const findings=Findings.create($('deskFindings'),{state:state.findings,clock:short,scroller:$('sessionDetail'),
+      if(state.kinds.size)state.findings.filter=new Set(state.kinds);
+      const findings=Findings.create($('deskFindings'),{state:state.findings,clock:short,scroller:$('sessionDetail'),locked:state.kinds.size>0,
         onView:view=>document.querySelectorAll('#sessionDetail [data-dview]').forEach(button=>{const on=button.dataset.dview===view;button.classList.toggle('on',on);button.setAttribute('aria-selected',String(on));}),
         onSeek:(time,where)=>call('open_review',s.id,time,where.view,where.view==='events'?where.event:'').catch(error=>toast(error.message))});
       findings.update({result:detail.result,activities:detail.activities||[],bugs:detail.bugs||{}});
@@ -169,7 +173,8 @@
   // ---- events ----
   $('stateChips').onclick=event=>{const chip=event.target.closest('[data-filter]');if(!chip)return;state.filter=chip.dataset.filter;render();};
   $('kindToggle').onclick=()=>toggleMenu($('kindToggle'),$('kindMenu'));
-  $('kindMenu').onchange=event=>{const k=event.target.dataset.kind;if(!k)return;event.target.checked?state.kinds.add(k):state.kinds.delete(k);renderFilters();renderList();toggleMenu($('kindToggle'),$('kindMenu'),true);};
+  $('kindMenu').onchange=event=>{const k=event.target.dataset.kind;if(!k)return;event.target.checked?state.kinds.add(k):state.kinds.delete(k);state.findings.filter=new Set(state.kinds);renderFilters();renderList();
+    const s=state.sessions.find(row=>row.id===state.selected);if(s&&state.detail)renderDetail(s,state.detail);toggleMenu($('kindToggle'),$('kindMenu'),true);};
   $('sortSelect').onchange=()=>{state.sort=$('sortSelect').value;renderList();};
   $('searchInput').oninput=()=>{state.search=$('searchInput').value;renderList();};
   $('sessionScroll').addEventListener('click',event=>{const row=event.target.closest('[data-session]');if(row)select(row.dataset.session);});
