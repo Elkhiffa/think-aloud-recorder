@@ -1,5 +1,5 @@
 'use strict';
-/* 资料台 · 场次库页签。洞察页签由 insight.js 负责；两者共用同一个窗口接口（desk_runtime.DeskAPI）。 */
+/* 场次库窗口。洞察是另一个窗口（desk-insight.html）；判断上的「洞察：…」链接经窗口接口在那边打开。 */
 (function(){
   const $=id=>document.getElementById(id);
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -10,24 +10,13 @@
   const state={sessions:[],jobs:[],busy:false,game:'',filter:'all',kinds:new Set(),sort:'time',search:'',selected:null,detail:null,signature:'',findings:{view:'problems'},editing:false};
   let api=null,toastTimer=null;
   const PLAY='<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1l9 5-9 5z"/></svg>';
-  const GO='<span class="go" aria-hidden="true">→</span>';
   const PENCIL='<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10.8 2.6a1.3 1.3 0 0 1 1.8 0l.8.8a1.3 1.3 0 0 1 0 1.8L6 12.6l-2.9.6.6-2.9z"/></svg>';
 
-  // ---- window ----
-  function applyFrameColor(){const paper=getComputedStyle(document.documentElement).getPropertyValue('--paper').trim();try{api?.win_set_frame_color?.(paper)?.catch?.(()=>{});}catch(_){}}
-  applyFrameColor();
-  document.querySelectorAll('[data-win]').forEach(button=>button.onclick=()=>{const name={min:'win_minimize',max:'win_toggle_maximize',close:'win_close'}[button.dataset.win];try{api?.[name]?.()?.catch?.(()=>{});}catch(_){}});
   function toast(message){clearTimeout(toastTimer);$('deskToast').textContent=message;$('deskToast').classList.add('show');toastTimer=setTimeout(()=>$('deskToast').classList.remove('show'),5000);}
   async function call(method,...args){const response=await api[method](...args);if(!response||response.ok!==true)throw new Error(response?.error||'操作未完成，请重试。');return response.data;}
 
   // Sizes go through CSSOM: the page's content policy forbids inline style attributes.
   function sizes(root){root.querySelectorAll('[data-flex]').forEach(el=>el.style.flex=el.dataset.flex);}
-  // ---- tabs ----
-  function deskShow(tab){const insight=tab==='insight';$('paneSessions').classList.toggle('hidden',insight);$('paneInsight').classList.toggle('hidden',!insight);
-    $('deskTabSessions').classList.toggle('on',!insight);$('deskTabInsight').classList.toggle('on',insight);$('deskTabSessions').setAttribute('aria-selected',String(!insight));$('deskTabInsight').setAttribute('aria-selected',String(insight));}
-  window.deskShow=deskShow;
-  $('deskTabSessions').onclick=event=>{event.preventDefault();deskShow('sessions');};
-  $('deskTabInsight').onclick=event=>{event.preventDefault();deskShow('insight');};
 
   // ---- session rows ----
   const pad=n=>String(n).padStart(2,'0');
@@ -90,7 +79,7 @@
     }
     $('sessionScroll').innerHTML=html||'<p class="empty">没有符合筛选的场次。</p>';sizes($('sessionScroll'));
   }
-  function render(){renderFilters();renderList();$('deskGame').textContent=state.game||'资料台';document.title='资料台 · '+(state.game||'');}
+  function render(){renderFilters();renderList();ThinkAloudChrome.title(state.game);}
 
   // ---- detail ----
   async function select(id){
@@ -116,9 +105,7 @@
       // The same two views as review (ui/findings.js); a click opens review on the matching tab.
       const view=state.findings.view,tab=(name,label)=>`<button type="button" role="tab" data-dview="${name}" aria-selected="${view===name}" class="${view===name?'on':''}">${label}</button>`;
       const tabs=`<div class="d-tabs" role="tablist" aria-label="整理结果">${version2?tab('problems',`问题 ${total}`):''}${tab('events',`体验事件 ${detail.result.events.length}`)}</div>`;
-      const ins=detail.insights.length?`<ul class="lns">${detail.insights.slice(0,8).map(i=>`<li><button class="ln ins" data-issue="${escape(i.id)}" title="在洞察里查看"><span class="tx">${escape(i.title)}</span><span class="ct">${i.count}</span>${GO}</button></li>`).join('')}</ul>`:'<p class="note">这一场的证据还没有挂到洞察下。</p>';
-      body=`${tabs}<div id="deskFindings" class="d-findings"></div>`
-        +`<section class="grp"><div class="gh"><span class="name">关联洞察</span></div>${ins}</section>`;
+      body=`${tabs}<div id="deskFindings" class="d-findings"></div>`;
     }
     const notes=(job?`<p class="d-note">${escape(job.state==='queued'?'等待转写，前面的场次完成后继续。':job.detail||'正在转写，可以继续录制。')}</p>`:'')+(s.error?`<p class="d-note warn">${escape(s.error)}</p>`:'');
     $('sessionDetail').innerHTML=`<div class="d-head"><p class="d-meta">${escape(meta)}</p><h1 id="detailTitle"><span class="tt">${escape(t.text)}</span><button class="edit" data-act="rename" title="重命名" aria-label="重命名">${PENCIL}</button></h1>${actions}${notes}</div>${body}`;
@@ -127,8 +114,9 @@
       if(state.kinds.size)state.findings.filter=new Set(state.kinds);
       const findings=Findings.create($('deskFindings'),{state:state.findings,clock:short,scroller:$('sessionDetail'),locked:state.kinds.size>0,
         onView:view=>document.querySelectorAll('#sessionDetail [data-dview]').forEach(button=>{const on=button.dataset.dview===view;button.classList.toggle('on',on);button.setAttribute('aria-selected',String(on));}),
-        onSeek:(time,where)=>call('open_review',s.id,time,where.view,where.view==='events'?where.event:'').catch(error=>toast(error.message))});
-      findings.update({result:detail.result,activities:detail.activities||[],bugs:detail.bugs||{}});
+        onSeek:(time,where)=>call('open_review',s.id,time,where.view,where.view==='events'?where.event:'').catch(error=>toast(error.message)),
+        onInsight:(instance,issue)=>call('show_in_insight',s.id,instance,issue).catch(error=>toast(error.message))});
+      findings.update({result:detail.result,activities:detail.activities||[],bugs:detail.bugs||{},issues:detail.instance_issues||{}});
     }
   }
   function dialog(titleText,html,buttons){
@@ -185,7 +173,6 @@
     if(button?.dataset.act==='more'){toggleMenu(button,$('moreMenu'));return;}
     if(button){if(button.closest('#moreMenu'))toggleMenu(document.querySelector('[data-act="more"]'),$('moreMenu'),false);act(button.dataset.act,s);return;}
     const view=event.target.closest('[data-dview]');if(view){state.findings.view=view.dataset.dview;renderDetail(s,state.detail);return;}
-    const issue=event.target.closest('[data-issue]');if(issue){deskShow('insight');const label=title(s).text;window.insightBridge?.showSession(s.id,label);setTimeout(()=>window.insightBridge?.goToIssue(issue.dataset.issue),60);}
   });
 
   // ---- data ----
@@ -200,10 +187,13 @@
     return data;
   }
   async function start(){
-    if(api)return;api=window.pywebview.api;applyFrameColor();
-    try{const data=await refresh();deskShow(data.tab==='insight'?'insight':'sessions');if(state.sessions[0]&&!state.selected)select(state.sessions[0].id);}
-    catch(error){$('sessionScroll').innerHTML=`<p class="empty">${escape(error.message)}</p>`;}
+    if(api)return;api=window.pywebview.api;split.load();
+    try{await refresh();if(state.sessions[0]&&!state.selected)select(state.sessions[0].id);api.ready().catch(()=>{});}
+    catch(error){$('sessionScroll').innerHTML=`<p class="empty">${escape(error.message)}</p>`;api.ready(error.message).catch(()=>{});}
     setInterval(()=>{if(!document.hidden)refresh().catch(()=>{});},3000);
   }
+  // The list keeps its six columns (620 px); the detail keeps its actions and filters on one line or two (360 px).
+  const split=ThinkAloudSplit.attach({layout:document.querySelector('.lib'),handle:$('deskSplit'),key:'sessions',share:.64,minFirst:620,minSecond:360,label:['场次列表','详情'],api:()=>api});
+  ThinkAloudChrome.title('');
   if(window.pywebview?.api)start();else window.addEventListener('pywebviewready',start);
 })();

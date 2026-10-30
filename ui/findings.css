@@ -49,9 +49,9 @@
 .fd-kind{color:var(--fd-ink)}
 .fd-bug-mark{padding:0 6px;border:1px solid var(--k-bug);border-radius:999px;line-height:16px;color:var(--k-bug)}
 .fd-bug-mark.is-suspected{border-style:dashed}
-.findings .fd-jump,.findings .fd-event-link{color:var(--fd-muted);text-decoration:underline dotted;text-underline-offset:3px}
-.findings .fd-jump:hover,.findings .fd-event-link:hover{color:var(--fd-ink);text-decoration-style:solid}
-.findings .fd-event-link{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.findings .fd-jump,.findings .fd-event-link,.findings .fd-insight-link{color:var(--fd-muted);text-decoration:underline dotted;text-underline-offset:3px}
+.findings .fd-jump:hover,.findings .fd-event-link:hover,.findings .fd-insight-link:hover{color:var(--fd-ink);text-decoration-style:solid}
+.findings .fd-event-link,.findings .fd-insight-link{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 
 /* 「体验事件」：每个事件一段，收起时看标题、时段、计数、概述和活动标签 */
 .fd-coverage{font-size:12px;color:var(--fd-muted);padding:4px 0 8px}

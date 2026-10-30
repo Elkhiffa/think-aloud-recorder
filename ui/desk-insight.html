@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'"><title>洞察</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="insight.css"><link rel="stylesheet" href="desk.css"></head>
+<body data-window="洞察">
+<div class="desk">
+<header class="tb app-drag">
+  <svg class="brand" viewBox="0 0 40 40" aria-hidden="true"><g fill="currentColor"><path d="M4 16C4 10 7 7 13 6v4c-3 1-4 3-4 5h4v10H4Z"/><path d="M16 16c0-6 3-9 9-10v4c-3 1-4 3-4 5h4v10h-9Z"/><path d="M30 3h6v35l-3-4-3 4Z"/></g></svg><span class="tb-name">Think Aloud</span><span class="tb-game" id="deskGame"></span>
+  <span class="tb-space"></span>
+  <div class="win"><button data-win="min" aria-label="最小化" title="最小化">&#xE921;</button><button data-win="max" aria-label="最大化" title="最大化">&#xE922;</button><button data-win="close" class="close" aria-label="关闭" title="关闭">&#xE8BB;</button></div>
+</header>
+
+<section class="desk-pane" id="paneInsight" aria-label="洞察">
+<h1 id="title" class="sr-only">洞察</h1>
+<main class="split">
+  <div class="left-col">
+  <div class="col-head">
+    <div class="tabs" role="tablist" aria-label="左栏内容">
+      <button type="button" role="tab" id="tabReport" aria-selected="true" aria-controls="report">报告</button>
+      <button type="button" role="tab" id="tabLibrary" aria-selected="false" aria-controls="library">界面库</button>
+    </div>
+    <label class="report-choice"><span class="sr-only">选择报告</span><select id="reportSelect"></select></label>
+    <button type="button" id="refresh" title="重新读取报告、议题和目录">刷新</button>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </div>
+  <article id="report" class="pane report" tabindex="0" aria-label="分析报告"><p class="empty">正在读取…</p></article>
+  <section id="library" class="pane library" role="tabpanel" aria-labelledby="tabLibrary" tabindex="0" hidden><div id="libraryList"></div><nav id="libNext" class="next-bar" aria-label="下一个分类" hidden></nav></section>
+  </div>
+  <div class="split-handle" id="insightSplit" aria-label="调整报告和证据的宽度"></div>
+  <div class="right-col">
+  <div class="col-head">
+    <div class="tabs" role="tablist" aria-label="右栏内容">
+      <button type="button" role="tab" id="tabEvidence" aria-selected="true" aria-controls="evidencePane">证据</button>
+      <button type="button" role="tab" id="tabFeedback" aria-selected="false" aria-controls="feedbackPane">反馈 <span id="feedbackCount" class="count"></span></button>
+    </div>
+    <span class="col-sp"></span>
+    <span class="tree-actions" id="treeActions"><button type="button" id="expandAll">全部展开</button><button type="button" id="collapseAll">全部收起</button></span>
+  </div>
+  <section id="evidencePane" class="pane evidence" role="tabpanel" aria-labelledby="tabEvidence" tabindex="0">
+    <div class="evidence-head">
+    <div class="tree-bar">
+      <div id="kindBar" class="kind-bar" role="group" aria-label="按判断类型筛选"></div>
+    </div>
+    <div id="filterBar" class="filter-bar" hidden></div>
+    </div>
+    <div id="evidenceList"></div>
+    <nav id="nextBar" class="next-bar" aria-label="下一个议题" hidden></nav>
+  </section>
+  <section id="feedbackPane" class="pane feedback" role="tabpanel" aria-labelledby="tabFeedback" tabindex="0" hidden>
+    <p class="hint">agent 整理的议题、归类和界面名默认接受。你在证据页点“有问题”留下的话都在这里，下一轮整理会逐条处理并写明改了什么。</p>
+    <div id="feedbackList"></div>
+  </section>
+  </div>
+</main>
+</section>
+</div>
+<div id="menu" class="menu" role="menu" hidden></div>
+<div id="lightbox" class="lightbox" hidden><img id="lightboxImage" alt="所指时刻的大图"><p id="lightboxCaption"></p></div>
+<script src="desk-chrome.js"></script>
+<script src="split.js"></script>
+<script src="insight.js"></script>
+<script src="desk-insight.js"></script>
+</body></html>

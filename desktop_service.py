@@ -2057,9 +2057,18 @@ class DesktopService:
         self._insight_opener = opener
 
     def open_desk(self, tab='sessions'):
-        """Open (or bring forward) the single desk window on the current game's 场次 or 洞察 tab."""
+        """Open (or bring forward) the current game's 场次库 or 洞察 window."""
         if tab not in ('sessions', 'insight'):
-            return self._error(ValueError('资料台只有“场次”和“洞察”两个页签。'))
+            return self._error(ValueError('只有“场次库”和“洞察”两个窗口。'))
+        return self._open_desk(tab)
+
+    def show_in_insight(self, session_id, instance_id, issue):
+        """Path 1: a judgment's 洞察 link in the 场次库 window opens 洞察 with that evidence selected."""
+        if not all(isinstance(value, str) and 0 < len(value) <= 200 for value in (session_id, instance_id, issue)):
+            return self._error(ValueError('洞察链接无效。'))
+        return self._open_desk('insight', (session_id, instance_id, issue))
+
+    def _open_desk(self, tab, focus=None):
         admitted = False
         try:
             with self._lock:
@@ -2070,10 +2079,10 @@ class DesktopService:
                     raise RuntimeError('当前游戏还没有场次。')
                 opener = getattr(self, '_desk_opener', None)
                 if opener is None:
-                    raise RuntimeError('资料台尚未就绪。')
+                    raise RuntimeError('场次库和洞察窗口尚未就绪。')
                 self._review_opening += 1
                 admitted = True
-            return ok(opener(vault, tab))
+            return ok(opener(vault, tab, focus) if focus else opener(vault, tab))
         except Exception as error:
             return self._error(error)
         finally:
@@ -2082,7 +2091,7 @@ class DesktopService:
                     self._review_opening -= 1
 
     def set_desk_hooks(self, opener, follow):
-        """The desk follows the current game: `follow(vault)` runs after the game is switched."""
+        """场次库 and 洞察 follow the current game: `follow(vault)` runs after the game is switched."""
         self._desk_opener = opener
         self._desk_follow = follow
 

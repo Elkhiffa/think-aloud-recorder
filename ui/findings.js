@@ -1,7 +1,7 @@
 'use strict';
-/* 回看与资料台共用的整理结果视图：按问题类型筛选，「问题」按类型分组，「体验事件」每个事件一段。
+/* 回看与场次库共用的整理结果视图：按问题类型筛选，「问题」按类型分组，「体验事件」每个事件一段。
    Bug 是和类型并列的一组（设计没问题、实现出了问题）：一条判断仍有自己的类型，是 bug 时两组都列出。
-   调用方持有状态并决定点击去向（回看原地跳转，资料台打开回看）；这里只负责画和接点击。 */
+   调用方持有状态并决定点击去向（回看原地跳转，场次库打开回看）；这里只负责画和接点击。 */
 (function(root){
   const PROBLEM={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
   const OTHER={expectation:'预期',suggestion:'建议',positive:'正向体验',observation:'观察',self_correction:'自我修正'};
@@ -17,7 +17,8 @@
   const SCROLLERS=new WeakMap();
 
   // bugs: instance id -> 'explicit' | 'suspected', from the result and the library's BUG links.
-  function model(result,activities,bugs){
+  // issues: instance id -> [{id,title,role}], the insight issues that still cite it (the desk only).
+  function model(result,activities,bugs,issues){
     const events=[...(result?.events||[])].sort((a,b)=>a.start-b.start||a.end-b.end);
     const eventById=new Map(events.map(event=>[event.id,event]));
     const tags=new Map(events.map(event=>[event.id,[]]));
@@ -26,7 +27,7 @@
       const said=[...(item.said||[])].sort((a,b)=>a.start-b.start);
       return {id:item.id,kind:item.kind,group:groupOf(item.kind),at:said[0]?.start??item.refers_to?.start??0,
         quote:said.map(ref=>ref.text).filter(Boolean).join(' … '),statement:item.statement||'',screen:item.screen||'',
-        refers:item.refers_to||null,compare:item.compare_to||null,event:item.event_id,bug:bugs?.[item.id]||item.bug||null};
+        refers:item.refers_to||null,compare:item.compare_to||null,event:item.event_id,bug:bugs?.[item.id]||item.bug||null,issues:issues?.[item.id]||[]};
     }).sort((a,b)=>a.at-b.at);
     return {events,eventById,tags,items};
   }
@@ -56,7 +57,8 @@
       const badge=item.bug&&group!=='bug'?`<span class="fd-bug-mark${item.bug==='suspected'?' is-suspected':''}">${BUG_LABEL[item.bug]}</span>`:'';
       const kind=group==='other'||group==='bug'?`<span class="fd-kind">${escape(LABEL[item.kind]||item.kind)}${group==='bug'&&item.bug==='suspected'?' · 疑似':''}</span>`:'';
       const meta=[kind,badge,item.screen?`<span class="fd-screen">${escape(item.screen)}</span>`:'',referred,compared,
-        showEvent&&event?`<button type="button" class="fd-event-link" data-goto-event="${escape(event.id)}" title="在「体验事件」里查看这一段">${escape(event.title)}</button>`:''].filter(Boolean).join('');
+        showEvent&&event?`<button type="button" class="fd-event-link" data-goto-event="${escape(event.id)}" title="在「体验事件」里查看这一段">${escape(event.title)}</button>`:'',
+        ...item.issues.map(issue=>`<button type="button" class="fd-insight-link" data-insight="${escape(issue.id)}" data-insight-item="${escape(item.id)}" title="在洞察窗口里查看这条证据">${issue.role==='counter'?'反例 · ':''}洞察：${escape(issue.title)}</button>`)].filter(Boolean).join('');
       return `<li class="fd-row k-${group}" data-item="${escape(item.id)}"><button type="button" class="fd-at" data-seek="${item.at}" data-event="${escape(item.event)}" title="定位到说出口的时刻">${clock(item.at)}</button>`+
         `<div class="fd-main">${item.quote?`<p class="fd-quote">${escape(item.quote)}</p>`:''}<p class="fd-stmt">${escape(item.statement)}</p>${meta?`<p class="fd-meta">${meta}</p>`:''}</div></li>`;
     }
@@ -183,6 +185,7 @@
     SCROLLERS.set(scroller,()=>{if(container.isConnected!==false){shrinkSpacer();measure();updateStuck();}});
     container.addEventListener('click',event=>{
       const target=event.target.closest('button');if(!target||!container.contains(target)||target.disabled)return;
+      if(target.dataset.insight){options.onInsight?.(target.dataset.insightItem,target.dataset.insight);return;}
       if(target.dataset.filter){const group=target.dataset.filter;state.filter.has(group)?state.filter.delete(group):state.filter.add(group);render();return;}
       if(target.hasAttribute('data-clear-activity')){state.activity='';render();return;}
       if(target.dataset.activity){state.activity=state.activity===target.dataset.activity?'':target.dataset.activity;render();return;}
@@ -196,7 +199,7 @@
     });
     return {
       state,
-      update(next){data=next&&next.result?next:null;view=data?model(data.result,data.activities,data.bugs):null;render();},
+      update(next){data=next&&next.result?next:null;view=data?model(data.result,data.activities,data.bugs,data.issues):null;render();},
       setView(next){state.view=next;render();},
       openEvent,
       counts(){return view?counts(view.items):counts([]);},

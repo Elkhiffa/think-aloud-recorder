@@ -1,6 +1,6 @@
-/* 资料台（第四轮：合成方向，见 docs/plans/2026-10-19-redesign.md）。与主窗口同一套名字和尺度：
+/* 场次库窗口和洞察窗口（第四轮：合成方向，见 docs/plans/2026-10-19-redesign.md；10-30 拆成两个窗口）。与主窗口同一套名字和尺度：
    间距只用 4/8/12/16/24/32，圆角 6/8/12/16；字体角色 标题 宋体 22 粗 · 小标题 黑体 14 粗 · 正文 黑体 14 · 注释 黑体 12。
-   洞察页签沿用 insight.css 的结构，这里只负责外框、场次库和共用变量。 */
+   洞察窗口沿用 insight.css 的结构，这里只负责外框、场次库、分隔条和共用变量。 */
 :root{
   --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--s6:32px;
   --r-sm:6px;--r:8px;--r-md:12px;--r-lg:16px;
@@ -25,17 +25,13 @@ button:disabled{cursor:default;opacity:.5}
 .empty{padding:var(--s6);color:var(--muted)}
 :where(#paneSessions) :is(p,h1,ul){margin:0}
 
-/* 标题栏：小标、软件名、当前游戏、场次库 | 洞察（下划线页签，同主窗口的游戏页签） */
+/* 标题栏：小标、软件名，再是窗口标题「游戏名 场次库」或「游戏名 洞察」 */
 .desk{display:flex;flex-direction:column;flex:1;min-height:0}
 .tb{height:40px;flex:none;display:flex;align-items:baseline;gap:var(--s2);padding-left:var(--s4);line-height:20px}
 .tb .brand{align-self:center}
 .brand{flex:none;width:16px;height:16px;color:var(--rec)}
 .tb-name{font-size:var(--t1);color:var(--muted)}
-.tb-game{font-weight:700;margin-left:var(--s2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px}
-.dtabs{display:flex;align-items:baseline;gap:var(--s5);margin-left:var(--s5)}
-.dtabs a{display:block;padding:10px 0;color:var(--muted);text-decoration:none}
-.dtabs a:hover{color:var(--ink)}
-.dtabs a.on{color:var(--ink);font-weight:700;box-shadow:inset 0 -2px 0 var(--ink)}
+.tb-game{font-size:18px;line-height:40px;font-weight:700;margin-left:var(--s2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:480px}
 .tb-space{flex:1;align-self:stretch}
 .win{display:flex;flex:none;align-self:stretch}
 .win button{width:46px;font:10px/40px var(--icons);color:var(--ink);background:none;border:0}
@@ -43,8 +39,14 @@ button:disabled{cursor:default;opacity:.5}
 .win .close:hover{background:#c42b1c;color:#fff}
 .desk-pane{flex:1;min-height:0;display:flex;flex-direction:column}
 
-/* 场次库：左边表格，右边这一场的详情；两块纸面放在窗口纸色上，没有分割线 */
-.lib{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) clamp(340px,38%,480px);gap:var(--s4);padding:var(--s1) var(--s4) var(--s4)}
+/* 场次库：左边表格，右边这一场的详情；两块纸面放在窗口纸色上，中间是分隔条（ui/split.js 设 --first） */
+.lib{flex:1;min-height:0;display:grid;grid-template-columns:var(--first,64fr) var(--s4) minmax(0,36fr);padding:var(--s1) var(--s4) var(--s4)}
+/* 分隔条：平时只是两块纸面之间的空隙，悬停或聚焦时出现一道竖线 */
+.split-handle{display:flex;align-items:center;justify-content:center;cursor:col-resize;touch-action:none;user-select:none;outline:none}
+.split-handle::before{content:"";width:2px;height:40px;border-radius:1px;background:transparent;transition:background .15s}
+.split-handle:hover::before,.split-handle:focus-visible::before,.resizing-columns .split-handle::before{background:var(--faint)}
+.split-handle:focus-visible::before{background:var(--ink)}
+.resizing-columns,.resizing-columns *{cursor:col-resize!important;user-select:none!important}
 .panel{border-radius:var(--r-lg);background:var(--sheet);min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .list{container-type:inline-size}
 .fbar{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2);padding:var(--s4) var(--s4) var(--s3)}
@@ -97,7 +99,6 @@ button:disabled{cursor:default;opacity:.5}
 .srow .c-st.running{color:var(--muted)}
 .fp{display:flex;height:6px;gap:2px;border-radius:3px;overflow:hidden}
 .fp i{display:block;background:var(--kc,var(--k-other))}
-@container (max-width:640px){.cols{grid-template-columns:44px minmax(0,1fr) 60px 112px 64px}.c-start{display:none}}
 
 /* 详情：元信息 → 标题 → 操作 → 四类比例 → 按类型的原话 → 关联洞察 → 体验事件 */
 .detail{overflow-y:auto;padding:var(--s5)}
@@ -112,32 +113,6 @@ button:disabled{cursor:default;opacity:.5}
 .d-acts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
 .d-note{margin-top:var(--s2);font-size:var(--t1);color:var(--muted)}
 .d-note.warn{color:var(--warn)}
-.grp{margin-top:var(--s5)}
-/* 问题类型：只有标题行是左侧强色竖条加同色相浅底；原话在纸面上。超过 3 条时点标题行展开全部，再点收起 */
-.kqs{display:grid;gap:var(--s4);margin-top:var(--s5)}
-.kq .gh{width:100%;margin:0 0 var(--s1);padding:var(--s2) var(--s3);line-height:20px;border:0;border-left:3px solid var(--kc);border-radius:0 var(--r-sm) var(--r-sm) 0;background:color-mix(in srgb,var(--kc) 9%,var(--sheet));text-align:left;color:var(--ink)}
-.kq .gh .name{color:var(--kc)}
-.kq .chev{align-self:center;width:10px;height:6px;fill:var(--muted);transition:transform .12s}
-.kq .gh[aria-expanded=true] .chev{transform:rotate(180deg)}
-.kq button.gh:hover{background:color-mix(in srgb,var(--kc) 15%,var(--sheet))}
-.kq button.gh:hover .chev{fill:var(--ink)}
-.kq .lns{padding-left:var(--s1)}
-.gh{display:flex;align-items:baseline;gap:var(--s2);margin-bottom:var(--s1)}
-.gh .name{font-weight:700}
-.gh small{font-size:var(--t1);color:var(--muted);font-variant-numeric:tabular-nums}
-.gh .sp{flex:1}
-.link{border:0;background:none;padding:0;font-size:var(--t1);color:var(--muted)}
-.link:hover{color:var(--ink)}
-.lns{list-style:none;margin:0;padding:0}
-.ln{display:grid;grid-template-columns:56px minmax(0,1fr) 12px;align-items:baseline;column-gap:var(--s2);width:100%;padding:var(--s1) var(--s2);border:0;border-radius:var(--r);background:none;text-align:left}
-.ln:hover{background:var(--paper)}
-.ln .at{font-size:var(--t1);line-height:22px;color:var(--kc,var(--muted));font-variant-numeric:tabular-nums}
-.ln .tx{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
-.ln .ct{font-weight:700;font-variant-numeric:tabular-nums}
-.ln.ins{grid-template-columns:minmax(0,1fr) auto 12px}
-/* 能跳转的行：悬停或键盘聚焦时，最右边出现一个朝右的小箭头 */
-.ln .go{visibility:hidden;font-size:var(--t1);line-height:22px;color:var(--muted)}
-.ln:hover .go,.ln:focus-visible .go{visibility:visible}
 
 /* 对话框与提示 */
 .desk-dialog{border:0;box-shadow:0 12px 40px rgb(60 40 20 / .22);border-radius:var(--r-lg);background:var(--sheet);color:var(--ink);padding:0;max-width:min(520px,calc(100vw - 48px))}
@@ -161,3 +136,7 @@ button:disabled{cursor:default;opacity:.5}
 .d-tabs button:hover{background:none;color:var(--ink)}
 .d-tabs button.on{color:var(--ink);font-weight:700;box-shadow:inset 0 -2px 0 var(--ink)}
 .d-findings{margin-bottom:var(--s5)}
+
+/* 洞察窗口：左栏报告或界面库，右栏证据或反馈，中间同样是分隔条；窗口最小宽度保证不会叠成上下两栏 */
+.desk .split{grid-template-columns:var(--first,1fr) var(--s4) minmax(0,1fr);grid-template-rows:none;gap:0}
+.desk .left-col{border-bottom:0}

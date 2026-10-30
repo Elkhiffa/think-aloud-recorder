@@ -1,5 +1,5 @@
 'use strict';
-// Synthetic desk-window (资料台 · 场次) tests: the session list, row status, detail actions and their locks.
+// Synthetic desk-window (场次库) tests: the session list, row status, detail actions and their locks.
 // No browser, capture, or network. ui/desk.js runs against a fake DOM built from ui/desk.html and a fake
 // desk_runtime.DeskAPI bridge (desk_state, session_detail and the row actions).
 const test = require('node:test');
@@ -35,7 +35,7 @@ function fakeDOM() {
   // Inputs created by dialogs (renameInput, recoverInput) exist only inside some element's innerHTML.
   const byId=id=>{if(!elements.has(id)&&[...elements.values()].some(el=>el.innerHTML.includes(`id="${id}"`)))elements.set(id,new Element(id));return elements.get(id);};
   document={activeElement:null,title:'',hidden:false,documentElement:{dataset:{}},body:{append(){}},getElementById:byId,
-    querySelectorAll:()=>[],createElement:()=>new Element(),addEventListener(){}};
+    querySelector:()=>null,querySelectorAll:()=>[],createElement:()=>new Element(),addEventListener(){}};
   return {document,elements};
 }
 const decode=text=>String(text).replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&');
@@ -54,7 +54,7 @@ function click(el,attr,value){
 }
 const plain=value=>JSON.parse(JSON.stringify(value));
 async function settle(){for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));}
-const emptyDetail=id=>({id,state:'none',label:'',kinds:{},result:null,activities:[],insights:[]});
+const emptyDetail=id=>({id,state:'none',label:'',kinds:{},result:null,activities:[],instance_issues:{}});
 
 async function fixture(state={}) {
   const {document,elements}=fakeDOM();const calls=[];let poll=null;
@@ -65,7 +65,7 @@ async function fixture(state={}) {
     return {ok:true,data:{}};};}});
   const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){return null;},setItem(){}},
     matchMedia:()=>({matches:false,addEventListener(){}}),getComputedStyle:()=>({getPropertyValue:()=>''}),setTimeout(){return 1;},clearTimeout(){},
-    setInterval(fn){poll=fn;return 1;},navigator:{clipboard:{writeText:async text=>{data.clipboard=text;}}},console});
+    setInterval(fn){poll=fn;return 1;},ThinkAloudChrome:{title(text){data.title=text;}},ThinkAloudSplit:{attach:()=>({load(){},render(){}})},navigator:{clipboard:{writeText:async text=>{data.clipboard=text;}}},console});
   for(const file of ['findings.js','desk.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../ui',file),'utf8'),context);
   await settle();
   const el=id=>elements.get(id);
@@ -128,7 +128,7 @@ test('the detail shows the same 问题 / 体验事件 views as review; a click o
     instances:[{id:'i1',event_id:'e1',kind:'confusion',said:[{start:12,end:14,text:'What now?'}],refers_to:{start:12,end:14,basis:'same_time'},statement:'Lost after the bag filled.',screen:'bag'},
       {id:'i2',event_id:'e2',kind:'observation',said:[{start:90,end:91,text:'Map opens.'}],refers_to:{start:90,end:91,basis:'same_time'},statement:'Noted the map.',screen:''}],coverage:null};
   const f=await fixture({sessions:[{id:'done',game:'Game',state:'可回看',can_review:true,preprocessing:{state:'complete',kinds:{confusion:1,observation:1}}}]});
-  f.data.details.done={id:'done',state:'complete',label:'',kinds:{confusion:1,observation:1},result,activities:[{name:'Bag',event_ids:['e1']}],bugs:{i1:'suspected'},insights:[]};
+  f.data.details.done={id:'done',state:'complete',label:'',kinds:{confusion:1,observation:1},result,activities:[{name:'Bag',event_ids:['e1']}],bugs:{i1:'suspected'},instance_issues:{}};
   await f.select('done');
   const detail=f.el('sessionDetail').innerHTML,views=f.el('deskFindings').innerHTML;
   assert.match(detail,/data-dview="problems"[^>]*>问题 1</);assert.match(detail,/data-dview="events"[^>]*>体验事件 2</);

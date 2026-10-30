@@ -616,13 +616,14 @@
   $('tabReport').onclick=()=>selectLeft('report');
   $('tabLibrary').onclick=()=>selectLeft('library');
 
+  let loaded=null;
   function start(){
     if(api)return;
     api=window.pywebview.api;
     api.ready().catch(()=>{});
-    load();
+    loaded=load();
   }
-  // The desk window's 场次 tab jumps here: reveal an insight, or show only one session's evidence.
-  window.insightBridge={goToIssue,showSession(id,label){state.filters.session=id;state.filters.sessionLabel=label||'';showEvidenceTab();applyFilters();},reload:load};
+  // A judgment's 洞察 link in the 场次库 window lands here once the library has been read.
+  window.insightBridge={async showInstance(sessionId,instanceId,issue){await loaded;goToInstance(sessionId,instanceId,issue||null);}};
   if(window.pywebview?.api)start();else window.addEventListener('pywebviewready',start);
 })();
