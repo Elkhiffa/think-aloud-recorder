@@ -127,7 +127,10 @@ def main():
             note = str(row.get('cells', {}).get(str(col), '') or '')
             extra = '\n'.join(f'截图{len(row.get("images", {})) + n + 1}：{link}' for n, link in enumerate(links))
             image_cells.append({'row': r, 'col': col, 'value': (note + '\n' + extra).strip()})
-        table(doc, 'sheet.resizeRows', {'sheetId': sheet_id, 'row': r, 'height': height})
+        try:  # Cosmetic like column widths: a refused row height must not throw away the images already uploaded.
+            table(doc, 'sheet.resizeRows', {'sheetId': sheet_id, 'row': r, 'height': height})
+        except SystemExit as error:
+            warnings.append(f'第 {r + 1} 行行高没调成：{str(error)[-120:]}')
     for start in range(0, len(image_cells), BATCH):
         table(doc, 'sheet.batchSetCells', {'sheetId': sheet_id, 'cells': image_cells[start:start + BATCH]})
     print(json.dumps(dict(url=url or f'https://docs.popo.netease.com/lingxi/{doc}', doc_id=doc, sheet_id=sheet_id, rows=len(rows), images=uploaded,
