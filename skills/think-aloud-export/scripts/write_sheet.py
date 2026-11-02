@@ -5,7 +5,7 @@
   title          新表标题
   sheet_name     sheet 名（同公共表的 sheet 名）
   header_rows    [[...], ...]  表头及其上方的行，按原样逐行写入
-  col_widths     {"列号": 像素}  可省略
+  col_widths     {"列号": 像素}  可省略；调不成的只记警告
   dropdowns      {"列号": ["选项", ...]}  有固定取值的列，给数据行加下拉
   rows           [{"cells": {"列号": "文字"}, "images": {"列号": "本地图片路径"},
                    "more_images": ["本地图片路径"], "more_col": 列号}]
@@ -20,6 +20,7 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -29,7 +30,16 @@ BATCH = 900  # sheet.batchSetCells takes at most 1000 cells per call.
 
 
 def table(doc, command, payload):
-    return popo('doc_execute_table', docId=doc, command={'type': command, 'payload': payload})
+    try:
+        try:
+            return popo('doc_execute_table', docId=doc, command={'type': command, 'payload': payload})
+        except SystemExit:
+            # The sheet service now and then answers 操作失败 to a valid command; the same call goes through on retry.
+            time.sleep(2)
+            return popo('doc_execute_table', docId=doc, command={'type': command, 'payload': payload})
+    except SystemExit as error:
+        # Say which step failed and which sheet it was, so the same spec can be written again with --doc.
+        raise SystemExit(f'{command} 失败（表 {doc}，可修好后用 --doc {doc} 续写）：{error}')
 
 
 def upload(doc, path):
@@ -58,6 +68,7 @@ def main():
     else:
         created = popo('doc_create_doc', docType=2, title=spec['title'])
         doc, url = created['docId'], created.get('url')
+        print(json.dumps(dict(created=doc, url=url), ensure_ascii=False), file=sys.stderr, flush=True)
     sheet = popo('doc_execute_table', docId=doc, command={'type': 'workbook.getFullData', 'payload': {}})['sheets'][0]
     sheet_id = sheet['sheetId']
     if spec.get('sheet_name') and sheet['title'] != spec['sheet_name']:
@@ -69,8 +80,12 @@ def main():
     columns = 1 + max([len(row) - 1 for row in header_rows] + [int(col) for row in rows for col in list(row.get('cells', {})) + list(row.get('images', {}))] + [0])
     if sheet.get('colCount', 0) < columns:
         table(doc, 'sheet.insertCols', {'sheetId': sheet_id, 'startColIndex': sheet.get('colCount', 0), 'count': columns - sheet.get('colCount', 0)})
+    warnings = []
     for col, width in (spec.get('col_widths') or {}).items():
-        table(doc, 'sheet.resizeCols', {'sheetId': sheet_id, 'col': int(col), 'width': int(width)})
+        try:  # Cosmetic: a width the sheet refuses must not stop the rows from being written.
+            table(doc, 'sheet.resizeCols', {'sheetId': sheet_id, 'col': int(col), 'width': int(width)})
+        except SystemExit as error:
+            warnings.append(f'第 {int(col) + 1} 列宽度没调成：{str(error)[-120:]}')
 
     cells = []
     for r, values in enumerate(header_rows):
@@ -115,7 +130,8 @@ def main():
         table(doc, 'sheet.resizeRows', {'sheetId': sheet_id, 'row': r, 'height': height})
     for start in range(0, len(image_cells), BATCH):
         table(doc, 'sheet.batchSetCells', {'sheetId': sheet_id, 'cells': image_cells[start:start + BATCH]})
-    print(json.dumps(dict(url=url, doc_id=doc, sheet_id=sheet_id, rows=len(rows), images=uploaded, failures=failures), ensure_ascii=False))
+    print(json.dumps(dict(url=url or f'https://docs.popo.netease.com/lingxi/{doc}', doc_id=doc, sheet_id=sheet_id, rows=len(rows), images=uploaded,
+                          failures=failures, warnings=warnings), ensure_ascii=False))
 
 
 if __name__ == '__main__':

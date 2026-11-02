@@ -36,26 +36,39 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 完成后简要告诉我整理出了什么、有哪些资料限制，以及值得我补充的信息。
 ```
 
+## 导出到团队表格（think-aloud-export）
+
+整理好的场次，在场次库详情点「复制导出指令」，粘上组内公共表的链接（可注明 sheet 名），发给 CodeMaker、Claude 或 Codex。agent 用 `think-aloud-export`：
+
+- 读公共表的格式：表头、每列已用过的取值、截图列（skill 自带 `scripts\read_table.py`，只读）；
+- 用 `agent_cli.py export-rows VAULT --session ID`（可重复，或 `--all`）取这场的判断，只留与表主题相关的问题和 bug，合并重复；
+- 按表里已有的用词填每一列，截所指时刻的画面；拿不准的格子留空，这些行排在新表最前面，并在汇报里逐条列出；
+- 用 `scripts\write_sheet.py` 在你自己的云空间新建一张同格式的表（截图列放不下的图追加到备注）。
+
+公共表只读；确认没问题后，由你自己复制到公共表。反馈人第一次使用时问一次，记在 skill 目录的 `profile.json`。需要 `popo-cli`（CodeMaker 和 popo-doc skill 自带）。
+
+**版本验收场次**：在场次库详情打开「版本验收」（可填验收对象，如玩法名）。这样的场次照常单场整理和导出，但不进洞察、议题对应、标签和 Bug 汇总；`scan` 和 `evidence` 会带上 `acceptance`、`acceptance_target`。已经挂过议题的场次后来再标验收，那些对应在 `issues-list` 里记为 `links_excluded`，取消验收后恢复。
+
 ## Skill 安装与更新
 
-**在软件里安装（0.10.0 起）**：设置 → 通用 → 记录方法（首次设置的第一步也有）→「安装分析 skill」。两份 skill 随软件包放在 `app\docs\skills\`，点一下就复制到已经存在的 `%USERPROFILE%\.claude\skills` 和 `%USERPROFILE%\.codex\skills`（没装的 agent 不碰）。已有同名副本且内容不同时，先整份备份到 `app\state\skill-backups\<时间>\`（技能目录之外，不会被当成第二份 skill 加载）再写入；内容相同就跳过；你自己加进 skill 文件夹的文件保留不动，并在结果里列出。软件更新后再点一次，就把 skill 同步到新版。
+**在软件里安装（0.10.0 起）**：设置 → 通用 → 记录方法（首次设置的第一步也有）→「安装分析 skill」。三份 skill（单场整理 `think-aloud-judgments`、跨场次分析 `think-aloud-insight`、导出到团队表格 `think-aloud-export`）随软件包放在 `app\docs\skills\`，点一下就复制到已经存在的 `%USERPROFILE%\.codemaker\skills`（CodeMaker）、`%USERPROFILE%\.claude\skills` 和 `%USERPROFILE%\.codex\skills`（没装的 agent 不碰）。已有同名副本且内容不同时，先整份备份到 `app\state\skill-backups\<时间>\`（技能目录之外，不会被当成第二份 skill 加载）再写入；内容相同就跳过；你自己加进 skill 文件夹的文件保留不动，并在结果里列出（导出 skill 记下的反馈人 `profile.json` 就是这样保留的）。软件更新后再点一次，就把 skill 同步到新版。
 
 **手动安装（源码检出或旧版软件）**：
 
 1. 在 [Releases](https://github.com/Elkhiffa/think-aloud-recorder/releases/latest) 下载与所装应用同一版本的 **Source code (zip)**，完整解压。0.10.0 以前的应用安装包里没有 skill。
-2. 把解压出的 `skills\think-aloud-judgments` 和 `skills\think-aloud-insight` 两个文件夹整个复制到 agent 的技能目录：Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`。两个都用就两处都复制。也可以在 PowerShell 里运行（把第一行换成实际解压位置）：
+2. 把解压出的 `skills\think-aloud-judgments`、`skills\think-aloud-insight` 和 `skills\think-aloud-export` 三个文件夹整个复制到 agent 的技能目录：CodeMaker 是 `%USERPROFILE%\.codemaker\skills`，Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`。用几个就复制几处。也可以在 PowerShell 里运行（把第一行换成实际解压位置）：
 
    ```powershell
    $src = "D:\Downloads\think-aloud-recorder-0.10.0\skills"
-   foreach ($dest in "$env:USERPROFILE\.claude\skills", "$env:USERPROFILE\.codex\skills") {
+   foreach ($dest in "$env:USERPROFILE\.codemaker\skills", "$env:USERPROFILE\.claude\skills", "$env:USERPROFILE\.codex\skills") {
      New-Item -ItemType Directory -Force $dest | Out-Null
-     Copy-Item -Recurse "$src\think-aloud-judgments", "$src\think-aloud-insight" $dest
+     Copy-Item -Recurse "$src\think-aloud-judgments", "$src\think-aloud-insight", "$src\think-aloud-export" $dest
    }
    ```
 
 3. 新开一个 agent 会话，skill 就可以用了。场次转写完成后，在主窗口或场次库点「复制整理指令」，粘贴给 agent。
 
-以前装过旧版 `think-aloud-preprocess` 的，可以把它从技能目录移走；它已由这两份 skill 取代。**以后更新**时目录里已有同名文件夹，按下面的步骤先备份、再比较、再替换，不要直接覆盖。
+以前装过旧版 `think-aloud-preprocess` 的，可以把它从技能目录移走；它已由单场整理和跨场次分析两份 skill 取代。**以后更新**时目录里已有同名文件夹，按下面的步骤先备份、再比较、再替换，不要直接覆盖。
 
 应用、仓库中的方法文档和 agent 已安装的 Skill 是三个独立对象。安装包升级成功，不表示 Skill 副本已更新；仓库文档可能在应用版本不变时继续澄清方法。不要仅用相同的软件版本号判断它们是否一致。
 

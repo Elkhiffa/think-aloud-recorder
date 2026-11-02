@@ -96,9 +96,9 @@ OBS 确认录像开始时会响一声短促柔和的提示音（约 0.2 秒）�
 
 记录器不附带 AI agent。录像、转写和文件整理完成后，场次最后生成 `agent-ready.json`，供外部会话读取。没有预处理结果时，录制、转写、回看和导出照常可用。
 
-分析由外部 agent（Codex 或 Claude）按仓库里的两份 skill 完成：单场整理 [`skills/think-aloud-judgments`](skills/think-aloud-judgments) 把一场录制整理成可追溯的判断实例；跨场次分析 [`skills/think-aloud-insight`](skills/think-aloud-insight) 把实例归到议题树，并按你确认的分析简报写洞察报告。
+分析由外部 agent（CodeMaker、Codex 或 Claude）按仓库里的三份 skill 完成：单场整理 [`skills/think-aloud-judgments`](skills/think-aloud-judgments) 把一场录制整理成可追溯的判断实例；跨场次分析 [`skills/think-aloud-insight`](skills/think-aloud-insight) 把实例归到议题树，并按你确认的分析简报写洞察报告；导出 [`skills/think-aloud-export`](skills/think-aloud-export) 把一场（或几场）的 bug 和体验问题按组内公共表的格式写进一张新建的 POPO 表格，带截图，你确认后自己复制到公共表（见 [导出到团队表格](docs/agent-integration.md#导出到团队表格think-aloud-export)）。跑测的版本验收场次，在场次库详情打开「版本验收」：照常单场整理和导出，不进洞察。
 
-**第一次用之前先安装**：首次设置的“准备分析”一步，一次点击就下载识别组件并装好两份 skill，还可以直接创建燕云十六声项目并装好识别规则（默认勾选）。已经设置过的电脑，在 设置 → 通用 → 记录方法 点「安装分析 skill」，就装进这台电脑已有的 agent 技能目录（Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`），旧副本先备份。软件更新后再点一次即可同步。手动安装见 [Skill 安装与更新](docs/agent-integration.md#skill-安装与更新)。
+**第一次用之前先安装**：首次设置的“准备分析”一步，一次点击就下载识别组件并装好三份 skill，还可以直接创建燕云十六声项目并装好识别规则（默认勾选）。已经设置过的电脑，在 设置 → 通用 → 记录方法 点「安装分析 skill」，就装进这台电脑已有的 agent 技能目录（CodeMaker 是 `%USERPROFILE%\.codemaker\skills`，Claude Code 是 `%USERPROFILE%\.claude\skills`，Codex 是 `%USERPROFILE%\.codex\skills`），旧副本先备份。软件更新后再点一次即可同步。手动安装见 [Skill 安装与更新](docs/agent-integration.md#skill-安装与更新)。
 
 情景轨道和界面路径识别需要本地文字识别：在 设置 → 通用 下载一次「识别组件」（约 65 MB，固定版本，来自 files.pythonhosted.org），更新软件时保留。
 
