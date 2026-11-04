@@ -148,6 +148,16 @@ class PackagingTests(unittest.TestCase):
         self.assertEqual([name for name in names if not old.managed_path(name)], [])
         self.assertEqual([name for name in names if not update_installer.managed_path(name)], [])
 
+    def test_reporter_profile_in_a_skill_folder_never_ships(self):
+        # 触发路径：开发者让 agent 在源码检出里运行导出技能 → 技能把填报人写进 skills/think-aloud-export/profile.json → 之后的构建不能把开发者姓名发给同事。
+        self.write('skills/think-aloud-export/profile.json', '{"reporter": "开发者本人"}'.encode())
+        self.assertNotIn('docs/skills/think-aloud-export/profile.json', collect_files(self.root))
+        result = self.make()
+        with zipfile.ZipFile(self.base / 'out' / result[1]['filename']) as archive:
+            names = archive.namelist()
+        self.assertNotIn('app/docs/skills/think-aloud-export/profile.json', names)
+        self.assertIn('app/docs/skills/think-aloud-export/SKILL.md', names)
+
     def test_one_changed_files_package_serves_every_listed_base(self):
         # 触发路径：0.8.1 和 0.9.0 的用户都点更新 → 更新器只找一个增量包 → 它要带上相对任一基础版本变了的文件，两边才都不必下载完整包。
         result = self.make()

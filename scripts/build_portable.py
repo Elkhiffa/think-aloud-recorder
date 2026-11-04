@@ -144,6 +144,10 @@ def collect_files(root):
         for file in sorted(base.rglob('*')):
             if excluded(file.relative_to(root)) or not file.is_file():
                 continue
+            # A skill run from this checkout writes its user's settings here (git-ignored skills/*/profile.json,
+            # e.g. the export reporter's name); they must never reach colleagues.
+            if source.startswith('skills/') and file.parent == base and file.name == 'profile.json':
+                continue
             if file.is_symlink() or not file.resolve().is_relative_to(installation_root(root)):
                 raise ValueError('Symlink/path escape in package input: ' + file.relative_to(root).as_posix())
             entries[target + '/' + file.relative_to(base).as_posix()] = file
