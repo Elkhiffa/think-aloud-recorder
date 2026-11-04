@@ -21,7 +21,7 @@ description: 跨场次分析，分两部分。一是维护证据库：把各场�
 ## 输入
 
 - `issues-list VAULT`：议题表，最多三层：洞察（顶层）→ 议题 → 子议题。`parent` 指向上一级，中间的议题层按需设置。`TA-` 由用户定义；`N-` 是候选；`BUG` 是固定洞察。编号只是工作代号，挪动层级时不变，所以编号前缀不一定是现在的上级。
-- `instances-query VAULT [--issue ID] [--screen ID] [--kind K] [--session S] [--bug explicit|suspected|any]`：已完成场次的全部实例。查上级会带出它下面所有层级的证据；每条的 `issue_links` 写明议题、理由和角色（`support` / `counter`）。
+- `instances-query VAULT [--issue ID] [--screen ID] [--kind K] [--session S] [--bug explicit|suspected|any]`：已完成场次的全部实例（标为「版本验收」的场次不在其中：它们只做单场整理和导出，不参与跨场次分析）。查上级会带出它下面所有层级的证据；每条的 `issue_links` 写明议题、理由和角色（`support` / `counter`）。
 - 界面目录：`VAULT/game-assets/<游戏>/catalog.json`。实例的 `screen` 是目录编号或别名时，`catalog_screen` 给出正式编号；`screen_proposed` 为真且 `catalog_screen` 为空的，是尚未确认的提议界面。
 - `bug-hits VAULT`：记录者原话里提到 bug 的每一处。`state` 为 `linked`（已挂 BUG）、`instance`（成了实例但没挂）、`raw`（没成为实例）。
 - `feedback-list VAULT --open`：用户在洞察窗口里对议题或证据标记“有问题”时留下的反馈，每条写明指向哪个议题或哪条证据、该怎么调。
@@ -133,7 +133,7 @@ description: 跨场次分析，分两部分。一是维护证据库：把各场�
     - `quotes_unverified`：引号原话既对不上转写原文，也对不上用户确认过的修正，又没在附录“转写修正”里登记；
     - `anchors_unlinked`：`#` 后写的子议题上并没有挂这条证据。
 
-    `quotes_checked` 是实际核对了的原话条数，可以对照报告里的引号数，看有没有漏核。最后用 `issues-list` 核对写回的层级、每个子议题的对应数与报告附录的成员清单一致，并且 `links_stale` 为 0。
+    `quotes_checked` 是实际核对了的原话条数，可以对照报告里的引号数，看有没有漏核。最后用 `issues-list` 核对写回的层级、每个子议题的对应数与报告附录的成员清单一致，并且 `links_stale` 为 0。`links_excluded` 是挂在后来标成版本验收的场次上的对应，暂时不算，也不要解除（取消验收后会恢复）。
 14. **过程记录**：写清取证范围、回看过的画面和操作区段及各自为了核实什么、合并与拆分的判断、写回议题树的每一步（挪了什么、新建了什么、备份在哪）、拿不准的地方、给用户的待决问题。
 
 **按需：双盲互评与合并。** 重要的报告，比如要发给组里的，用户可以要求两个 agent 用同一份简报各自盲写一份，再交叉评审、合并，做法见 [references/双盲互评与合并.md](references/双盲互评与合并.md)。默认只写一份。

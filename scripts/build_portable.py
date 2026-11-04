@@ -34,7 +34,7 @@ ROOT_FILES = (
     'visual_nodes.py', 'visual_change.py', 'visual_evidence.py', 'visual_compare.py', 'player.html', 'requirements-lock.txt',
     'issue_registry.py', 'game_catalog.py', 'context_track.py', 'layout_common.py', 'layout_yanyun.py',
     'insight_report.py', 'insight_runtime.py',
-    'evidence_tags.py', 'user_feedback.py', 'window_chrome.py', 'desk_runtime.py', 'transcript_corrections.py',
+    'evidence_tags.py', 'export_rows.py', 'user_feedback.py', 'window_chrome.py', 'desk_runtime.py', 'transcript_corrections.py',
     'input_capture.py', 'input_capture_windows.py', 'input_capture_devices.py', 'session_metadata.py',
     'updater.py', 'update_installer.py',
     'vocabulary_agent.py', 'vocabulary_ipc.py', 'docs/vocabulary-agent.md',
@@ -50,6 +50,7 @@ OPTIONAL_ROOT_FILES = ('README.md',)
 # the app installs the skills from here into the user's agent (desktop_service.install_skills).
 PACKAGED_TREES = {'skills/think-aloud-judgments': 'docs/skills/think-aloud-judgments',
                   'skills/think-aloud-insight': 'docs/skills/think-aloud-insight',
+                  'skills/think-aloud-export': 'docs/skills/think-aloud-export',
                   'docs/layouts': 'docs/layouts'}
 BLOCKED_PARTS = {'__pycache__', '.git', '.cache', 'cache', 'caches', 'logs', 'log',
                  'crashes', 'crashdumps', 'pip-cache', 'wheelhouse', '.pytest_cache',

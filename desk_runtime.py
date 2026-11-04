@@ -18,7 +18,7 @@ INSTANCE_FIELDS = ('id', 'event_id', 'kind', 'said', 'refers_to', 'compare_to', 
 DESK_METHODS = ('ready', 'get_overview', 'read_report', 'add_feedback', 'set_cover', 'edit_feedback', 'remove_feedback',
                 'thumbnail', 'open_review', 'desk_state', 'session_detail', 'review_session', 'rename_session',
                 'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task', 'show_in_insight',
-                'get_layout', 'save_layout', 'take_focus')
+                'get_layout', 'save_layout', 'take_focus', 'set_acceptance')
 LAYOUT_KEYS = ('sessions', 'insight')
 _LAYOUT_LOCK = threading.Lock()
 
@@ -122,7 +122,9 @@ class DeskAPI:
                 if 'instances' in result:
                     view['instances'] = [{key: row.get(key) for key in INSTANCE_FIELDS if key in row}
                                          for row in result['instances']]
-            issues = self._instance_issues(result, (status.get('editing') or {}).get('result_sha256')) if isinstance(result, dict) else {}
+            # Version acceptance stays out of insight, so its judgments carry no 洞察 links.
+            issues = (self._instance_issues(result, (status.get('editing') or {}).get('result_sha256'))
+                      if isinstance(result, dict) and meta.get('acceptance') is not True else {})
             return _ok(dict(id=ident, state=status.get('state'), label=status.get('label', ''), kinds=status.get('kinds') or {},
                             result=view, activities=status.get('activities') or [], bugs=status.get('bugs') or {},
                             instance_issues=issues))
@@ -193,6 +195,9 @@ class DeskAPI:
 
     def rename_session(self, ident, name):
         return self._service.rename_session(ident, name)
+
+    def set_acceptance(self, ident, on, target=''):
+        return self._service.set_acceptance(ident, on, target)
 
     def process_session(self, ident):
         return self._service.process_session(ident)

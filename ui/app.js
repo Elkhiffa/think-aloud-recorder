@@ -196,7 +196,7 @@ function pipeline(s,job,kind,p){
   [transcribed?'done':kind==='failed'?'fail':saved?'now':'',transcribed?'已转写':kind==='failed'?'转写失败':job?(job.state==='queued'?'等待转写':'转写中'):'待转写'],
   [!transcribed?'':ps==='processing'?'now':failedPre?'fail':'now',!transcribed?'待整理':ps==='processing'?'整理中':failedPre?(p.label||'整理未完成'):'待整理']];
  const list='<ul class="steps">'+steps.map(([c,t])=>`<li class="${c}">${escapeHTML(t)}</li>`).join('')+'</ul>';
- const handoff=transcribed&&ps!=='processing'?`<div class="handoff"><button class="btn solid" data-copy-handoff="${escapeHTML(s.id)}">复制整理指令</button><p>粘贴给 Codex 或 Claude。整理完成后，问题数和原话会出现在这里。</p></div>`:'';
+ const handoff=transcribed&&ps!=='processing'?`<div class="handoff"><button class="btn solid" data-copy-handoff="${escapeHTML(s.id)}">复制整理指令</button><p>粘贴给 CodeMaker、Codex 或 Claude。整理完成后，问题数和原话会出现在这里。</p></div>`:'';
  const retry=kind==='failed'||kind==='pending'&&!job?`<div class="handoff"><button class="btn" data-last-process="${escapeHTML(s.id)}">${kind==='failed'?'重试转写':'开始转写'}</button>${s.error?`<p>${escapeHTML(s.error)}</p>`:''}</div>`:'';
  return list+handoff+retry;
 }
@@ -224,7 +224,7 @@ function renderLast(){
  $$('#lastSession [data-flex]').forEach(el=>{el.style.flex=el.dataset.flex;});
 }
 function renderInsight(){const insight=store.snapshot?.insight||{},latest=insight.latest;setText('insightCount',insight.insights??'—');let brief=' · 还没有报告';if(latest){const d=new Date(latest.modified*1000);brief=' · 最新报告 '+(Number.isNaN(d.getTime())?latest.name:shortDate(d));}setText('insightBrief',brief);}
-async function copyHandoff(s){if(!s)return;const text=['请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。','场次文件夹：'+s.path,'资料库：'+store.saved.vault,...(store.snapshot?.app_dir?['软件目录（agent_cli.py 和 runtime 在这里）：'+store.snapshot.app_dir]:[]),'只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。'].join('\n');try{await navigator.clipboard.writeText(text);}catch(_){const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();}notify('整理指令已复制，粘贴给 Codex 或 Claude 即可。');}
+async function copyHandoff(s){if(!s)return;const text=['请用 Think Aloud 的单场整理方法（think-aloud-judgments），整理这一场记录，并按单场整理交接文件验收。','场次文件夹：'+s.path,'资料库：'+store.saved.vault,...(store.snapshot?.app_dir?['软件目录（agent_cli.py 和 runtime 在这里）：'+store.snapshot.app_dir]:[]),'只整理这一场；不改议题表、对应表、界面目录、标签和反馈文件。完成后告诉我实例数、提议的新界面和拿不准的地方。'].join('\n');try{await navigator.clipboard.writeText(text);}catch(_){const area=document.createElement('textarea');area.value=text;document.body.append(area);area.select();document.execCommand('copy');area.remove();}notify('整理指令已复制，粘贴给 CodeMaker、Codex 或 Claude 即可。');}
 $('#lastSession').addEventListener('click',event=>{const review=event.target.closest('[data-last-review]');if(review){action('open_review',[review.dataset.lastReview]);return;}const copy=event.target.closest('[data-copy-handoff]');if(copy){copyHandoff(findSession(copy.dataset.copyHandoff));return;}const process=event.target.closest('[data-last-process]');if(process){const s=findSession(process.dataset.lastProcess);if(s)processSession(s);}});
 function openDesk(tab){const api=window.pywebview?.api;return api?.open_desk?action('open_desk',[tab]):action('open_insight');}
 $('#openLibrary').onclick=event=>{event.preventDefault();openDesk('sessions');};

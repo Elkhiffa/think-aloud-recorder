@@ -1,7 +1,7 @@
-"""Install the two analysis skills that ship with the app into the user's own agents.
+"""Install the analysis skills that ship with the app into the user's own agents.
 
 Follows docs/agent-integration.md "Skill 安装与更新": only agents the user actually has (%USERPROFILE%\\.claude,
-%USERPROFILE%\\.codex) are touched; an installed copy that differs is first backed up outside the skill folders
+%USERPROFILE%\\.codex, %USERPROFILE%\\.codemaker) are touched; an installed copy that differs is first backed up outside the skill folders
 (app/state/skill-backups/, so the backup is never loaded as a second skill); only files that ship are written, and
 files the user added to a skill folder are left in place and listed.
 """
@@ -10,8 +10,10 @@ from pathlib import Path
 import shutil
 import uuid
 
-SKILLS = ('think-aloud-judgments', 'think-aloud-insight')
-AGENTS = (('Claude Code', 'claude', '.claude'), ('Codex', 'codex', '.codex'))
+SKILLS = ('think-aloud-judgments', 'think-aloud-insight', 'think-aloud-export')
+# CodeMaker (the company's agent, built on OpenCode) also reads ~/.claude/skills, but colleagues who only use
+# CodeMaker have no .claude folder; its own skills folder is ~/.codemaker/skills.
+AGENTS = (('Claude Code', 'claude', '.claude'), ('Codex', 'codex', '.codex'), ('CodeMaker', 'codemaker', '.codemaker'))
 
 
 def source_root(root):
@@ -44,7 +46,7 @@ def install(root, home, stamp):
         sources[name] = files
     agents = [(label, key, home / folder) for label, key, folder in AGENTS if (home / folder).is_dir()]
     if not agents:
-        raise ValueError('没有找到 Claude Code 或 Codex（用户目录下的 .claude 或 .codex 文件夹）。请先安装并打开一次 agent，再回来安装。')
+        raise ValueError('没有找到 CodeMaker、Claude Code 或 Codex（用户目录下的 .codemaker、.claude 或 .codex 文件夹）。请先安装并打开一次 agent，再回来安装。')
     rows = []
     for label, key, agent in agents:
         for name, files in sources.items():

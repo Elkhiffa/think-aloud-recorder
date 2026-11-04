@@ -1,5 +1,5 @@
 """Machine-readable local bridge. No model, watcher, upload or credential use."""
-from session_metadata import session_title
+from session_metadata import acceptance, session_title
 import argparse
 import json
 import os
@@ -45,7 +45,7 @@ def scan(database, publish=False, include_test=False):
             state = protocol.preprocessing_status(folder)
             sessions.append(dict(session_id=ident, folder=str(folder), revision=revision,
                                  title=session_title(meta),
-                                 preprocessing=state, test=bool(meta.get('test'))))
+                                 preprocessing=state, test=bool(meta.get('test')), **acceptance(meta)))
         except (OSError, ValueError, TypeError) as error:
             skipped.append(dict(session_id=ident, folder=str(folder), reason=str(error)))
     return dict(version=protocol.VERSION, sessions=sessions, skipped=skipped)
@@ -223,6 +223,10 @@ def main(argv=None):
     instances_query.add_argument('--kind', choices=('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion', 'self_correction', 'observation'))
     instances_query.add_argument('--session')
     instances_query.add_argument('--bug', choices=('explicit', 'suspected', 'any'), help='只看单场标了 bug 的实例：明说、疑似或两者')
+    export = commands.add_parser('export-rows', help='把场次的判断整理成可直接填表的行（导出到团队表格用）；只读，含版本验收场次')
+    export.add_argument('vault')
+    export.add_argument('--session', action='append', help='场次编号，可重复')
+    export.add_argument('--all', action='store_true', help='全部已整理的场次')
     insight_validate = commands.add_parser('insight-validate', help='核对资料库洞察报告里的实例和议题引用')
     insight_validate.add_argument('vault')
     insight_validate.add_argument('report', help='洞察/ 目录下的报告文件名')
@@ -442,6 +446,9 @@ def main(argv=None):
         elif name == 'instances-query':
             from issue_registry import query_instances
             value = query_instances(args.vault, args.issue, args.screen, args.element, args.kind, args.session, args.bug)
+        elif name == 'export-rows':
+            from export_rows import export_rows
+            value = export_rows(args.vault, args.session, args.all)
         elif name == 'insight-validate':
             from insight_report import validate_report
             value = validate_report(args.vault, args.report)

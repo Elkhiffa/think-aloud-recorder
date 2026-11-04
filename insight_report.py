@@ -179,6 +179,8 @@ def bug_hits(vault, sessions=None):
         if not (folder / '录像.whisper.json').is_file():
             continue
         meta = json.loads(path.read_text(encoding='utf-8-sig'))
+        if meta.get('acceptance') is True:
+            continue  # Version acceptance stays out of cross-session analysis (issue_registry._complete_results).
         segments = protocol._transcript_rows(folder)
         # 路径 1：多人场次只认记录者本人的原话；没有说话人标注时整段都是记录者。
         recorder = speaker_payload(folder, meta, segments).get('selected_id')

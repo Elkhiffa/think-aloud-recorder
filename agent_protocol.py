@@ -4,7 +4,7 @@ The ready manifest is published last; a result is one atomic commit. A leased
 claim fences late workers. Source revisions deliberately exclude session names,
 job state and user notes, so presenting a result cannot enqueue itself again.
 """
-from session_metadata import session_title
+from session_metadata import acceptance as session_acceptance, session_title
 from collections import OrderedDict
 from copy import deepcopy
 import hashlib
@@ -399,7 +399,7 @@ def evidence(folder, start=None, end=None):
     speakers = speaker_payload(folder, meta, segments)
     value = dict(version=VERSION, session_id=meta['id'], revision=revision,
                  title=session_title(meta),
-                 test=bool(meta.get('test')), duration_seconds=duration,
+                 test=bool(meta.get('test')), **session_acceptance(meta), duration_seconds=duration,
                  timebase='video_seconds', speakers=speakers,
                  paths={name: str(_path(folder, name)) for name in material['sources'] if material['sources'][name]},
                  transcript=segments, inputs={k: inputs[k] for k in

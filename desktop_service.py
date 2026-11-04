@@ -615,7 +615,7 @@ class DesktopService:
                              device_refresh=deepcopy(self._device_refresh),
                              device_inventory=deepcopy(self._device_inventory))
             from agent_protocol import list_status
-            from session_metadata import session_presentation
+            from session_metadata import acceptance, session_presentation
             entries = self._session_entries(vault, first_default)
             visible = self._visible_session_paths({ident: path for ident, (path, _) in entries.items()}, job_paths)
             current_vault = Path(vault).resolve()
@@ -641,7 +641,7 @@ class DesktopService:
                                          segments=meta.get('segments', 0),
                                          warning=self._safe_text(meta.get('warning')),
                                          error=self._safe_text(meta.get('error')),
-                                         path=str(path), test=bool(meta.get('test')),
+                                         path=str(path), test=bool(meta.get('test')), **acceptance(meta),
                                          in_current_vault=path.parent.parent == current_vault,
                                          background_job=jobs.get(str(path)),
                                          background_result=history.get(str(path))))
@@ -2105,6 +2105,20 @@ class DesktopService:
                     raise RuntimeError('请先结束本场次录制，再修改场次名称。')
             from session_metadata import rename_session
             return ok(rename_session(session.path, name))
+        except Exception as error:
+            return self._error(error)
+
+    def set_acceptance(self, id, on, target=''):
+        """Path 1: the 场次库 detail marks a session as version acceptance; cross-session analysis then leaves it out."""
+        try:
+            with self._lock:
+                if self._closed.is_set() or self._exit_pending:
+                    raise RuntimeError('记录器正在关闭。')
+                session = self._session(id)
+                if self._active and self._active.path.resolve() == session.path.resolve():
+                    raise RuntimeError('请先结束本场次录制，再标记版本验收。')
+            from session_metadata import set_acceptance
+            return ok(set_acceptance(session.path, on, target))
         except Exception as error:
             return self._error(error)
 

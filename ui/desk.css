@@ -71,6 +71,7 @@ button:disabled{cursor:default;opacity:.5}
 .pop{position:relative}
 .pop-menu{position:absolute;top:calc(100% + 4px);left:0;z-index:10;display:grid;min-width:160px;padding:var(--s1);border-radius:var(--r);background:var(--sheet);box-shadow:0 8px 24px rgb(60 40 20 / .16)}
 .pop-menu.right{left:auto;right:0}
+.pop-menu.right.flip{left:0;right:auto}
 .pop-menu label,.pop-menu button{display:flex;align-items:center;gap:var(--s2);height:32px;padding:0 var(--s3);border:0;border-radius:var(--r-sm);background:none;white-space:nowrap;text-align:left}
 .pop-menu label:hover,.pop-menu button:hover{background:var(--fill)}
 .pop-menu input{accent-color:var(--ink)}
@@ -87,6 +88,8 @@ button:disabled{cursor:default;opacity:.5}
 .srow:hover{background:var(--paper)}
 .srow.sel{background:var(--fill)}
 .srow .day,.srow .c-start,.srow .dur{font-size:var(--t1);color:var(--muted)}
+.srow .nmc{display:flex;align-items:baseline;gap:var(--s2);min-width:0}
+.srow .acc{flex:none;padding:0 6px;border-radius:var(--r-sm);background:var(--fill);font-size:var(--t1);font-weight:400;color:var(--muted)}
 .srow .nm{min-width:0;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .srow .nm.auto{font-weight:400;color:var(--muted)}
 .srow .pc{display:grid;grid-template-columns:32px 1fr;column-gap:var(--s2);align-items:center}
@@ -111,6 +114,11 @@ button:disabled{cursor:default;opacity:.5}
 .edit svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linejoin:round}
 #renameInput{flex:1;min-width:0;height:36px;border:0;border-radius:var(--r);background:var(--fill);color:var(--ink);padding:0 var(--s2);font:inherit;outline:2px solid var(--ink)}
 .d-acts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
+.d-accept{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s3);margin-top:var(--s1);font-size:var(--t1);color:var(--muted)}
+.d-accept label{display:inline-flex;align-items:center;gap:var(--s1);cursor:pointer}
+.d-accept input[type=checkbox]{margin:0;accent-color:var(--ink)}
+#acceptTarget{flex:1;min-width:160px;max-width:280px;height:28px;padding:0 var(--s2);border:0;border-radius:var(--r-sm);background:var(--fill);color:var(--ink);font:inherit}
+#acceptTarget:focus{outline:2px solid var(--ink)}
 .d-note{margin-top:var(--s2);font-size:var(--t1);color:var(--muted)}
 .d-note.warn{color:var(--warn)}
 

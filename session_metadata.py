@@ -8,6 +8,7 @@ import msvcrt
 _LOCKS = {}
 _LOCKS_GUARD = threading.Lock()
 MAX_SESSION_NAME = 4096
+MAX_ACCEPTANCE_TARGET = 120
 
 
 @contextmanager
@@ -84,6 +85,23 @@ def session_presentation(meta):
 
 def session_title(meta):
     return session_presentation(meta)['title']
+
+
+def acceptance(meta):
+    """Version-acceptance sessions get single-session analysis and export only, never cross-session analysis."""
+    on = meta.get('acceptance') is True
+    target = meta.get('acceptance_target')
+    return dict(acceptance=on, acceptance_target=target.strip() if on and isinstance(target, str) else '')
+
+
+def set_acceptance(folder, on, target=''):
+    if type(on) is not bool:
+        raise ValueError('版本验收开关无效。')
+    if not isinstance(target, str) or len(target) > MAX_ACCEPTANCE_TARGET or any(ord(c) < 32 or ord(c) == 127 for c in target):
+        raise ValueError(f'验收对象最多 {MAX_ACCEPTANCE_TARGET} 字，不能包含换行或控制字符。')
+    # The target is kept when acceptance is switched off, so switching back restores it.
+    meta = update_metadata(folder, {'acceptance': on, 'acceptance_target': target.strip()})
+    return acceptance(meta)
 
 
 def rename_session(folder, name):

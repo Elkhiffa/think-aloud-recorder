@@ -1359,6 +1359,7 @@ async function deskPage(context, origin, desk = deskState(), viewport = { width:
       if (method === 'save_layout') { f.layout[args[0]] = args[1]; return ok(null); }
       if (method === 'session_detail') return f.details[args[0]] ? ok(copy(f.details[args[0]])) : { ok: false, error: '合成测试：没有这一场的整理结果。' };
       if (method === 'rename_session') { f.desk.sessions.find(row => row.id === args[0]).session_name = args[1]; return ok({}); }
+      if (method === 'set_acceptance') { const row = f.desk.sessions.find(item => item.id === args[0]); row.acceptance = args[1]; row.acceptance_target = args[1] ? args[2] : ''; return ok({ acceptance: args[1], acceptance_target: row.acceptance_target }); }
       if (['review_session', 'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task', 'open_review', 'show_in_insight', 'win_minimize', 'win_toggle_maximize', 'win_close'].includes(method)) return ok({});
       throw new Error('Synthetic desk harness did not authorize native action: ' + String(method));
     } }) };
@@ -1381,7 +1382,7 @@ async function deskChecks(context, origin) {
     const d4 = page.locator('#sessionScroll [data-session="d4"]');
     assert.equal(await d4.locator('.nm').innerText(), '萌宠争锋、城镇养成');
     assert.equal(await d4.locator('.nm').evaluate(n => n.classList.contains('auto')), true, 'an unnamed session shows its activities in quiet type');
-    assert.deepEqual(await d4.locator('span').allInnerTexts(), ['08/28', '19:40', '萌宠争锋、城镇养成', '1:10:10', '7', '']);
+    assert.deepEqual(await d4.locator('span').allInnerTexts(), ['08/28', '19:40', '萌宠争锋、城镇养成', '萌宠争锋、城镇养成', '1:10:10', '7', '']);
     assert.equal(await d4.locator('.pc b').innerText(), '7', 'problem count covers the four problem kinds only');
     assert.deepEqual(await d4.locator('.fp i').evaluateAll(n => n.map(i => [i.className, i.style.flex.split(' ')[0]])), [['k-confusion', '4'], ['k-cost', '3']]);
     assert.equal(await page.locator('#sessionScroll [data-session="d1"] .pc b').innerText(), '3');
@@ -1523,7 +1524,7 @@ async function deskChecks(context, origin) {
     await page.locator('#sessionScroll [data-session="d1"]').click(); await page.locator('#sessionDetail .fd-group').first().waitFor();
     await page.evaluate(() => { window.__deskFixture.desk.busy = true; window.__deskFixture.desk.recording = true; });
     await page.waitForFunction(() => document.querySelector('#sessionDetail [data-act="process"]')?.disabled === true, null, { timeout: 8000 });
-    assert.deepEqual(await deskEnabled(page), { review: true, rename: true, copy: true, more: true, folder: true, process: false, export: false, raw: true, recover: false });
+    assert.deepEqual(await deskEnabled(page), { review: true, rename: true, 'copy-export': true, copy: true, more: true, folder: true, process: false, export: false, raw: true, recover: false });
     await page.evaluate(() => { window.__deskFixture.desk.busy = false; window.__deskFixture.desk.recording = false; });
     await page.waitForFunction(() => document.querySelector('#sessionDetail [data-act="process"]')?.disabled === false, null, { timeout: 8000 });
   });
@@ -1534,6 +1535,26 @@ async function deskChecks(context, origin) {
     await page.locator('#sessionDetail [data-item="i2"] .fd-insight-link').click();
     assert.deepEqual((await deskCalls(page, 'show_in_insight')).at(-1), ['d1', 'i2', 'TA-01']);
     assert.equal((await deskCalls(page, 'open_review')).length, reviews, 'the link does not also open review');
+  });
+  await check('a session is marked as version acceptance with an optional target; the list marks it', async () => {
+    // 触发路径：用户在场次库详情打开「版本验收」，填验收对象「摇摇马」，回车保存；列表标题后出现「验收」。
+    assert.equal(await page.locator('#acceptTarget').count(), 0, 'no target field until it is switched on');
+    await page.locator('#sessionDetail [data-accept]').check();
+    await page.locator('#acceptTarget').waitFor();
+    assert.deepEqual((await deskCalls(page, 'set_acceptance')).at(-1), ['d1', true, '']);
+    await page.locator('#acceptTarget').fill('摇摇马'); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => window.__deskFixture.calls.filter(call => call.method === 'set_acceptance').length === 2);
+    assert.deepEqual((await deskCalls(page, 'set_acceptance')).at(-1), ['d1', true, '摇摇马']);
+    await page.locator('#sessionScroll [data-session="d1"] .acc').waitFor();
+    assert.equal(await page.locator('#acceptTarget').inputValue(), '摇摇马');
+    await screen(page, 'desk-acceptance-1240x900');
+    await page.locator('#sessionDetail [data-accept]').uncheck();
+    await page.waitForFunction(() => !document.querySelector('#sessionScroll [data-session="d1"] .acc'));
+    assert.deepEqual((await deskCalls(page, 'set_acceptance')).at(-1), ['d1', false, '摇摇马'], 'the target is kept for switching back');
+    await page.locator('#sessionDetail [data-act="copy-export"]').click();
+    await page.waitForFunction(() => document.querySelector('#deskToast').textContent.includes('导出指令已复制'));
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    assert.match(copied, /think-aloud-export/); assert.match(copied, /公共表链接：/); assert.match(copied, /场次编号：d1/);
   });
   await check('the column split drags between pixel minimums, follows the arrow keys and is saved', async () => {
     const handle = page.locator('#deskSplit'), widths = () => page.evaluate(() => [document.querySelector('.list').offsetWidth, document.querySelector('#sessionDetail').offsetWidth]);

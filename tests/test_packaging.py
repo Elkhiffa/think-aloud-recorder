@@ -33,7 +33,8 @@ class PackagingTests(unittest.TestCase):
                      'tools/input/provenance.json', 'licenses/SDL2-zlib.txt'):
             self.write(path, b'fixture dependency\n')
         for path in ('skills/think-aloud-judgments/SKILL.md', 'skills/think-aloud-judgments/references/interface.md',
-                     'skills/think-aloud-insight/SKILL.md', 'docs/layouts/燕云十六声.json'):
+                     'skills/think-aloud-insight/SKILL.md', 'skills/think-aloud-export/SKILL.md',
+                     'skills/think-aloud-export/scripts/read_table.py', 'docs/layouts/燕云十六声.json'):
             self.write(path, b'fixture packaged tree\n')
         self.sources = self.root / 'build/dependency-sources'
         self.sources.mkdir(parents=True)
@@ -141,6 +142,7 @@ class PackagingTests(unittest.TestCase):
         self.assertNotIn('app/tools/fonts/provenance.json', names)
         # Skills, layouts and the OCR component manifest ship under docs/, which 0.8.1 accepts.
         for name in ('app/docs/skills/think-aloud-judgments/references/interface.md', 'app/docs/skills/think-aloud-insight/SKILL.md',
+                     'app/docs/skills/think-aloud-export/scripts/read_table.py',
                      'app/docs/layouts/燕云十六声.json', 'app/docs/ocr-component.json', 'app/ocr_component.py', 'app/skill_install.py'):
             self.assertIn(name, names)
         self.assertEqual([name for name in names if not old.managed_path(name)], [])
