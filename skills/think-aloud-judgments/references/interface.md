@@ -32,11 +32,15 @@
  "activities": [{"name": "渡尘墟", "event_ids": ["e01", "e02"]}, {"name": "据点仓库与备战", "event_ids": ["e05"]}]}
 ```
 
-返回 `can_auto_name: false` 表示记录者手动写过标题：标题会原样保留，详情照常更新。
+返回 `can_auto_name: false` 表示记录者手动写过标题：标题会原样保留，详情照常更新。命名绑定这一次提交的结果；以后重新整理，要重新命名。
+
+- 标题像给聊天会话起名，概括本场核心内容，通常 8–20 个汉字（如“渡尘墟入门与两局尝试”），不用加号把所有活动列一遍。
+- 详情（`activities`）是给人和筛选用的关键词清单：每项是本场实际参与过的一个玩法、系统、地区、任务或首领，写玩家认得的专名（如“渡尘墟”“四海鏖战·卫陵鸦”“武林录·镇守大散关”），叫法尽量和资料库 `tags.json` 里的标签名一致。不写“剧情观看”“NPC 交谈”这类没有检索价值的过程描述，除非本场只有这些。
+- 合并重复项，只提到、没参与的不写。每项至少引用一个本次结果里的活动（`event_ids`），最多 32 项，每项最多 24 字，不能有加号、方括号。
 
 所有命令输出 UTF-8 JSON：成功是 `{ok:true,data:...}`，失败是 `{ok:false,error:...}`。令牌不要写进任何文档。时间一律是“相对录像开始的秒数”。
 
-界面目录在 `VAULT/game-assets/<场次 session.json 的 game>/catalog.json`。每个界面的 `id` 是规范编号（按界面组命名，规则见 SKILL.md 第 4 步），`aliases` 是曾用过的其他写法，`path_note` 是带层级注释的路径。目录不存在时，界面全部按规则自行命名。
+界面目录在 `VAULT/game-assets/<场次 session.json 的 game>/catalog.json`。每个界面的 `id` 是规范编号（按界面组命名，规则见 screens.md），`aliases` 是曾用过的其他写法，`path_note` 是带层级注释的路径。目录不存在时，界面全部按规则自行命名。
 
 **转写修正**：从上下文认出误转写时，提议给用户确认，不改逐字稿。写一份 UTF-8 JSON，再运行：
 
@@ -79,8 +83,9 @@
     "said": [{"kind": "quote", "ref": "t000020"}],
     "refers_to": {"start": 350, "end": 355, "basis": "same_time", "note": "定位依据，可选"},
     "screen": "背包/道具", "elements": ["自动使用道具"],
-    "kind": "expectation",
-    "statement": "独立可读的陈述，原话加引号。",
+    "kind": "not_found",
+    "evidence_source": "behavior", "valence": "negative", "intensity": 2, "owner": "ui_interaction",
+    "statement": "独立可读的陈述：要旨、想做什么、遇到什么、后果、画面原因、为什么算问题。",
     "issue_tags": [],
     "evidence": [{"kind": "video", "start": 362.5, "end": 362.5, "observation": "画面事实"},
                  {"kind": "input", "ref": "i0001234"}],
@@ -91,7 +96,8 @@
     "refers_to": {"basis": "earlier_session", "note": "所指的更早游玩"},
     "compare_to": {"start": 330, "end": 332, "note": "被比较的另一个时刻，可选字段"},
     "screen": "某入口/某页签", "screen_proposed": true, "route": ["另一入口/页签", "某入口/某页签"],
-    "elements": [], "kind": "negative", "statement": "……", "issue_tags": [], "evidence": [], "confidence": "medium"
+    "elements": [], "kind": "value", "evidence_source": "expert", "valence": "negative", "intensity": 1, "owner": "gameplay",
+    "statement": "……", "issue_tags": [], "evidence": [], "confidence": "medium"
   }]
 }
 ```
@@ -103,9 +109,10 @@
 - 实例 `said` 至少一条，只能是 quote 或 quote_words。
 - `refers_to.basis` 只能是 `same_time`、`retrospective`、`unknown`、`earlier_session`。前三种必须有录像时长内的 start、end；回顾实例的 end 不能晚于最早那句 `said` 的开始时间。`earlier_session` 不填 start、end，`note` 必填。`note` 最多 200 字。
 - `compare_to` 可选：`{start, end, note?}`，在录像时长之内。
-- `kind` 只能是 `confusion`、`obstacle`、`cost`、`positive`、`negative`、`expectation`、`suggestion`、`self_correction`、`observation`；`confidence` 只能是 `high`、`medium`、`low`。
+- `kind` 只能是 `goal_unclear`、`unnoticed`、`not_found`、`misunderstood`、`unsupported`、`hard_to_execute`、`execution_cost`、`outcome_unclear`、`value`、`observation`（含义见 SKILL.md“问题类型”）；`confidence` 只能是 `high`、`medium`、`low`。
+- `evidence_source` 只能是 `behavior`、`spoken`、`expert`；`valence` 只能是 `positive`、`negative`、`neutral`；`intensity` 是 1–3 的整数；`owner` 只能是 `ui_interaction`、`visual_hierarchy`、`copy`、`tutorial`、`system`、`input`、`implementation`、`gameplay`。`observation` 以外的实例四项都必填。
 - `screen` 是字符串或 null。目录存在时，不在目录里的界面必须标 `screen_proposed: true`，否则整份结果被拒。`route` 可选，最多 20 个界面名。`screen_context` 只在 `screen` 为 null 时使用，取值 `hud`、`multi_screen`、`outside_game`、`unknown`。`elements` 是画面文字列表，最多 20 个。
-- `statement` 最多 300 字；`evidence` 最多 12 条，每条 observation 最多 300 字；`issue_tags` 填 `[]`；只有记录者明说 bug、把问题归到程序本身或用跑测报缺陷的说法时填 `["BUG"]`（见 SKILL 第 7 步）。
+- `statement` 最多 300 字；`evidence` 最多 12 条，每条 observation 最多 300 字；`issue_tags` 填 `[]`；只有记录者明说 bug 或用落地实现问题的说法时填 `["BUG"]`（见 SKILL“与类型并列的标注”）。
 - `bug` 可选：`"explicit"`（明说，`issue_tags` 必须含 `BUG`）或 `"suspected"`（agent 判断，`issue_tags` 不能含 `BUG`）；不是 bug 就不写。旧结果只有 `BUG` 标签的按 `explicit` 读。
 - 数量上限：活动 300、每个活动的证据 30、实例 300；整个结果不超过 2 MB。
 - `coverage.transcript` 和 `inputs` 只能是 `full`、`partial`、`none`，按实际读过的范围填。
