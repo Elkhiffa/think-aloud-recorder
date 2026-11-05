@@ -220,7 +220,7 @@ def main(argv=None):
     instances_query.add_argument('--issue', action='append')
     instances_query.add_argument('--screen')
     instances_query.add_argument('--element')
-    instances_query.add_argument('--kind', choices=('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion', 'self_correction', 'observation'))
+    instances_query.add_argument('--kind', choices=sorted(set(protocol.KINDS) | set(protocol.LEGACY_KINDS)))
     instances_query.add_argument('--session')
     instances_query.add_argument('--bug', choices=('explicit', 'suspected', 'any'), help='只看单场标了 bug 的实例：明说、疑似或两者')
     export = commands.add_parser('export-rows', help='把场次的判断整理成可直接填表的行（导出到团队表格用）；只读，含版本验收场次')
@@ -541,6 +541,9 @@ def main(argv=None):
                 correction_review = reviewed(args.session, candidate)
                 if correction_review:
                     value['corrections_review'] = correction_review
+                if value.get('instances'):
+                    # Path 3: the same writing warnings the submit receipt carries, seen before submitting.
+                    value['statement_check'] = protocol.statement_check(value['instances'])
         print(json.dumps(dict(ok=True, data=value), ensure_ascii=False, allow_nan=False))
         return 0
     except Exception as error:

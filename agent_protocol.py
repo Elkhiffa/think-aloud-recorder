@@ -29,7 +29,7 @@ MAX_RESULT = 2 * 1024 * 1024
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 _RESULT_STORE = None  # (directory, version) once the desktop app configures it
-STATUS_CACHE_VERSION = 1
+STATUS_CACHE_VERSION = 2  # 2: problem counts and kind keys for the interaction-cycle kinds
 CHECKING = dict(state='checking', label='核对中', reason='正在核对整理结果，完成后显示问题分布。')
 
 
@@ -626,9 +626,17 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 raise ValueError('判断实例的 elements 必须是画面文字列表。')
             if not isinstance(tags, list) or any(not isinstance(tag, str) or tag not in issues for tag in tags):
                 raise ValueError('判断实例引用的议题标签不存在。')
-            if row.get('kind') not in ('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion',
-                                       'self_correction', 'observation'):
+            kind = row.get('kind')
+            if kind not in KINDS and kind not in LEGACY_KINDS:
                 raise ValueError('判断实例类型无效。')
+            # 路径 3：按“交互哪一环断了”整理的结果，问题实例带证据来源、正负与强度、落地方；旧分类的结果没有这四项。
+            judged = {}
+            if kind in KINDS:
+                for field, allowed in JUDGED_FIELDS.items():
+                    if field in row or kind != 'observation':
+                        if row.get(field) not in allowed:
+                            raise ValueError(f'判断实例的 {field} 无效：取值为 {"、".join(map(str, allowed))}。')
+                        judged[field] = row[field]
             # 路径 3：bug 与类型并列（设计没问题、实现出了问题）。明说的同时挂 BUG 标签，疑似的不挂；旧结果只有标签，按明说。
             said_bug = any(tag == 'BUG' or tag.startswith('BUG.') for tag in tags)
             bug = row.get('bug', 'explicit' if said_bug else None)
@@ -662,8 +670,9 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 extra['screen_proposed'] = True
             if bug:
                 extra['bug'] = bug
+            extra.update(judged)
             instances.append(dict(id=ident, event_id=row['event_id'], said=said, refers_to=refers_to, **extra,
-                                  screen=screen, elements=list(selected_elements), kind=row['kind'],
+                                  screen=screen, elements=list(selected_elements), kind=kind,
                                   statement=_text(row.get('statement'), 300, '判断陈述'), issue_tags=list(tags),
                                   evidence=refs, confidence=row['confidence']))
         result['instances'] = instances
@@ -864,6 +873,7 @@ def submit(folder, token, value):
         # 路径 3：提交写入后在锁外核对界面编号与画面上亮着的页签（每刻约 2 秒识别），只提醒不拦截。
         from context_track import check_screens
         summary['screen_check'] = check_screens(folder, result['instances'])
+        summary['statement_check'] = statement_check(result['instances'])
     return summary
 
 
@@ -1020,29 +1030,67 @@ def _reanalysis_status(job, raw):
     return dict(value, state='failed', failure_reason=str(job.get('reason') or '')[:2000])
 
 
-QUOTE_ORDER = ('obstacle', 'cost', 'confusion', 'negative')
-# The four problem types every window counts; the other kinds are listed apart.
+# Judgment kinds by the link of the interaction cycle that broke (skills/think-aloud-judgments); `value` is a problem
+# only when negative. Results organized before 11-05 keep the legacy kinds and stay readable until they are redone.
+PROBLEM_KINDS_NEW = ('goal_unclear', 'unnoticed', 'hard_to_perceive', 'not_found', 'misunderstood', 'unsupported',
+                     'hard_to_execute', 'execution_cost', 'outcome_unclear', 'value')
+KINDS = PROBLEM_KINDS_NEW + ('observation',)
+LEGACY_KINDS = ('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion', 'self_correction', 'observation')
 PROBLEM_KINDS = ('confusion', 'obstacle', 'cost', 'negative')
+JUDGED_FIELDS = dict(evidence_source=('behavior', 'spoken', 'expert'), valence=('positive', 'negative', 'neutral'), intensity=(1, 2, 3),
+                     owner=('ui_interaction', 'visual_hierarchy', 'copy', 'tutorial', 'system', 'input', 'implementation', 'gameplay', 'art'))
+# Headline quote: the links that stop a player first.
+QUOTE_ORDER = ('unsupported', 'hard_to_execute', 'not_found', 'goal_unclear', 'unnoticed', 'misunderstood', 'outcome_unclear',
+               'hard_to_perceive', 'execution_cost', 'value', 'obstacle', 'cost', 'confusion', 'negative')
 _FILLER = ('呃', '嗯', '哎', '啊', '哦', '好', '然后', '但是', '那', '对', '就是')
+
+
+def is_problem(item):
+    kind = item.get('kind')
+    if kind == 'value':
+        return item.get('valence') != 'positive'
+    return kind in PROBLEM_KINDS_NEW or kind in PROBLEM_KINDS
+
+
+def count_key(item):
+    """Kind key for counts and bars: a positive value judgment is counted apart from the problems."""
+    return 'value_positive' if item.get('kind') == 'value' and item.get('valence') == 'positive' else item.get('kind')
+
+
+# Writing checks the skill asks for but prose rules do not hold reliably; reported, never blocking (like screen_check).
+_HIDDEN = re.compile(r'另一条|另条|见上|见下|见同场|第\s*\d+(\.\d+)?\s*秒|OCR|理解时刻')
+
+
+def statement_check(instances):
+    warnings = []
+    for item in instances:
+        statement = str(item.get('statement') or '')
+        quotes = statement.count('“')
+        hidden = _HIDDEN.search(statement)
+        if quotes > 3:
+            warnings.append(dict(instance=item.get('id'), problem='quotes', detail=f'陈述里引了 {quotes} 处原话，只留最能说明问题的一两句'))
+        if hidden:
+            warnings.append(dict(instance=item.get('id'), problem='hidden_reference', detail=f'陈述里有读者看不到的“{hidden.group(0)}”'))
+    return dict(checked=len(instances), warnings=warnings)
 
 
 def _digest(result):
     """Small, list-ready summary of a validated result: kind counts, one verbatim quote, event titles.
 
     The quote is the recorder's own words, never rewritten: the first high-confidence
-    instance in obstacle > cost > confusion > negative order whose first quoted line is
-    8-24 characters and does not open with a filler word.
+    problem instance in QUOTE_ORDER whose first quoted line is 8-24 characters and does not
+    open with a filler word.
     """
     instances = result.get('instances') or []
     kinds = {}
     for item in instances:
-        kinds[item.get('kind')] = kinds.get(item.get('kind'), 0) + 1
+        kinds[count_key(item)] = kinds.get(count_key(item), 0) + 1
     quote = None
     for kind in QUOTE_ORDER:
         for item in instances:
             said = (item.get('said') or [{}])[0]
             text = str(said.get('text') or '').strip()
-            if (item.get('kind') == kind and item.get('confidence') == 'high' and 8 <= len(text) <= 24
+            if (item.get('kind') == kind and is_problem(item) and item.get('confidence') == 'high' and 8 <= len(text) <= 24
                     and not text.startswith(_FILLER)):
                 quote = dict(text=text, at=said.get('start'), kind=kind, instance=item.get('id'))
                 break
@@ -1087,7 +1135,7 @@ def _status(folder, meta, validate=True):
                 result = transcript_corrections.project(folder, result)
             except (OSError, ValueError, TypeError, KeyError):
                 pass  # A damaged corrections file leaves quotes as transcribed; the file itself is kept.
-            problems = sum(1 for item in result.get('instances', []) if item.get('kind') in PROBLEM_KINDS)
+            problems = sum(1 for item in result.get('instances', []) if is_problem(item))
             value = dict(state='complete', label=(f'已整理 · {problems} 个问题' if 'instances' in result
                                                   else f'已整理 · {len(result["events"])} 个体验事件'),
                          events=len(result['events']), questions=len(result['questions']),

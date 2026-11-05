@@ -14,7 +14,8 @@ from insight_runtime import InsightAPI
 
 REVIEW_TABS = ('problems', 'events')
 EVENT_FIELDS = ('id', 'title', 'start', 'end', 'summary', 'issue', 'notes', 'manually_edited')
-INSTANCE_FIELDS = ('id', 'event_id', 'kind', 'said', 'refers_to', 'compare_to', 'statement', 'screen')
+INSTANCE_FIELDS = ('id', 'event_id', 'kind', 'said', 'refers_to', 'compare_to', 'statement', 'screen',
+                   'evidence_source', 'valence', 'intensity', 'owner')
 DESK_METHODS = ('ready', 'get_overview', 'read_report', 'add_feedback', 'set_cover', 'edit_feedback', 'remove_feedback',
                 'thumbnail', 'open_review', 'desk_state', 'session_detail', 'review_session', 'rename_session',
                 'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task', 'show_in_insight',

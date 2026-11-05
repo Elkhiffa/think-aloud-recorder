@@ -484,7 +484,8 @@ def query_instances(vault, issue=None, screen=None, element=None, kind=None, ses
                        refers_basis=instance['refers_to']['basis'], catalog_screen=catalog_screen,
                        # 画面证据里 agent 核对过的时刻，比所指区间的起点更能代表界面本身。
                        frame_at=next((row['start'] for row in instance['evidence'] if row['kind'] == 'video'), None),
-                       **{key: instance[key] for key in ('route', 'screen_proposed', 'screen_context', 'compare_to', 'bug')
+                       **{key: instance[key] for key in ('route', 'screen_proposed', 'screen_context', 'compare_to', 'bug',
+                                                         'evidence_source', 'valence', 'intensity', 'owner')
                           if key in instance})
             rows.append((str(meta.get('created') or meta['id']), row))
     # 指向本场之前的实例没有本场所指时间，按说出口的时间排序。

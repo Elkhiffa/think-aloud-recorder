@@ -106,6 +106,45 @@ class JudgmentInstanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '类型无效'):
             agent.validate_result(self.folder, candidate)
 
+    def test_interaction_cycle_kinds_carry_their_judged_fields(self):
+        """触发路径：单场整理按“交互哪一环断了”提交（11-05 起）→ 新类型带证据来源、正负、强度、落地方，原样存下；缺一项就拒；旧分类的结果照常可读。"""
+        candidate = self.candidate()
+        judged = dict(evidence_source='behavior', valence='negative', intensity=2, owner='visual_hierarchy')
+        candidate['instances'][0].update(kind='unnoticed', **judged)
+        instance = agent.validate_result(self.folder, candidate)['instances'][0]
+        self.assertEqual({key: instance[key] for key in judged}, judged)
+        validated = agent.validate_result(self.folder, candidate)
+        self.assertEqual(agent.validate_result(self.folder, validated), validated, 'validating a validated result keeps it')
+        del candidate['instances'][0]['owner']
+        with self.assertRaisesRegex(ValueError, 'owner'):
+            agent.validate_result(self.folder, candidate)
+        candidate['instances'][0].update(kind='observation')
+        self.assertNotIn('owner', agent.validate_result(self.folder, candidate)['instances'][0], 'an observation needs none of them')
+        legacy = self.candidate()
+        self.assertNotIn('owner', agent.validate_result(self.folder, legacy)['instances'][0], 'a legacy kind needs none of them')
+
+    def test_only_a_negative_value_judgment_counts_as_a_problem(self):
+        """触发路径：记录者评价玩法“值不值得玩”，正面的也记成价值判断 → 场次标签和比例条只把负面的算问题，正面的单独计数。"""
+        candidate = self.candidate()
+        judged = dict(evidence_source='expert', intensity=1, owner='gameplay')
+        second = dict(candidate['instances'][0], id='i2', kind='value', valence='positive', **judged)
+        candidate['instances'][0].update(kind='value', valence='negative', **judged)
+        candidate['instances'].append(second)
+        job = agent.claim(self.folder, 'synthetic-v2-worker')
+        agent.submit(self.folder, job['token'], candidate)
+        state = agent.preprocessing_status(self.folder)
+        self.assertEqual(state['label'], '已整理 · 1 个问题')
+        self.assertEqual(state['kinds'], {'value': 1, 'value_positive': 1})
+
+    def test_statement_check_flags_quote_collages_and_hidden_references(self):
+        """触发路径：陈述把原话串成拼贴、或写“见另一条”“第 120 秒” → validate 和提交回执都提醒（不拦截），agent 提交前改掉。"""
+        candidate = self.candidate()
+        candidate['instances'][0]['statement'] = '他说“一”“二”“三”“四”，详见另一条。'
+        job = agent.claim(self.folder, 'synthetic-v2-worker')
+        submitted = agent.submit(self.folder, job['token'], candidate)
+        self.assertEqual(sorted(w['problem'] for w in submitted['statement_check']['warnings']), ['hidden_reference', 'quotes'])
+        self.assertEqual(agent.statement_check([dict(id='i1', statement='他说“找不到入口”。')])['warnings'], [])
+
     def test_bug_is_marked_beside_the_kind_explicit_or_suspected(self):
         """触发路径：单场整理把“设计没问题、实现出了问题”的判断标成 bug → 回看里 Bug 组和它原本的类型组都列出。"""
         candidate = self.candidate()

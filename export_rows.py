@@ -75,7 +75,8 @@ def export_rows(vault, sessions=None, all_sessions=False):
             screen = names.get(instance['screen']) or instance['screen']
             bug = bugs.get(instance['id']) or instance.get('bug')
             rows.append(dict(session_id=ident, instance_id=instance['id'], kind=instance['kind'],
-                             problem=instance['kind'] in protocol.PROBLEM_KINDS or bool(bug), bug=bug,
+                             problem=protocol.is_problem(instance) or bool(bug), bug=bug,
+                             **{key: instance[key] for key in ('evidence_source', 'valence', 'intensity', 'owner') if key in instance},
                              statement=instance['statement'], quote=_quote(instance),
                              screen=screen, screen_path=screen.split('/') if screen else [],
                              screen_context=instance.get('screen_context'), elements=instance.get('elements') or [],
