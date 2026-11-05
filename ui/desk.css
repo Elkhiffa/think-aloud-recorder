@@ -11,8 +11,15 @@
   --paper:#F8F5EF;--sheet:#FFFDF9;--fill:#EEE8DC;--fill2:#E3DACB;
   --ink:#221E19;--muted:#5F574B;--faint:#978D7E;--rule:#DDD5C6;--hair:#EEE8DC;
   --rec:#D23A24;--warn:#7A4A12;--warn-bg:#F5E3CB;
-  --k-confusion:#3F5D8C;--k-obstacle:#A3532B;--k-cost:#A8861C;--k-negative:#7C4B78;--k-other:#D8CFBF;
+  /* 问题类型颜色同 findings.css：按交互环节分色系，旧分类灰阶 */
+  --k-goal_unclear:oklch(.42 .09 255);--k-unnoticed:oklch(.58 .09 185);--k-hard_to_perceive:oklch(.70 .12 150);--k-not_found:oklch(.60 .13 245);
+  --k-misunderstood:oklch(.55 .15 305);--k-unsupported:oklch(.50 .11 55);--k-hard_to_execute:oklch(.64 .14 45);--k-execution_cost:oklch(.74 .13 85);
+  --k-outcome_unclear:oklch(.72 .09 220);--k-value:oklch(.62 .15 350);
+  --k-confusion:oklch(.40 0 0);--k-obstacle:oklch(.52 0 0);--k-cost:oklch(.64 0 0);--k-negative:oklch(.76 0 0);--k-other:#D8CFBF;
 }
+.k-goal_unclear{--kc:var(--k-goal_unclear)}.k-unnoticed{--kc:var(--k-unnoticed)}.k-hard_to_perceive{--kc:var(--k-hard_to_perceive)}.k-not_found{--kc:var(--k-not_found)}
+.k-misunderstood{--kc:var(--k-misunderstood)}.k-unsupported{--kc:var(--k-unsupported)}.k-hard_to_execute{--kc:var(--k-hard_to_execute)}
+.k-execution_cost{--kc:var(--k-execution_cost)}.k-outcome_unclear{--kc:var(--k-outcome_unclear)}.k-value{--kc:var(--k-value)}
 .k-confusion{--kc:var(--k-confusion)}.k-obstacle{--kc:var(--k-obstacle)}.k-cost{--kc:var(--k-cost)}.k-negative{--kc:var(--k-negative)}.k-other{--kc:var(--k-other)}
 body{background:var(--paper);color:var(--ink);font:400 var(--t2)/1.65 var(--sans);-webkit-font-smoothing:antialiased}
 .hidden{display:none!important}
@@ -76,6 +83,10 @@ button:disabled{cursor:default;opacity:.5}
 .pop-menu label:hover,.pop-menu button:hover{background:var(--fill)}
 .pop-menu input{accent-color:var(--ink)}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--kc,var(--k-other));flex:none}
+#kindMenu{min-width:200px}
+#kindMenu .kn{flex:1}
+#kindMenu b{font-weight:400;color:var(--muted);font-variant-numeric:tabular-nums}
+.km-sep{margin:var(--s1) var(--s3) 0;padding:var(--s2) 0 var(--s1);border-top:1px solid var(--rule);font-size:var(--t1);color:var(--faint)}
 
 /* 表格：日期 · 场次 · 开始 · 时长 · 问题（数字 + 四类比例条）· 状态 */
 .cols{display:grid;grid-template-columns:48px 48px minmax(0,1fr) 64px 128px 72px;column-gap:var(--s3);align-items:baseline}

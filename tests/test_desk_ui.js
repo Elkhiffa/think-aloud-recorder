@@ -122,6 +122,27 @@ test('a session an agent is organizing reads 整理中, not 待整理',async()=>
   assert.match(f.el('sessionScroll').innerHTML,/<span class="c-st[^"]*">整理中<\/span>/);
 });
 
+test('interaction-cycle kinds: the menu lists the kinds present with counts, legacy ones under their own line; the detail names who fixes it',async()=>{
+  // Trigger path: a session organized after 11-05 (unnoticed, value) sits beside an older one (confusion); the user opens 问题类型 and the new session.
+  const result={events:[{id:'e1',title:'Map',start:10,end:80,summary:''}],
+    instances:[{id:'i1',event_id:'e1',kind:'unnoticed',said:[{start:12,end:14,text:'Where is it?'}],refers_to:{start:12,end:14,basis:'same_time'},statement:'The icon was covered.',screen:'map',
+      evidence_source:'behavior',valence:'negative',intensity:2,owner:'visual_hierarchy'},
+      {id:'i2',event_id:'e1',kind:'value',said:[{start:30,end:31,text:'Nice idea.'}],refers_to:{start:30,end:31,basis:'same_time'},statement:'Liked the mode.',screen:'',
+      evidence_source:'expert',valence:'positive',intensity:1,owner:'gameplay'}],coverage:null};
+  const f=await fixture({sessions:[{id:'new',game:'Game',state:'可回看',can_review:true,preprocessing:{state:'complete',kinds:{unnoticed:1,value_positive:1}}},
+    {id:'old',game:'Game',state:'可回看',can_review:true,preprocessing:{state:'complete',kinds:{confusion:2}}}]});
+  const menu=f.el('kindMenu').innerHTML;
+  assert.match(menu,/data-kind="unnoticed"[\s\S]*未察觉<\/span><b>1<\/b>[\s\S]*旧分类（重整前的场次）[\s\S]*data-kind="confusion"[\s\S]*困惑<\/span><b>2<\/b>/);
+  assert.doesNotMatch(menu,/data-kind="not_found"/,'kinds the library does not hold are left out');
+  assert.match(f.el('sessionScroll').innerHTML,/data-session="new"[\s\S]*?<b>1<\/b>/,'a positive value judgment is not counted as a problem');
+  f.data.details.new={id:'new',state:'complete',label:'',kinds:{unnoticed:1,value_positive:1},result,activities:[],bugs:{},instance_issues:{}};
+  await f.select('new');
+  const views=f.el('deskFindings').innerHTML;
+  assert.match(views,/data-filter="unnoticed"[^>]*>未察觉 <b>1<\/b>/);assert.match(views,/fd-owner">该谁改：视觉层级</);
+  assert.match(views,/fd-kind">价值判断 · 正面</,'the positive value judgment sits with the other kinds');
+  assert.doesNotMatch(views,/该谁改：玩法关卡叙事/,'who fixes it is shown on problems only');
+});
+
 test('the detail shows the same 问题 / 体验事件 views as review; a click opens review on that tab',async()=>{
   // Trigger path: select an organized session in the desk, read its problems, click one to open review there.
   const result={events:[{id:'e1',title:'Bag <full>',start:10,end:80,summary:'Cleared the bag.'},{id:'e2',title:'Map',start:80,end:120,summary:''}],

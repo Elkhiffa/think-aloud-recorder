@@ -12,7 +12,11 @@
   --ink:#221E19;--muted:#5F574B;--faint:#978D7E;--rule:#DDD5C6;
   --rec:#D23A24;--rec-ink:#FFFBF6;--rec-soft:rgba(255,251,246,.78);
   --warn:#7A4A12;--warn-bg:#F5E3CB;--ok:#4F6B3E;--dot:#D23A24;
-  --k-confusion:#3F5D8C;--k-obstacle:#A3532B;--k-cost:#A8861C;--k-negative:#7C4B78;--k-other:#D8CFBF;
+  /* 问题类型颜色同 findings.css：按交互环节分色系，旧分类灰阶 */
+  --k-goal_unclear:oklch(.42 .09 255);--k-unnoticed:oklch(.58 .09 185);--k-hard_to_perceive:oklch(.70 .12 150);--k-not_found:oklch(.60 .13 245);
+  --k-misunderstood:oklch(.55 .15 305);--k-unsupported:oklch(.50 .11 55);--k-hard_to_execute:oklch(.64 .14 45);--k-execution_cost:oklch(.74 .13 85);
+  --k-outcome_unclear:oklch(.72 .09 220);--k-value:oklch(.62 .15 350);
+  --k-confusion:oklch(.40 0 0);--k-obstacle:oklch(.52 0 0);--k-cost:oklch(.64 0 0);--k-negative:oklch(.76 0 0);--k-other:#D8CFBF;
   color-scheme:light;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -25,6 +29,9 @@ button:disabled{cursor:default;opacity:.5}
 .hidden{display:none!important}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .note{font-size:var(--t1);line-height:1.55;color:var(--muted)}
+.k-goal_unclear{--kc:var(--k-goal_unclear)}.k-unnoticed{--kc:var(--k-unnoticed)}.k-hard_to_perceive{--kc:var(--k-hard_to_perceive)}.k-not_found{--kc:var(--k-not_found)}
+.k-misunderstood{--kc:var(--k-misunderstood)}.k-unsupported{--kc:var(--k-unsupported)}.k-hard_to_execute{--kc:var(--k-hard_to_execute)}
+.k-execution_cost{--kc:var(--k-execution_cost)}.k-outcome_unclear{--kc:var(--k-outcome_unclear)}.k-value{--kc:var(--k-value)}
 .k-confusion{--kc:var(--k-confusion)}.k-obstacle{--kc:var(--k-obstacle)}.k-cost{--kc:var(--k-cost)}.k-negative{--kc:var(--k-negative)}.k-other{--kc:var(--k-other)}
 
 /* 自绘标题栏：拖动交给 Windows（app-region），可点的东西退出拖动。 */

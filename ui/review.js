@@ -789,7 +789,7 @@
     function updateEvents(){
       const info=data.preprocessing||{state:'none'},signature=JSON.stringify(info);if(signature===eventSignature)return;eventSignature=signature;
       const result=info.state==='complete'?info.result:null,notice=$('preprocessingNotice'),panel=$('experienceEvents'),version2=!!result&&Findings.isVersion2(result);
-      const problems=version2?result.instances.filter(item=>item.kind in Findings.PROBLEM).length:0;
+      const problems=version2?result.instances.filter(item=>Findings.groupOf(item.kind,item.valence) in Findings.PROBLEM).length:0;
       $('problemsTab').hidden=!version2;$('problemsTab').textContent=`问题 ${problems}`;
       $('eventsTab').hidden=!result;$('eventsTab').textContent=result?`体验事件 ${result.events.length}`:'体验事件';
       const messages=version2?[info.notice,info.editing?.error].filter(Boolean):[];

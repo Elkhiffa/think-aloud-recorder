@@ -3,15 +3,23 @@
    Bug 是和类型并列的一组（设计没问题、实现出了问题）：一条判断仍有自己的类型，是 bug 时两组都列出。
    调用方持有状态并决定点击去向（回看原地跳转，场次库打开回看）；这里只负责画和接点击。 */
 (function(root){
-  const PROBLEM={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
+  // Problem kinds by the link of the interaction cycle that broke (11-05); the four legacy kinds belong to sessions
+  // organized before then and show in grey until those sessions are redone.
+  const CYCLE={goal_unclear:'目标不明',unnoticed:'未察觉',hard_to_perceive:'辨识困难',not_found:'找不到',misunderstood:'理解错',
+    unsupported:'功能不支持',hard_to_execute:'执行困难',execution_cost:'执行成本',outcome_unclear:'结果看不懂',value:'价值判断'};
+  const LEGACY={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
+  const PROBLEM={...CYCLE,...LEGACY};
   const OTHER={expectation:'预期',suggestion:'建议',positive:'正向体验',observation:'观察',self_correction:'自我修正'};
   const LABEL={...PROBLEM,...OTHER};
   const GROUPS=[...Object.keys(PROBLEM),'bug','other'];
   const GROUP_LABEL={...PROBLEM,bug:'Bug',other:'其他'};
   const BUG_LABEL={explicit:'Bug',suspected:'疑似 Bug'};
+  const OWNER={ui_interaction:'交互入口与流程',visual_hierarchy:'视觉层级',copy:'文案',tutorial:'教学引导',system:'系统数值',
+    input:'输入操作',implementation:'实现 / QA',gameplay:'玩法关卡叙事',art:'美术表现'};
   const CHEV='<svg class="fd-chev" viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6z"/></svg>';
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const groupOf=kind=>kind in PROBLEM?kind:'other';
+  // A positive value judgment is not a problem; it sits with the other kinds.
+  const groupOf=(kind,valence)=>kind==='value'&&valence==='positive'?'other':kind in PROBLEM?kind:'other';
   const isVersion2=result=>Array.isArray(result?.instances);
   // One scroll listener per scroller; the desk re-creates the view on every detail render.
   const SCROLLERS=new WeakMap();
@@ -25,7 +33,8 @@
     for(const activity of activities||[])for(const id of activity.event_ids||[])if(tags.has(id)&&!tags.get(id).includes(activity.name))tags.get(id).push(activity.name);
     const items=(result?.instances||[]).map(item=>{
       const said=[...(item.said||[])].sort((a,b)=>a.start-b.start);
-      return {id:item.id,kind:item.kind,group:groupOf(item.kind),at:said[0]?.start??item.refers_to?.start??0,
+      return {id:item.id,kind:item.kind,group:groupOf(item.kind,item.valence),valence:item.valence||null,owner:item.owner||null,source:item.evidence_source||null,
+        at:said[0]?.start??item.refers_to?.start??0,
         quote:said.map(ref=>ref.text).filter(Boolean).join(' … '),statement:item.statement||'',screen:item.screen||'',
         refers:item.refers_to||null,compare:item.compare_to||null,event:item.event_id,bug:bugs?.[item.id]||item.bug||null,issues:issues?.[item.id]||[]};
     }).sort((a,b)=>a.at-b.at);
@@ -55,8 +64,11 @@
       const compared=item.compare?timeButton(item.compare.start,`对照 ${clock(item.compare.start)}`,` data-event="${escape(item.event)}"`):'';
       // In the Bug group each row names its own kind; elsewhere a bug carries a small mark.
       const badge=item.bug&&group!=='bug'?`<span class="fd-bug-mark${item.bug==='suspected'?' is-suspected':''}">${BUG_LABEL[item.bug]}</span>`:'';
-      const kind=group==='other'||group==='bug'?`<span class="fd-kind">${escape(LABEL[item.kind]||item.kind)}${group==='bug'&&item.bug==='suspected'?' · 疑似':''}</span>`:'';
-      const meta=[kind,badge,item.screen?`<span class="fd-screen">${escape(item.screen)}</span>`:'',referred,compared,
+      const kind=group==='other'||group==='bug'?`<span class="fd-kind">${escape(LABEL[item.kind]||item.kind)}${item.kind==='value'&&item.valence==='positive'?' · 正面':''}${group==='bug'&&item.bug==='suspected'?' · 疑似':''}</span>`:'';
+      // 该谁改 on every judged problem; the evidence source only when it is the recorder's design judgment, the weaker kind.
+      const owner=item.owner&&group!=='other'?`<span class="fd-owner">该谁改：${escape(OWNER[item.owner]||item.owner)}</span>`:'';
+      const expert=item.source==='expert'&&group!=='other'?'<span class="fd-expert">设计师判断</span>':'';
+      const meta=[kind,badge,owner,expert,item.screen?`<span class="fd-screen">${escape(item.screen)}</span>`:'',referred,compared,
         showEvent&&event?`<button type="button" class="fd-event-link" data-goto-event="${escape(event.id)}" title="在「体验事件」里查看这一段">${escape(event.title)}</button>`:'',
         ...item.issues.map(issue=>`<button type="button" class="fd-insight-link" data-insight="${escape(issue.id)}" data-insight-item="${escape(item.id)}" title="在洞察窗口里查看这条证据">${issue.role==='counter'?'反例 · ':''}洞察：${escape(issue.title)}</button>`)].filter(Boolean).join('');
       return `<li class="fd-row k-${group}" data-item="${escape(item.id)}"><button type="button" class="fd-at" data-seek="${item.at}" data-event="${escape(item.event)}" title="定位到说出口的时刻">${clock(item.at)}</button>`+
@@ -213,6 +225,6 @@
       },
     };
   }
-  const api={PROBLEM,OTHER,LABEL,GROUPS,GROUP_LABEL,groupOf,isVersion2,model,counts,create};
+  const api={CYCLE,LEGACY,PROBLEM,OTHER,LABEL,GROUPS,GROUP_LABEL,OWNER,groupOf,isVersion2,model,counts,create};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.ThinkAloudFindings=api;
 })(globalThis);

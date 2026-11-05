@@ -153,7 +153,10 @@ select,input{border:1px solid var(--line);border-radius:4px;padding:4px 8px;back
 :root{--s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:24px;--r-sm:6px;--r:8px;--r-md:12px;--r-lg:16px;
   --paper:#F8F5EF;--sheet:#FFFDF9;--fill:#EEE8DC;--fill2:#E3DACB;--ink:#221E19;--muted:#5F574B;--faint:#978D7E;--rule:#DDD5C6;
   --warn:#7A4A12;--warn-bg:#F5E3CB;--counter:#4E6B3E;--counter-bg:#E6ECDD;--mark:#F6E2B8;
-  --k-confusion:#3F5D8C;--k-obstacle:#A3532B;--k-cost:#A8861C;--k-negative:#7C4B78;--k-other:#D8CFBF;
+  --k-goal_unclear:oklch(.42 .09 255);--k-unnoticed:oklch(.58 .09 185);--k-hard_to_perceive:oklch(.70 .12 150);--k-not_found:oklch(.60 .13 245);
+  --k-misunderstood:oklch(.55 .15 305);--k-unsupported:oklch(.50 .11 55);--k-hard_to_execute:oklch(.64 .14 45);--k-execution_cost:oklch(.74 .13 85);
+  --k-outcome_unclear:oklch(.72 .09 220);--k-value:oklch(.62 .15 350);
+  --k-confusion:oklch(.40 0 0);--k-obstacle:oklch(.52 0 0);--k-cost:oklch(.64 0 0);--k-negative:oklch(.76 0 0);--k-other:#D8CFBF;
   --bg:var(--fill);--surface:var(--paper);--soft:var(--fill);--tint:var(--fill2);--heading:var(--ink);--desc:var(--muted);
   --line:var(--rule);--strong-line:var(--fill2);--accent:var(--ink);--error:var(--warn)}
 body{font:400 14px/1.65 "Sarasa UI SC","Microsoft YaHei UI","Microsoft YaHei",sans-serif;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
@@ -206,6 +209,10 @@ button:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible,.p
 .kind-chip:hover{background:none;color:var(--ink)}
 /* 多选筛选选中是墨色（同界面来源筛选）；同时只激活一个的页签和分段选中是白色 */
 .kind-chip.active,.kind-chip.active:hover{background:var(--ink);color:var(--sheet)}
+.kind-goal_unclear{--kc:var(--k-goal_unclear)}.kind-unnoticed{--kc:var(--k-unnoticed)}.kind-hard_to_perceive{--kc:var(--k-hard_to_perceive)}
+.kind-not_found{--kc:var(--k-not_found)}.kind-misunderstood{--kc:var(--k-misunderstood)}.kind-unsupported{--kc:var(--k-unsupported)}
+.kind-hard_to_execute{--kc:var(--k-hard_to_execute)}.kind-execution_cost{--kc:var(--k-execution_cost)}.kind-outcome_unclear{--kc:var(--k-outcome_unclear)}
+.kind-value{--kc:var(--k-value)}
 .kind-confusion{--kc:var(--k-confusion)}.kind-obstacle{--kc:var(--k-obstacle)}.kind-cost{--kc:var(--k-cost)}.kind-negative{--kc:var(--k-negative)}
 /* 议题之间 16（组间）；行和展开内容的内边距 8 / 12（组内边距）；内容之间 8、同级子议题之间 4（组内间距） */
 .row{border-radius:var(--r-sm);padding:var(--s1) var(--s3);margin:0}

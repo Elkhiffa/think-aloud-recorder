@@ -2,7 +2,10 @@
   'use strict';
   const $=id=>document.getElementById(id);
   const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-  const KIND={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
+  // Interaction-cycle kinds first; the legacy ones belong to sessions organized before 11-05.
+  const KIND={goal_unclear:'目标不明',unnoticed:'未察觉',hard_to_perceive:'辨识困难',not_found:'找不到',misunderstood:'理解错',
+    unsupported:'功能不支持',hard_to_execute:'执行困难',execution_cost:'执行成本',outcome_unclear:'结果看不懂',value:'价值判断',
+    confusion:'困惑',obstacle:'阻碍',cost:'操作成本',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
   const CONTEXT={hud:'HUD / 战斗 / 大世界',multi_screen:'跨多个界面',outside_game:'游戏外窗口',unknown:'认不出界面'};
   const state={overview:null,instances:new Map(),labels:{},reports:[],report:null,issues:new Map(),feedback:[],
     tags:[],tagGroups:[],instanceTags:{},filters:{kinds:new Set(),tags:new Set(),session:null,sessionLabel:''}};

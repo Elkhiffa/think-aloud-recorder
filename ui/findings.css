@@ -1,11 +1,20 @@
 /* 回看与资料台共用的整理结果视图（ui/findings.js）。两个窗口的变量名不同，这里只取共有的几项并给出兜底；
-   问题类型颜色与主窗口、资料台、洞察相同（困惑靛蓝、阻碍赭石、操作成本暗黄、负面评价紫）。回看导出页会内联这份样式。 */
+   问题类型颜色与主窗口、资料台、洞察相同：按交互环节分色系（感知青绿、找到与理解蓝紫、执行暖色、价值玫红），OKLCH 取色、
+   任意两色 OKLab 距离不小于 0.11（work/ui-draft/palette.py）；旧分类（11-05 前整理的场次）用灰阶。回看导出页会内联这份样式。 */
 .findings{
   --fd-ink:var(--ink,#221E19);--fd-muted:var(--muted,#5F574B);--fd-line:var(--rule,var(--line,#DDD5C6));
   --fd-surface:var(--sheet,var(--surface,#FFFDF9));--fd-hover:var(--paper,var(--bg,#F3EDE1));--fd-chip:var(--fill,var(--soft,#EEE8DC));
-  --k-confusion:#3F5D8C;--k-obstacle:#A3532B;--k-cost:#A8861C;--k-negative:#7C4B78;--k-bug:#B0233F;--k-other:#8C8273;
+  --k-goal_unclear:oklch(.42 .09 255);--k-unnoticed:oklch(.58 .09 185);--k-hard_to_perceive:oklch(.70 .12 150);--k-not_found:oklch(.60 .13 245);
+  --k-misunderstood:oklch(.55 .15 305);--k-unsupported:oklch(.50 .11 55);--k-hard_to_execute:oklch(.64 .14 45);--k-execution_cost:oklch(.74 .13 85);
+  --k-outcome_unclear:oklch(.72 .09 220);--k-value:oklch(.62 .15 350);
+  --k-confusion:oklch(.40 0 0);--k-obstacle:oklch(.52 0 0);--k-cost:oklch(.64 0 0);--k-negative:oklch(.76 0 0);
+  --k-bug:oklch(.50 .18 20);--k-other:oklch(.66 .02 80);
   font-size:14px;line-height:1.6;color:var(--fd-ink);overflow-wrap:anywhere
 }
+.findings .k-goal_unclear{--kc:var(--k-goal_unclear)}.findings .k-unnoticed{--kc:var(--k-unnoticed)}.findings .k-hard_to_perceive{--kc:var(--k-hard_to_perceive)}
+.findings .k-not_found{--kc:var(--k-not_found)}.findings .k-misunderstood{--kc:var(--k-misunderstood)}.findings .k-unsupported{--kc:var(--k-unsupported)}
+.findings .k-hard_to_execute{--kc:var(--k-hard_to_execute)}.findings .k-execution_cost{--kc:var(--k-execution_cost)}
+.findings .k-outcome_unclear{--kc:var(--k-outcome_unclear)}.findings .k-value{--kc:var(--k-value)}
 .findings .k-confusion{--kc:var(--k-confusion)}.findings .k-obstacle{--kc:var(--k-obstacle)}.findings .k-cost{--kc:var(--k-cost)}
 .findings .k-negative{--kc:var(--k-negative)}.findings .k-bug{--kc:var(--k-bug)}.findings .k-other{--kc:var(--k-other)}
 .findings p{margin:0;max-width:none;white-space:normal}
@@ -47,6 +56,8 @@
 .fd-stmt{font-size:12px;line-height:1.6;color:var(--fd-muted);margin-top:2px}
 .fd-meta{display:flex;flex-wrap:wrap;gap:2px 12px;margin-top:2px;font-size:12px;color:var(--fd-muted)}
 .fd-kind{color:var(--fd-ink)}
+.fd-owner{color:var(--fd-ink)}
+.fd-expert{padding:0 6px;border:1px solid var(--fd-line);border-radius:999px;line-height:16px}
 .fd-bug-mark{padding:0 6px;border:1px solid var(--k-bug);border-radius:999px;line-height:16px;color:var(--k-bug)}
 .fd-bug-mark.is-suspected{border-style:dashed}
 .findings .fd-jump,.findings .fd-event-link,.findings .fd-insight-link{color:var(--fd-muted);text-decoration:underline dotted;text-underline-offset:3px}
