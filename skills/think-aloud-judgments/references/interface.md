@@ -38,7 +38,7 @@
 - 详情（`activities`）是给人和筛选用的关键词清单：每项是本场实际参与过的一个玩法、系统、地区、任务或首领，写玩家认得的专名（如“渡尘墟”“四海鏖战·卫陵鸦”“武林录·镇守大散关”），叫法尽量和资料库 `tags.json` 里的标签名一致。不写“剧情观看”“NPC 交谈”这类没有检索价值的过程描述，除非本场只有这些。
 - 合并重复项，只提到、没参与的不写。每项至少引用一个本次结果里的活动（`event_ids`），最多 32 项，每项最多 24 字，不能有加号、方括号。
 
-上面是 Bash 写法。Windows 上 Bash 不稳定时，在 PowerShell 里运行同样的命令即可：变量写成 `$PY`、`$SESSION` 这样的 PowerShell 变量，路径照样加引号。命令输出很大（全场 `evidence`、`context-read --compact` 可达几百 KB），先写进工作目录里的文件，再分段读。
+上面是 Bash 写法。Windows 上 Bash 不稳定时，在 PowerShell 里运行同样的命令即可：变量写成 `$PY`、`$SESSION` 这样的 PowerShell 变量，路径照样加引号。PowerShell 里 `python -c "…"` 带花括号的内联脚本会被拆坏，要处理输出就把脚本写成工作目录里的 .py 文件再运行。命令输出很大（全场 `evidence`、`context-read --compact` 可达几百 KB），先写进工作目录里的文件，再分段读。
 
 所有命令输出 UTF-8 JSON：成功是 `{ok:true,data:...}`，失败是 `{ok:false,error:...}`。令牌不要写进任何文档。时间一律是“相对录像开始的秒数”。
 
@@ -106,7 +106,7 @@
 
 ## 校验规则（不满足会被拒）
 
-- 活动：`basis` 只能是 `explicit`、`observed`、`inferred`；`kind` 只能是 `friction`、`positive`、`routine`、`question`。每个活动至少一条证据，`explicit` 的必须引用原话。活动的所有证据都必须落在它自己的 start–end 之内。标题最多 160 字。
+- 活动：`basis` 只能是 `explicit`、`observed`、`inferred`；`kind` 只能是 `friction`、`positive`、`routine`、`question`。每个活动至少一条证据，`explicit` 的必须引用原话。活动的所有证据都必须落在它自己的 start–end 之内（原话按整句的起止算，结束时间也不能超出）。标题最多 160 字。
 - 证据类型：原话 `{"kind":"quote","ref":"t…"}`；原话节选 `{"kind":"quote_words","ref":"t…","word_range":[起,止)}`（半开区间、原始词序号，取自 `quote-words`）；画面 `{"kind":"video","start":…,"end":…,"observation":"…"}`，一帧时 start=end，而且必须落在 `coverage.video_ranges` 里；操作 `{"kind":"input","ref":"i…"}`，编号取自 `evidence` 区间或 `inputs-summary` 的首尾编号，`coverage.inputs` 不能是 `none`。引用不要手抄文字，程序会自动展开原文和时间。
 - 实例 `said` 至少一条，只能是 quote 或 quote_words。
 - `refers_to.basis` 只能是 `same_time`、`retrospective`、`unknown`、`earlier_session`。前三种必须有录像时长内的 start、end；回顾实例的 end 不能晚于最早那句 `said` 的开始时间。`earlier_session` 不填 start、end，`note` 必填。`note` 最多 200 字。
