@@ -123,14 +123,15 @@ v2 保留 v1 的 session_id、revision、summary、coverage、events、questions
   "said": [{"kind":"quote","ref":"t000012"}, {"kind":"quote_words","ref":"t000016","word_range":[0,5]}],
   "refers_to": {"start":182.0,"end":247.0,"basis":"retrospective","note":"回顾刚才的界面"},
   "screen": "bag.items", "elements": ["bag.items.auto_use"],
-  "kind": "confusion", "statement": "记录者对刚才的状态变化不确定。",
+  "kind": "outcome_unclear", "evidence_source": "spoken", "valence": "negative", "intensity": 1, "owner": "visual_hierarchy",
+  "statement": "记录者对刚才的状态变化不确定。",
   "issue_tags": ["TA-03"],
   "evidence": [{"kind":"video","start":226.0,"end":226.0,"observation":"所指按钮仍显示原状态。"}],
   "confidence": "medium"
 }
 ```
 
-`said` 必须有原话引用；其文字、时间和说话人由程序从原始逐字稿展开。`refers_to` 使用录像秒数，范围不能越界；`basis` 为 `same_time|retrospective|unknown|earlier_session`，回顾实例的结束不得晚于最早 `said.start`，可选 note 最多 200 字；`earlier_session` 表示所指在本场之前的游玩，不填 start/end，note 必填。可选 `compare_to:{start,end,note?}` 记录比较判断的第二个时刻。`event_id` 必须存在；statement 最多 300 字，不添加原话未表达的判断。kind 为 `confusion|obstacle|cost|positive|negative|expectation|suggestion|self_correction|observation`（`obstacle` 是做不到或卡住，`cost` 是能做到但步骤多、耗时或重复），其中 negative 是对设计价值或动机的否定评价，obstacle 是操作受阻；confidence 为 `high|medium|low`。补充 evidence 最多 12 条：画面事实（observation 最多 300 字且位于 coverage 已检查范围），或操作引用 `{kind:"input",ref}`（需 coverage.inputs 不为 none）。`inputs-summary SESSION --start S --end E` 把同一按键或摇杆的连续操作合并成区段，首尾编号可直接作为操作引用，每次最多 10 分钟。
+`said` 必须有原话引用；其文字、时间和说话人由程序从原始逐字稿展开。`refers_to` 使用录像秒数，范围不能越界；`basis` 为 `same_time|retrospective|unknown|earlier_session`，回顾实例的结束不得晚于最早 `said.start`，可选 note 最多 200 字；`earlier_session` 表示所指在本场之前的游玩，不填 start/end，note 必填。可选 `compare_to:{start,end,note?}` 记录比较判断的第二个时刻。`event_id` 必须存在；statement 最多 300 字，不添加原话未表达的判断。kind 按交互哪一环断了取值：`goal_unclear|unnoticed|hard_to_perceive|not_found|misunderstood|unsupported|hard_to_execute|execution_cost|outcome_unclear|value|observation`（定义见 skills/think-aloud-judgments），observation 以外须带 `evidence_source`（behavior|spoken|expert）、`valence`（positive|negative|neutral）、`intensity`（1–3）、`owner`（ui_interaction|visual_hierarchy|copy|tutorial|system|input|implementation|gameplay|art）；`value` 只有负面时算问题。11-05 之前整理的结果用旧分类 `confusion|obstacle|cost|positive|negative|expectation|suggestion|self_correction|observation`，照常可读，界面上以灰色显示，重新整理后换成新分类。`validate` 和 `submit` 回执里的 `statement_check` 提醒原话引用过多、写了读者看不到的东西，不拦截；confidence 为 `high|medium|low`。补充 evidence 最多 12 条：画面事实（observation 最多 300 字且位于 coverage 已检查范围），或操作引用 `{kind:"input",ref}`（需 coverage.inputs 不为 none）。`inputs-summary SESSION --start S --end E` 把同一按键或摇杆的连续操作合并成区段，首尾编号可直接作为操作引用，每次最多 10 分钟。
 
 `issue_tags` 必须已登记。screen 按界面组命名：出现和上一屏不同的一级或二级页签即为新的一组，编号写 `组名/一级页签/二级页签`（组名取上一屏打开它时的入口文字；新界面有自己的标题且与入口不同时写 `入口名（标题）`，如 `活动（燕语江湖）/活动`；入口只是“前往”“查看”类动作按钮时用标题；入口与界面都没有文字、或入口文字随状态变化时，暂定组名并交用户确认），这一组里打开的侧窗、弹窗写在组下；可为 null。存在游戏目录时，非空 screen 必须在目录中，目录里还没有的新界面标 `screen_proposed: true`，由跨场次整理按同一规则收入目录，原写法记为别名；同一组界面可从多个入口进入时只保留一个编号，其他入口的写法记为别名。界面之间可以交叉跳转，跳转经过的界面组按顺序写在可选的 `route` 列表，同组内切页签、开侧窗不记；screen 只放最终所在界面。`catalog-rename VAULT GAME OLD NEW` 把目录里的界面改为新编号，旧编号保留为别名。screen 为 null 时可用 `screen_context` 说明原因：`hud`（HUD、战斗、大世界）、`multi_screen`（跨多个界面的总体评价）、`outside_game`（游戏外窗口）、`unknown`。elements 记录画面上的文字，不要求在目录中登记。`validate`、`submit`、`status` 均支持 v2，提交和状态返回实例数量。回看在所属事件下显示中文类型、陈述、标签，以及分别定位原话起点和所指起点的“说”“指”按钮；指向本场之前的只显示说明，有对照时刻的另有“对照”按钮。人工校准仍仅作用于事件。
 
