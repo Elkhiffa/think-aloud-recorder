@@ -109,8 +109,8 @@
 - 实例 `said` 至少一条，只能是 quote 或 quote_words。
 - `refers_to.basis` 只能是 `same_time`、`retrospective`、`unknown`、`earlier_session`。前三种必须有录像时长内的 start、end；回顾实例的 end 不能晚于最早那句 `said` 的开始时间。`earlier_session` 不填 start、end，`note` 必填。`note` 最多 200 字。
 - `compare_to` 可选：`{start, end, note?}`，在录像时长之内。
-- `kind` 只能是 `goal_unclear`、`unnoticed`、`not_found`、`misunderstood`、`unsupported`、`hard_to_execute`、`execution_cost`、`outcome_unclear`、`value`、`observation`（含义见 SKILL.md“问题类型”）；`confidence` 只能是 `high`、`medium`、`low`。
-- `evidence_source` 只能是 `behavior`、`spoken`、`expert`；`valence` 只能是 `positive`、`negative`、`neutral`；`intensity` 是 1–3 的整数；`owner` 只能是 `ui_interaction`、`visual_hierarchy`、`copy`、`tutorial`、`system`、`input`、`implementation`、`gameplay`。`observation` 以外的实例四项都必填。
+- `kind` 只能是 `goal_unclear`、`unnoticed`、`hard_to_perceive`、`not_found`、`misunderstood`、`unsupported`、`hard_to_execute`、`execution_cost`、`outcome_unclear`、`value`、`observation`（含义见 SKILL.md“问题类型”）；`confidence` 只能是 `high`、`medium`、`low`。
+- `evidence_source` 只能是 `behavior`、`spoken`、`expert`；`valence` 只能是 `positive`、`negative`、`neutral`；`intensity` 是 1–3 的整数；`owner` 只能是 `ui_interaction`、`visual_hierarchy`、`copy`、`tutorial`、`system`、`input`、`implementation`、`gameplay`、`art`。`observation` 以外的实例四项都必填。
 - `screen` 是字符串或 null。目录存在时，不在目录里的界面必须标 `screen_proposed: true`，否则整份结果被拒。`route` 可选，最多 20 个界面名。`screen_context` 只在 `screen` 为 null 时使用，取值 `hud`、`multi_screen`、`outside_game`、`unknown`。`elements` 是画面文字列表，最多 20 个。
 - `statement` 最多 300 字；`evidence` 最多 12 条，每条 observation 最多 300 字；`issue_tags` 填 `[]`；只有记录者明说 bug 或用落地实现问题的说法时填 `["BUG"]`（见 SKILL“与类型并列的标注”）。
 - `bug` 可选：`"explicit"`（明说，`issue_tags` 必须含 `BUG`）或 `"suspected"`（agent 判断，`issue_tags` 不能含 `BUG`）；不是 bug 就不写。旧结果只有 `BUG` 标签的按 `explicit` 读。
