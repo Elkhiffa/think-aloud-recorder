@@ -378,8 +378,11 @@ def input_summary(folder, start, end, gap=0.5):
         segment.update(device=device, label=code, kind=kind)
         if directions:
             segment['directions'] = ''.join(d for d, _ in sorted(directions.items(), key=lambda item: -item[1])[:3])
-    return dict(session_id=meta['id'], revision=revision, range=dict(start=start, end=end), gap_seconds=gap,
-                state=inputs.get('state'), alignment=inputs.get('alignment'), raw_intervals=len(rows), segments=segments)
+    value = dict(session_id=meta['id'], revision=revision, range=dict(start=start, end=end), gap_seconds=gap,
+                 state=inputs.get('state'), alignment=inputs.get('alignment'), raw_intervals=len(rows), segments=segments)
+    if inputs.get('capture_notice'):
+        value['capture_notice'] = inputs['capture_notice']
+    return value
 
 
 def evidence(folder, start=None, end=None):
@@ -405,7 +408,7 @@ def evidence(folder, start=None, end=None):
                  timebase='video_seconds', speakers=speakers,
                  paths={name: str(_path(folder, name)) for name in material['sources'] if material['sources'][name]},
                  transcript=segments, inputs={k: inputs[k] for k in
-                     ('state', 'error', 'alignment', 'recording_scope', 'timebase', 'input_corrections') if k in inputs},
+                     ('state', 'error', 'alignment', 'recording_scope', 'timebase', 'input_corrections', 'capture_notice') if k in inputs},
                  coverage=dict(transcript_segments=len(segments),
                                last_transcript_end=max((s['end'] for s in segments), default=None),
                                input_intervals=len(inputs['intervals']), gaps=inputs['gaps'],

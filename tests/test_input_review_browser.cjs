@@ -58,6 +58,10 @@ async function main(){
  await page.locator('[data-input-mode=keys]').click();await seek(4.8);await settleVideo();await page.screenshot({path:path.join(out,'keyboard-1280.png')});
 await check('no page overflow at a small desktop size',async()=>{await page.setViewportSize({width:980,height:720});await page.waitForTimeout(150);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);const g=await playback();assert.ok(g.rect.width>200&&g.rect.height>100);await settleVideo();await page.screenshot({path:path.join(out,'keyboard-980.png')});});
  await check('old, disabled, failed and missing input states are distinct',async()=>{for(const [inputs,text] of [[null,'此场次没有操作记录'],[{state:'disabled'},'此场次未启用操作记录'],[{state:'failed',error:'合成采集异常'},'操作记录采集失败'],[{state:'unavailable'},'操作记录文件不可用']]){await page.evaluate(inputs=>window.__snapshot.inputs=inputs,inputs);await page.waitForFunction(text=>document.querySelector('#timelineState').textContent===text,text);}});
+ await check('capture notice shows only for a session that carries one and fills the empty recent-input slot',async()=>{
+   await page.evaluate(()=>window.__snapshot.inputs={state:'complete',intervals:[],gaps:[],capture_notice:'合成采集提示'});await page.waitForFunction(()=>document.querySelector('#inputCaptureNotice').textContent==='合成采集提示'&&!document.querySelector('#inputCaptureNotice').hidden);assert.equal(await page.locator('#inputState').textContent(),'合成采集提示');
+   await page.evaluate(()=>window.__snapshot.inputs={state:'unavailable'});await page.waitForFunction(()=>document.querySelector('#inputCaptureNotice').hidden&&document.querySelector('#timelineState').textContent==='操作记录文件不可用');
+ });
  await check('missing transcript is visibly failed while video remains playable',async()=>{
    await page.locator('#transcriptTab').click();await seek(4.8);const before=await playback();
    await page.evaluate(inputs=>{window.__snapshot.inputs=inputs;window.__snapshot.transcription={state:'failed',error:'逐字稿暂不可用：已完成的逐字稿文件缺失，请恢复文件或重新转写；录像仍可回看。'};window.__snapshot.segments=[];},structuredClone(data.inputs));

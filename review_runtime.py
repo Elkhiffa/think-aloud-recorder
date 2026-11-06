@@ -167,8 +167,11 @@ def input_payload(folder, meta):
                 base[key]=[dict(row,end=min(row['end'],revoked)) for row in base[key] if row['start']<revoked]
             base['gaps'].append(dict(start=revoked,end=end,type='capture',reason='前台边界无法确认，不可信操作数据已清除'))
             base.update(state='failed',error='操作记录存在撤销区间，已隐藏不可信数据。')
-        from input_capture import compact_gaps
+        from input_capture import capture_notice, compact_gaps
         base['gaps'] = compact_gaps(base['gaps'])
+        notice = capture_notice(data, base['intervals'], base['gaps'], base.get('window_states'))
+        if notice:
+            base['capture_notice'] = notice
         return base
     except (OSError, ValueError, TypeError) as error:
         return {**base, 'state': 'failed', 'intervals': [], 'gaps': [], 'error': _safe_error(error)}

@@ -890,7 +890,7 @@
       const key=[state.mode,device,message,...active.map(item=>item.id+':'+item.active)].join('|');
       if(state.mode==='device'&&(key!==state.lastInput||active.some(item=>!item.active)))renderDevice(device,active,time);
       if(key===state.lastInput)return;state.lastInput=key;
-            $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):'';
+            $('inputState').textContent=gap?(gap.reason||gapName(gap)):message?(source.error||message):active.length?'':source.capture_notice||'';
       $('inputState').classList.toggle('is-gap',!!gap);$('inputState').title=message;
       $('currentKeys').hidden=state.mode!=='keys'||!!message;$('deviceView').hidden=state.mode!=='device'||!!message;
       if(state.mode==='device')fitDevice();
@@ -1146,6 +1146,7 @@
       $('inputPanel').classList.toggle('is-empty',source.intervals.length===0);
       source=filterInputScope(source,state.scope);bands=inputVisualBands(source.intervals,source.gaps);repack();index=intervalIndex(source.intervals);gapIndex=intervalIndex(source.gaps);
       $('inputScopeLabel').hidden=source.recording_scope!=='all';
+      $('inputCaptureNotice').textContent=source.capture_notice||'';$('inputCaptureNotice').hidden=!source.capture_notice;
       const transcript=data.transcription?.state||'ready',isReady=transcript==='ready';quoteIndex=intervalIndex(isReady?segments.map((item,i)=>({...item,index:i})):[]);$('transcriptTab').disabled=!isReady;$('transcriptTab').textContent=isReady?'原话':transcript==='failed'?'转写失败':transcript==='not_started'?'尚未转写':transcript==='no_narration'?'没有口述':'转写中';$('transcriptTab').title=data.transcription?.error||'';
       if(!isReady&&state.tab==='transcript')setTab('inputs');
       const message=inputMessage(),gapCount=source.gaps.filter(gap=>!gap.preparation).length;$('timelineState').textContent=message||`${bands.length} 段记录${gapCount?' · '+gapCount+' 处缺口':''}`;$('timelineState').title=source.error||message||`${source.intervals.length} 个原始采样区间；暖色实线为超过 0.5 秒的长按，深色为短按；虚线浅色为合并活动，短横线为实际输入。内容区滚轮浏览，时间刻度区滚轮缩放。`;
