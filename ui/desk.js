@@ -3,7 +3,7 @@
 (function(){
   const $=id=>document.getElementById(id);
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  // The problem kinds (interaction-cycle ones and the legacy four); a session's 问题数 counts only these.
+  // The problem types (design defects and the legacy four); a session's 问题数 counts only these.
   const Findings=globalThis.ThinkAloudFindings,KIND=Findings.PROBLEM;
   const WEEK='日一二三四五六';
   const STATES=[['all','全部'],['done','已整理'],['todo','待整理'],['running','转写中'],['failed','失败']];
@@ -60,9 +60,9 @@
     const total={};state.sessions.forEach(s=>Object.entries(s.preprocessing?.kinds||{}).forEach(([k,n])=>{if(k in KIND)total[k]=(total[k]||0)+n;}));
     const option=key=>`<label class="k-${key}"><input type="checkbox" data-kind="${key}"${state.kinds.has(key)?' checked':''}><i class="dot"></i><span class="kn">${KIND[key]}</span><b>${total[key]||0}</b></label>`;
     const shown=keys=>keys.filter(k=>total[k]||state.kinds.has(k));
-    const cycle=shown(Object.keys(Findings.CYCLE)),legacy=shown(Object.keys(Findings.LEGACY));
-    $('kindMenu').innerHTML=cycle.map(option).join('')+(legacy.length?`<div class="km-sep">旧分类（重整前的场次）</div>${legacy.map(option).join('')}`:'')
-      +(cycle.length||legacy.length?'':'<div class="km-sep">还没有整理出问题</div>');
+    const defects=shown(Object.keys(Findings.DEFECTS)),legacy=shown(Object.keys(Findings.LEGACY));
+    $('kindMenu').innerHTML=defects.map(option).join('')+(legacy.length?`<div class="km-sep">旧分类（重整前的场次）</div>${legacy.map(option).join('')}`:'')
+      +(defects.length||legacy.length?'':'<div class="km-sep">还没有整理出问题</div>');
     $('kindToggle').textContent=state.kinds.size?`问题类型 · ${state.kinds.size}`:'问题类型';$('kindToggle').classList.toggle('on',state.kinds.size>0);
   }
   function item(s){

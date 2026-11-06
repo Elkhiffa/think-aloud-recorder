@@ -19,7 +19,7 @@ def press(start, end, code='A', device='xbox'):
 
 class ClipExportTests(unittest.TestCase):
     def test_controls_fall_into_the_review_timeline_columns(self):
-        """触发路径：同一个操作在回看时间轴和动图里要出现在同一类位置，看过回看页的人不用重新认。"""
+        """触发路径：同一个操作在回看时间轴和视频里要出现在同一类位置，看过回看页的人不用重新认。"""
         self.assertEqual(input_channel(stick(0, 1, '→', 1)), 'direction')
         self.assertEqual(input_channel(press(0, 1, 'KeyW', 'keyboard')), 'direction')
         self.assertEqual(input_channel(stick(0, 1, '→', 1, 'RightStick')), 'pointing')
@@ -75,7 +75,7 @@ class ClipExportTests(unittest.TestCase):
         self.assertEqual(len(operation_tracks(rows, 9, 14)['keys']), 3)
 
     def test_a_held_control_is_lit_then_times_out_like_the_review_page(self):
-        """触发路径：看动图时要分清正在按和刚按过 → 按住时全亮，松开后两秒内淡出，和回看页一致。"""
+        """触发路径：看视频时要分清正在按和刚按过 → 按住时全亮，松开后两秒内淡出，和回看页一致。"""
         chip = dict(start=10, end=11)
         self.assertEqual(chip_strength(chip, 9), 0)
         self.assertEqual(chip_strength(chip, 10.5), 1)
@@ -83,11 +83,11 @@ class ClipExportTests(unittest.TestCase):
         self.assertEqual(chip_strength(chip, 13), 0)
 
     def test_length_and_width_are_checked_before_touching_the_session(self):
-        """触发路径：agent 想把一整段流程都截进去 → 明确拒绝并说明只截这次操作和结果，动图太长没人看。"""
-        with self.assertRaisesRegex(ValueError, '2–30'):
-            make_clip('不存在的场次', 0, 60, 'x.gif')
+        """触发路径：agent 想把一整段流程都截进去 → 明确拒绝并说明只截这次操作和结果，视频太长没人看。"""
+        with self.assertRaisesRegex(ValueError, '2–20'):
+            make_clip('不存在的场次', 0, 60, 'x.mp4')
         with self.assertRaisesRegex(ValueError, '480'):
-            make_clip('不存在的场次', 0, 5, 'x.gif', width=200)
+            make_clip('不存在的场次', 0, 5, 'x.mp4', width=200)
 
 
 class StoredClipTests(unittest.TestCase):
@@ -112,8 +112,8 @@ class StoredClipTests(unittest.TestCase):
         self.assertNotIn('clip', agent.validate_result(self.folder, self.candidate())['instances'][0]['evidence'][0])
 
     def test_a_clip_must_be_short_and_few(self):
-        """触发路径：agent 想把一整段流程或很多段都做成动图 → 明确拒绝，动图只放这次操作和它的结果。"""
-        for spans, message in (([(1, 1.5)], '2–30'), ([(2, 6), (3, 7), (4, 8)], '最多 2 段')):
+        """触发路径：agent 想把一整段流程或很多段都做成视频 → 明确拒绝，视频只放这次操作和它的结果。"""
+        for spans, message in (([(1, 1.5)], '2–20'), ([(2, 6), (3, 7), (4, 8)], '最多 2 段')):
             with self.assertRaisesRegex(ValueError, message):
                 agent.validate_result(self.folder, self.marked(*spans))
         candidate = self.marked((2, 6))
@@ -122,10 +122,10 @@ class StoredClipTests(unittest.TestCase):
             agent.validate_result(self.folder, candidate)
 
     def test_submit_makes_the_clips_and_keeps_the_material_revision(self):
-        """触发路径：提交带动图标记的结果 → 场次文件夹里有动图，回执写明数量，素材版本不变、结果继续有效。"""
+        """触发路径：提交带视频标记的结果 → 场次文件夹里有视频，回执写明数量，素材版本不变、结果继续有效。"""
         def render(folder, start, end, output, *args):
             output.parent.mkdir(exist_ok=True)
-            output.write_bytes(b'GIF')
+            output.write_bytes(b'MP4')
         with patch('clip_export._render', render):
             summary = self.submit(self.marked((2, 6)))
         self.assertEqual((summary['clips']['made'], summary['clips']['failed']), (1, []))
@@ -149,21 +149,21 @@ class StoredClipTests(unittest.TestCase):
         self.assertEqual(summary['clips']['failed'], [dict(start=2, end=6, error='解码失败')])
 
     def test_the_insight_bridge_reads_a_stored_clip_and_remakes_a_missing_one(self):
-        """触发路径：洞察里点开带动图的论据 → 读场次里存好的文件；只复制了部分文件的场次，现做一个再显示。"""
+        """触发路径：洞察里点开带视频的论据 → 读场次里存好的文件；只复制了部分文件的场次，现做一个再显示。"""
         api = InsightAPI(self.vault, self.vault / 'app', None)
         def render(folder, start, end, output, *args):
             output.parent.mkdir(exist_ok=True)
-            output.write_bytes(b'GIF')
+            output.write_bytes(b'MP4')
         with patch('clip_export._render', render) as _:
             made = api.clip('fixture', 2, 6)
-        self.assertEqual(made, dict(ok=True, data='data:image/gif;base64,R0lG'))
+        self.assertEqual(made, dict(ok=True, data='data:video/mp4;base64,TVA0'))
         with patch('clip_export._render', side_effect=AssertionError('stored file is reused')):
             self.assertEqual(api.clip('fixture', 2, 6)['data'], made['data'])
         for start, end in ((float('nan'), 6), (2, 100), (6, 2)):
             self.assertFalse(api.clip('fixture', start, end)['ok'])
 
     def test_the_cited_clips_reach_the_views(self):
-        """触发路径：提交后在洞察和场次库看这条判断 → 两边都拿到时间段，没有动图的判断不多这个字段。"""
+        """触发路径：提交后在洞察和场次库看这条判断 → 两边都拿到时间段，没有视频的判断不多这个字段。"""
         with patch('clip_export._render', lambda *args: None):
             self.submit(self.marked((2, 6)))
         rows = query_instances(self.vault)
@@ -172,21 +172,21 @@ class StoredClipTests(unittest.TestCase):
         self.assertEqual(agent.instance_clips(result['instances'][0]), [])
 
     def test_rebuild_reuses_clears_only_its_own_stale_clips(self):
-        """触发路径：重新整理后时间段变了 → 同一段复用，不再引用的动图清掉，文件夹里别的文件一律不动。"""
+        """触发路径：重新整理后时间段变了 → 同一段复用，不再引用的视频清掉，文件夹里别的文件一律不动。"""
         def render(folder, start, end, output, *args):
             output.parent.mkdir(exist_ok=True)
-            output.write_bytes(b'GIF')
+            output.write_bytes(b'MP4')
         stored = self.folder / CLIP_FOLDER
         stored.mkdir()
-        clip_path(self.folder, 2, 6).write_bytes(b'GIF')
-        clip_path(self.folder, 8, 12).write_bytes(b'GIF')
-        (stored / '我的备注.gif').write_bytes(b'GIF')
+        clip_path(self.folder, 2, 6).write_bytes(b'MP4')
+        clip_path(self.folder, 8, 12).write_bytes(b'MP4')
+        (stored / '我的备注.mp4').write_bytes(b'MP4')
         result = agent.validate_result(self.folder, self.marked((2, 6), (3, 7)))
         with patch('clip_export._render', render):
             summary = build_clips(self.folder, result)
         self.assertEqual((summary['made'], summary['reused'], summary['removed']), (1, 1, 1))
         self.assertFalse(clip_path(self.folder, 8, 12).exists())
-        self.assertTrue((stored / '我的备注.gif').exists())
+        self.assertTrue((stored / '我的备注.mp4').exists())
 
 
 if __name__ == '__main__':

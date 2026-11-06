@@ -1,20 +1,16 @@
 /* 回看与资料台共用的整理结果视图（ui/findings.js）。两个窗口的变量名不同，这里只取共有的几项并给出兜底；
-   问题类型颜色与主窗口、资料台、洞察相同：按交互环节分色系（感知青绿、找到与理解蓝紫、执行暖色、价值玫红），OKLCH 取色、
-   任意两色 OKLab 距离不小于 0.11（work/ui-draft/palette.py）；旧分类（11-05 前整理的场次）用灰阶。回看导出页会内联这份样式。 */
+   问题类型颜色与主窗口、资料台、洞察相同：OKLCH 取色，--k 是填充色，--kt 是文字色（和标题底色对比度不低于 4.5:1）；
+   旧分类（按设计缺陷重整之前的场次）用灰阶。回看导出页会内联这份样式。 */
 .findings{
   --fd-ink:var(--ink,#221E19);--fd-muted:var(--muted,#5F574B);--fd-line:var(--rule,var(--line,#DDD5C6));
   --fd-surface:var(--sheet,var(--surface,#FFFDF9));--fd-hover:var(--paper,var(--bg,#F3EDE1));--fd-chip:var(--fill,var(--soft,#EEE8DC));
-  --k-goal_unclear:oklch(.42 .09 255);--k-unnoticed:oklch(.58 .09 185);--k-hard_to_perceive:oklch(.70 .12 150);--k-not_found:oklch(.60 .13 245);
-  --k-misunderstood:oklch(.55 .15 305);--k-unsupported:oklch(.50 .11 55);--k-hard_to_execute:oklch(.64 .14 45);--k-execution_cost:oklch(.74 .13 85);
-  --k-outcome_unclear:oklch(.72 .09 220);--k-value:oklch(.62 .15 350);
+  --k-missing_info:oklch(.6 .13 245);--k-unclear_meaning:oklch(.55 .15 305);--k-wrong_expectation:oklch(.42 .09 255);--k-no_feedback:oklch(.72 .09 220);--k-visual_hierarchy:oklch(.58 .09 185);--k-blocked:oklch(.64 .14 45);--k-hard_to_operate:oklch(.74 .13 85);--k-missing_feature:oklch(.5 .11 55);--k-value:oklch(.62 .15 350);--k-display_error:oklch(.66 .13 125);
+  --kt-missing_info:oklch(.54 .13 245);--kt-no_feedback:oklch(.54 .09 220);--kt-visual_hierarchy:oklch(.53 .09 185);--kt-blocked:oklch(.56 .14 45);--kt-hard_to_operate:oklch(.55 .13 85);--kt-value:oklch(.565 .15 350);--kt-display_error:oklch(.535 .13 125);
   --k-confusion:oklch(.40 0 0);--k-obstacle:oklch(.52 0 0);--k-cost:oklch(.64 0 0);--k-negative:oklch(.76 0 0);
   --k-bug:oklch(.50 .18 20);--k-other:oklch(.66 .02 80);
   font-size:14px;line-height:1.6;color:var(--fd-ink);overflow-wrap:anywhere
 }
-.findings .k-goal_unclear{--kc:var(--k-goal_unclear)}.findings .k-unnoticed{--kc:var(--k-unnoticed)}.findings .k-hard_to_perceive{--kc:var(--k-hard_to_perceive)}
-.findings .k-not_found{--kc:var(--k-not_found)}.findings .k-misunderstood{--kc:var(--k-misunderstood)}.findings .k-unsupported{--kc:var(--k-unsupported)}
-.findings .k-hard_to_execute{--kc:var(--k-hard_to_execute)}.findings .k-execution_cost{--kc:var(--k-execution_cost)}
-.findings .k-outcome_unclear{--kc:var(--k-outcome_unclear)}.findings .k-value{--kc:var(--k-value)}
+.findings .k-missing_info{--kc:var(--k-missing_info);--kt:var(--kt-missing_info,var(--k-missing_info))}.findings .k-unclear_meaning{--kc:var(--k-unclear_meaning);--kt:var(--kt-unclear_meaning,var(--k-unclear_meaning))}.findings .k-wrong_expectation{--kc:var(--k-wrong_expectation);--kt:var(--kt-wrong_expectation,var(--k-wrong_expectation))}.findings .k-no_feedback{--kc:var(--k-no_feedback);--kt:var(--kt-no_feedback,var(--k-no_feedback))}.findings .k-visual_hierarchy{--kc:var(--k-visual_hierarchy);--kt:var(--kt-visual_hierarchy,var(--k-visual_hierarchy))}.findings .k-blocked{--kc:var(--k-blocked);--kt:var(--kt-blocked,var(--k-blocked))}.findings .k-hard_to_operate{--kc:var(--k-hard_to_operate);--kt:var(--kt-hard_to_operate,var(--k-hard_to_operate))}.findings .k-missing_feature{--kc:var(--k-missing_feature);--kt:var(--kt-missing_feature,var(--k-missing_feature))}.findings .k-value{--kc:var(--k-value);--kt:var(--kt-value,var(--k-value))}.findings .k-display_error{--kc:var(--k-display_error);--kt:var(--kt-display_error,var(--k-display_error))}
 .findings .k-confusion{--kc:var(--k-confusion)}.findings .k-obstacle{--kc:var(--k-obstacle)}.findings .k-cost{--kc:var(--k-cost)}
 .findings .k-negative{--kc:var(--k-negative)}.findings .k-bug{--kc:var(--k-bug)}.findings .k-other{--kc:var(--k-other)}
 .findings p{margin:0;max-width:none;white-space:normal}
@@ -41,7 +37,7 @@
 .fd-group{margin-top:12px}
 .findings .fd-gh{display:flex;align-items:baseline;gap:8px;width:100%;margin-bottom:4px;padding:8px 12px;line-height:20px;border-left:3px solid var(--kc);border-radius:0 6px 6px 0;background:color-mix(in srgb,var(--kc) 9%,var(--fd-surface))}
 .findings .fd-gh:hover{background:color-mix(in srgb,var(--kc) 15%,var(--fd-surface))}
-.fd-gh .fd-name{font-weight:700;color:var(--kc)}
+.fd-gh .fd-name{font-weight:700;color:var(--kt,var(--kc))}
 .fd-gh small{font-size:12px;color:var(--fd-muted);font-variant-numeric:tabular-nums}
 .fd-sp{flex:1}
 .fd-chev{align-self:center;width:10px;height:6px;flex:none;fill:var(--fd-muted);transition:transform .12s}
@@ -49,7 +45,7 @@
 .fd-rows{list-style:none;margin:0;padding:0 0 0 4px}
 .fd-row{display:grid;grid-template-columns:64px minmax(0,1fr);column-gap:8px;padding:6px 8px;border-radius:8px}
 .fd-row:hover{background:var(--fd-hover)}
-.findings .fd-at{align-self:start;font-size:12px;line-height:22px;color:var(--kc);font-variant-numeric:tabular-nums}
+.findings .fd-at{align-self:start;font-size:12px;line-height:22px;color:var(--kt,var(--kc));font-variant-numeric:tabular-nums}
 .findings .fd-at:hover{text-decoration:underline}
 .fd-quote::before{content:"“"}.fd-quote::after{content:"”"}
 .fd-quote{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
@@ -58,7 +54,7 @@
 .fd-clip i{display:inline-block;margin-right:4px;font-style:normal}
 .fd-clip[aria-expanded=true] i{transform:rotate(90deg)}
 .fd-clip-view{margin-top:8px}
-.fd-clip-view img{display:block;width:100%;max-width:720px;border-radius:4px}
+.fd-clip-view video{display:block;width:100%;max-width:720px;border-radius:4px}
 .fd-meta{display:flex;flex-wrap:wrap;gap:2px 12px;margin-top:2px;font-size:12px;color:var(--fd-muted)}
 .fd-kind{color:var(--fd-ink)}
 .fd-owner{color:var(--fd-ink)}

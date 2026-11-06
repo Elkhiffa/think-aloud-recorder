@@ -1,10 +1,10 @@
-"""A short recording clip with the operation record under it, as a GIF for a team table's screenshot column (agent_cli clip).
+"""A short recording clip with the operation record under it, as an MP4 (agent_cli clip).
 
 Some problems only show as "pressed this, then that happened"; a single screenshot cannot carry them, and QA and planners
 have no session to replay. The band follows the review timeline: fixed cells for direction, pointing and d-pad, then keys in
-order; what is held is lit, then fades over two seconds. The GIF has no sound: the recording's only playable track mixes the game with the recorder's voice, and quotes
-stay out of the table. Text is drawn with Windows GDI because the packaged runtime has no imaging library and its ffmpeg
-has no drawtext filter. Reads the session only.
+order; what is held is lit, then fades over two seconds. The clip has no sound: the recording's only playable track mixes the game
+with the recorder's voice, and quotes stay out of the table. Text is drawn with Windows GDI because the packaged runtime has no
+imaging library and its ffmpeg has no drawtext filter. Reads the session only.
 """
 import ctypes
 from ctypes import wintypes
@@ -22,9 +22,12 @@ import numpy as np
 import agent_protocol as protocol
 
 MIN_SECONDS, MAX_SECONDS = protocol.CLIP_SECONDS
-CLIP_FOLDER = '证据动图'
-CLIP_NAME = re.compile(r'^\d+\.\d{2}-\d+\.\d{2}\.gif$')
-FPS = 10
+CLIP_FOLDER = '证据视频'
+CLIP_NAME = re.compile(r'^\d+\.\d{2}-\d+\.\d{2}\.mp4$')
+FPS = 24
+# QA reads small controls in these, so they keep the recording's width; the slower preset pays for that in size.
+# The cap sits well above the recording's own 4.8 Mbps: past that, a re-encode only spends bytes on the source's compression noise.
+WIDTH, CRF, PRESET, MAXRATE = 1920, 20, 'medium', '8M'
 RETENTION = 2
 # The review timeline's columns. A stick or pointer reports dozens of samples a second, so a chip per flick drowns the few
 # presses that carry the meaning: direction, pointing and d-pad each hold one cell showing the current direction.
@@ -226,14 +229,16 @@ def _band(width, height, tracks, t, clip_start, text, small):
     return canvas.astype(np.uint8)
 
 
-def _half(canvas):
-    """Average 2x2 blocks: dropping every other pixel turns the band's text and the game's small print into noise."""
-    a = canvas.astype(np.uint16)
-    return ((a[::2, ::2] + a[1::2, ::2] + a[::2, 1::2] + a[1::2, 1::2]) // 4).astype(np.uint8)
+def _shrunk(canvas, factor):
+    """Average blocks of pixels: dropping pixels turns the band's text and the game's small print into noise."""
+    height, width = canvas.shape[0] // factor, canvas.shape[1] // factor
+    blocks = canvas[:height * factor, :width * factor].reshape(height, factor, width, factor, 3)
+    # Even sizes, because the sheet goes to an encoder.
+    return blocks.mean(axis=(1, 3)).astype(np.uint8)[:height // 2 * 2, :width // 2 * 2]
 
 
 def _sheet_frames(frames):
-    """Contact sheet tiles: at most 16, evenly spaced, so an agent that cannot watch a GIF can see what it shows."""
+    """Contact sheet tiles: at most 16, evenly spaced, so an agent that cannot watch a video can see what it shows."""
     step = max(1, math.ceil(len(frames) / 16))
     tiles = frames[::step][:16]
     rows = [np.concatenate(tiles[i:i + 2] + ([np.zeros_like(tiles[0])] if len(tiles[i:i + 2]) == 1 else []), axis=1) for i in range(0, len(tiles), 2)]
@@ -242,7 +247,7 @@ def _sheet_frames(frames):
 
 def clip_path(folder, start, end):
     """Named by its span, so resubmitting the same span reuses the file."""
-    return Path(folder) / CLIP_FOLDER / f'{start:.2f}-{end:.2f}.gif'
+    return Path(folder) / CLIP_FOLDER / f'{start:.2f}-{end:.2f}.mp4'
 
 
 def build_clips(folder, result=None):
@@ -273,42 +278,44 @@ def build_clips(folder, result=None):
     return dict(folder=CLIP_FOLDER, made=made, reused=reused, removed=removed, failed=failed, seconds=round(time.monotonic() - began, 1))
 
 
-def make_clip(folder, start, end, output, width=960, sheet=None):
+def make_clip(folder, start, end, output, width=WIDTH, sheet=None):
     """A clip in the agent's own work folder, to check what a span shows before citing it."""
-    if not isinstance(width, int) or not 480 <= width <= 1280:
-        raise ValueError('动图宽度需在 480–1280 之间。')
+    if not isinstance(width, int) or not 480 <= width <= 1920:
+        raise ValueError('视频宽度需在 480–1920 之间。')
     if not MIN_SECONDS <= end - start <= MAX_SECONDS:
         raise ValueError(f'片段长度需在 {MIN_SECONDS}–{MAX_SECONDS} 秒之间：只截这次操作和它的结果。')
     session = Path(folder).resolve()
     targets = [Path(output).resolve()] + ([Path(sheet).resolve()] if sheet else [])
-    if targets[0].suffix.lower() != '.gif' or (sheet and targets[1].suffix.lower() != '.jpg') or any(path.is_relative_to(session) for path in targets):
-        raise ValueError('动图需保存为场次以外的 .gif，拼图为 .jpg。')
+    if targets[0].suffix.lower() != '.mp4' or (sheet and targets[1].suffix.lower() != '.jpg') or any(path.is_relative_to(session) for path in targets):
+        raise ValueError('视频需保存为场次以外的 .mp4，拼图为 .jpg。')
     if any(path.exists() for path in targets):
         raise ValueError('输出文件已存在，请使用新的文件名。')
     return _render(folder, start, end, targets[0], width, targets[1] if sheet else None)
 
 
-def _render(folder, start, end, output, width=960, sheet=None):
+def _render(folder, start, end, output, width=WIDTH, sheet=None):
     meta, material, revision, _ = protocol._ready(folder)
     protocol._span(dict(start=start, end=end), material['duration'])
     width = width // 2 * 2
+    shrink = max(2, width // 480)
     inputs = protocol._normalized_inputs(folder, meta, material['duration'])
     tracks = operation_tracks(inputs.get('intervals', []), start, end)
     from recorder import FFMPEG, HIDDEN
     output.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output.with_name(output.stem + '.' + uuid.uuid4().hex + '.gif')
+    tmp = output.with_name(output.stem + '.' + uuid.uuid4().hex + '.mp4')
     text, small, kept, process = None, None, [], None
     try:
         with av.open(str(protocol._path(folder, '录像.mp4'))) as container:
             stream = container.streams.video[0]
             origin = (container.start_time or 0) / av.time_base
             height = int(stream.height * width / stream.width) // 2 * 2
-            band = max(44, width // 18) // 2 * 2
-            text, small = _Text(band * 2 // 5), _Text(band * 3 // 10)
+            # A session recorded without inputs has nothing to show; an empty band would read as "pressed nothing".
+            band = max(44, width // 18) // 2 * 2 if inputs.get('intervals') else 0
+            if band:
+                text, small = _Text(band * 2 // 5), _Text(band * 3 // 10)
             size = f'{width}x{height + band}'
             process = subprocess.Popen([str(FFMPEG), '-nostdin', '-hide_banner', '-loglevel', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', size, '-r', str(FPS), '-i', '-',
-                                        '-vf', 'split[a][b];[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle',
-                                        '-loop', '0', '-y', str(tmp)], stdin=subprocess.PIPE, creationflags=HIDDEN)
+                                        '-c:v', 'libx264', '-preset', PRESET, '-crf', str(CRF), '-maxrate', MAXRATE, '-bufsize', MAXRATE, '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-y', str(tmp)], stdin=subprocess.PIPE, creationflags=HIDDEN)
             container.seek(int((start + origin) / stream.time_base), stream=stream, backward=True)
             due, count = start, 0
             for frame in container.decode(stream):
@@ -318,15 +325,16 @@ def _render(folder, start, end, output, width=960, sheet=None):
                 if t > end:
                     break
                 picture = frame.reformat(width=width, height=height, format='rgb24').to_ndarray()
-                canvas = np.concatenate([picture, _band(width, band, tracks, t, start, text, small)], axis=0)
+                canvas = np.concatenate([picture, _band(width, band, tracks, t, start, text, small)], axis=0) if band else picture
                 process.stdin.write(canvas.tobytes())
                 if sheet:
-                    kept.append(_half(canvas))
+                    if count % FPS == 0:
+                        kept.append(_shrunk(canvas, shrink))
                 count += 1
                 due += 1 / FPS
         process.stdin.close()
         if process.wait(timeout=120) or not tmp.is_file() or not count:
-            raise ValueError('无法生成动图，请检查录像和这一段时间。')
+            raise ValueError('无法生成视频，请检查录像和这一段时间。')
         if protocol._ready(folder)[2] != revision:
             raise ValueError('生成期间素材已更新，请重试。')
         result = dict(session_id=meta['id'], revision=revision, start=start, end=end, frames=count, keys=len(tracks['keys']))

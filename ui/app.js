@@ -186,9 +186,8 @@ function unfoldGames(){const more=$('#gamesMore'),menu=$('#gamesMoreMenu');if(!m
 let gamesFrame=0;window.addEventListener?.('resize',()=>{cancelAnimationFrame(gamesFrame);gamesFrame=requestAnimationFrame(()=>{unfoldGames();fitGames();});});
 $('#gameTabs').addEventListener('click',async event=>{if(event.target.closest('#gamesMoreButton')){toggleGamesMenu();return;}const target=event.target.closest('[data-game],[data-game-add]');if(!target)return;event.preventDefault();toggleGamesMenu(false);if(target.hasAttribute('data-game-add')){openSheet('new');return;}const id=target.dataset.game;if(id===store.activeId)return;const result=await action('select_preset',[id]);if(!result.ok){gamesSignature='';renderGames();}else{lastSignature='';renderLast();}});
 // The four problem types; a session's 问题数 counts only these.
-// Problem kinds by the broken link of the interaction cycle; the legacy four (greys) belong to sessions organized before 11-05.
-const KIND_NAMES={goal_unclear:'目标不明',unnoticed:'未察觉',hard_to_perceive:'辨识困难',not_found:'找不到',misunderstood:'理解错',
-  unsupported:'功能不支持',hard_to_execute:'执行困难',execution_cost:'执行成本',outcome_unclear:'结果看不懂',value:'价值判断',
+// Problem types are design defects; the legacy four (greys) belong to sessions organized before them.
+const KIND_NAMES={missing_info:'信息缺失',unclear_meaning:'表意不明',wrong_expectation:'预期传达有误',no_feedback:'反馈缺失或延迟',visual_hierarchy:'视觉层级',blocked:'操作阻断',hard_to_operate:'操作困难',missing_feature:'功能缺失',value:'体验与价值',display_error:'表现错误',
   confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
 const WEEKDAYS='日一二三四五六';
 function pad2(n){return String(n).padStart(2,'0');}

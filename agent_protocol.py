@@ -26,12 +26,12 @@ ANALYSIS_CONTEXT = 'analysis-context.json'
 FILES = ('录像.mp4', '口述.flac', '录像.whisper.json',
          'input-events.json', 'input-events.revocation.json')
 MAX_RESULT = 2 * 1024 * 1024
-CLIP_SECONDS = (2, 30)
+CLIP_SECONDS = (2, 20)
 MAX_CLIPS_PER_INSTANCE = 2
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 _RESULT_STORE = None  # (directory, version) once the desktop app configures it
-STATUS_CACHE_VERSION = 2  # 2: problem counts and kind keys for the interaction-cycle kinds
+STATUS_CACHE_VERSION = 3  # 3: problem counts and kind keys for the design-defect types
 CHECKING = dict(state='checking', label='核对中', reason='正在核对整理结果，完成后显示问题分布。')
 
 
@@ -628,17 +628,15 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 raise ValueError('判断实例的 elements 必须是画面文字列表。')
             if not isinstance(tags, list) or any(not isinstance(tag, str) or tag not in issues for tag in tags):
                 raise ValueError('判断实例引用的议题标签不存在。')
-            kind = row.get('kind')
-            if kind not in KINDS and kind not in LEGACY_KINDS:
-                raise ValueError('判断实例类型无效。')
-            # 路径 3：按“交互哪一环断了”整理的结果，问题实例带证据来源、正负与强度、落地方；旧分类的结果没有这四项。
+            # 路径 3：按设计缺陷整理的结果写 design_defect，问题实例带表象、证据来源、正负与强度、落地方；旧场次的结果写 kind，没有这些。
+            defect, kind = row.get('design_defect'), row.get('kind')
+            if defect is not None and kind is not None:
+                raise ValueError('判断实例写 design_defect 就不要再写 kind。')
+            if defect is None and kind not in LEGACY_KINDS:
+                raise ValueError(f'判断实例要写 design_defect：取值为 {"、".join(DESIGN_DEFECTS)}。')
             judged = {}
-            if kind in KINDS:
-                for field, allowed in JUDGED_FIELDS.items():
-                    if field in row or kind != 'observation':
-                        if row.get(field) not in allowed:
-                            raise ValueError(f'判断实例的 {field} 无效：取值为 {"、".join(map(str, allowed))}。')
-                        judged[field] = row[field]
+            if defect is not None:
+                judged = _judged_fields(row, defect)
             # 路径 3：bug 与类型并列（设计没问题、实现出了问题）。明说的同时挂 BUG 标签，疑似的不挂；旧结果只有标签，按明说。
             said_bug = any(tag == 'BUG' or tag.startswith('BUG.') for tag in tags)
             bug = row.get('bug', 'explicit' if said_bug else None)
@@ -646,6 +644,8 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 raise ValueError('判断实例的 bug 只能是 explicit（记录者明说）或 suspected（agent 判断）。')
             if bug == 'explicit' and not said_bug:
                 raise ValueError('明说的 bug 要同时在 issue_tags 里写 BUG。')
+            if defect == 'display_error' and not bug:
+                raise ValueError('表现错误 display_error 一定带 bug：明说填 explicit 并在 issue_tags 写 BUG，否则填 suspected。')
             if bug == 'suspected' and said_bug:
                 raise ValueError('疑似 bug 不挂 BUG 标签：BUG 表示记录者明说是 bug。')
             if row.get('confidence') not in ('high', 'medium', 'low'):
@@ -663,13 +663,13 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 if not any(checked['start'] <= ref['start'] and checked['end'] >= ref['end'] for checked in ranges):
                     raise ValueError('画面证据不在已检查范围内。')
                 if 'clip' in item:
-                    # 路径 3：走焦、按键没反应这类判断要看“按了什么、然后发生什么”，一张静帧说不清，这段由提交时生成动图。
+                    # 路径 3：走焦、按键没反应这类判断要看“按了什么、然后发生什么”，一张静帧说不清，这段由提交时生成视频。
                     if item['clip'] is not True:
                         raise ValueError('画面证据的 clip 只能是 true。')
                     if not CLIP_SECONDS[0] <= ref['end'] - ref['start'] <= CLIP_SECONDS[1]:
-                        raise ValueError(f'动图片段长度需在 {CLIP_SECONDS[0]}–{CLIP_SECONDS[1]} 秒之间：只截这次操作和它的结果。')
+                        raise ValueError(f'视频片段长度需在 {CLIP_SECONDS[0]}–{CLIP_SECONDS[1]} 秒之间：只截这次操作和它的结果。')
                     if sum(1 for other in refs if other.get('clip')) >= MAX_CLIPS_PER_INSTANCE:
-                        raise ValueError(f'每条判断实例最多 {MAX_CLIPS_PER_INSTANCE} 段动图。')
+                        raise ValueError(f'每条判断实例最多 {MAX_CLIPS_PER_INSTANCE} 段视频。')
                     ref['clip'] = True
                 refs.append(ref)
             expanded_bytes += len(json.dumps(said + refs, ensure_ascii=False).encode('utf-8'))
@@ -683,7 +683,7 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 extra['bug'] = bug
             extra.update(judged)
             instances.append(dict(id=ident, event_id=row['event_id'], said=said, refers_to=refers_to, **extra,
-                                  screen=screen, elements=list(selected_elements), kind=kind,
+                                  screen=screen, elements=list(selected_elements), **({'design_defect': defect} if defect else {'kind': kind}),
                                   statement=_text(row.get('statement'), 300, '判断陈述'), issue_tags=list(tags),
                                   evidence=refs, confidence=row['confidence']))
         result['instances'] = instances
@@ -1057,29 +1057,54 @@ def _reanalysis_status(job, raw):
 
 # Judgment kinds by the link of the interaction cycle that broke (skills/think-aloud-judgments); `value` is a problem
 # only when negative. Results organized before 11-05 keep the legacy kinds and stay readable until they are redone.
-PROBLEM_KINDS_NEW = ('goal_unclear', 'unnoticed', 'hard_to_perceive', 'not_found', 'misunderstood', 'unsupported',
-                     'hard_to_execute', 'execution_cost', 'outcome_unclear', 'value')
-KINDS = PROBLEM_KINDS_NEW + ('observation',)
+PROBLEM_DEFECTS = ('missing_info', 'unclear_meaning', 'wrong_expectation', 'no_feedback', 'visual_hierarchy', 'blocked', 'hard_to_operate',
+                   'missing_feature', 'value', 'display_error')
+DESIGN_DEFECTS = PROBLEM_DEFECTS + ('observation',)
+SYMPTOMS = ('goal_unclear', 'unnoticed', 'hard_to_perceive', 'not_found', 'not_understood', 'unsupported', 'cant_execute', 'costly', 'outcome_unclear', 'value')
 LEGACY_KINDS = ('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion', 'self_correction', 'observation')
 PROBLEM_KINDS = ('confusion', 'obstacle', 'cost', 'negative')
 JUDGED_FIELDS = dict(evidence_source=('behavior', 'spoken', 'expert'), valence=('positive', 'negative', 'neutral'), intensity=(1, 2, 3),
                      owner=('ui_interaction', 'visual_hierarchy', 'copy', 'tutorial', 'system', 'input', 'implementation', 'gameplay', 'art'))
-# Headline quote: the links that stop a player first.
-QUOTE_ORDER = ('unsupported', 'hard_to_execute', 'not_found', 'goal_unclear', 'unnoticed', 'misunderstood', 'outcome_unclear',
-               'hard_to_perceive', 'execution_cost', 'value', 'obstacle', 'cost', 'confusion', 'negative')
+# Headline quote: the defects that stop a player first.
+QUOTE_ORDER = ('blocked', 'missing_feature', 'wrong_expectation', 'missing_info', 'unclear_meaning', 'no_feedback', 'visual_hierarchy',
+               'hard_to_operate', 'display_error', 'value', 'obstacle', 'cost', 'confusion', 'negative')
 _FILLER = ('呃', '嗯', '哎', '啊', '哦', '好', '然后', '但是', '那', '对', '就是')
 
 
+def instance_type(item):
+    """A judgment's type across both generations: design_defect, or kind on results from before it."""
+    return item.get('design_defect') or item.get('kind')
+
+
 def is_problem(item):
-    kind = item.get('kind')
-    if kind == 'value':
-        return item.get('valence') != 'positive'
-    return kind in PROBLEM_KINDS_NEW or kind in PROBLEM_KINDS
+    kind = instance_type(item)
+    return kind in PROBLEM_DEFECTS or kind in PROBLEM_KINDS
 
 
-def count_key(item):
-    """Kind key for counts and bars: a positive value judgment is counted apart from the problems."""
-    return 'value_positive' if item.get('kind') == 'value' and item.get('valence') == 'positive' else item.get('kind')
+def _judged_fields(row, defect):
+    if defect not in DESIGN_DEFECTS:
+        raise ValueError(f'判断实例的 design_defect 无效：取值为 {"、".join(DESIGN_DEFECTS)}。')
+    judged = {}
+    for field, allowed in JUDGED_FIELDS.items():
+        if field in row or defect != 'observation':
+            if row.get(field) not in allowed:
+                raise ValueError(f'判断实例的 {field} 无效：取值为 {"、".join(map(str, allowed))}。')
+            judged[field] = row[field]
+    if defect == 'value' and judged['valence'] == 'positive':
+        raise ValueError('正面评价不是缺陷：记成 observation，valence 填 positive，写好在哪。')
+    symptom = row.get('symptom')
+    if symptom is None and defect not in ('display_error', 'observation'):
+        raise ValueError(f'判断实例要写 symptom（玩家卡在哪一环）：取值为 {"、".join(SYMPTOMS)}。')
+    if symptom is not None:
+        if symptom not in SYMPTOMS:
+            raise ValueError(f'判断实例的 symptom 无效：取值为 {"、".join(SYMPTOMS)}。')
+        judged['symptom'] = symptom
+    secondary = row.get('secondary_defect')
+    if secondary is not None:
+        if secondary not in PROBLEM_DEFECTS or secondary == defect:
+            raise ValueError('secondary_defect 要写另一个缺陷，不能和主缺陷相同，也不能是 observation。')
+        judged['secondary_defect'] = secondary
+    return judged
 
 
 # Writing checks the skill asks for but prose rules do not hold reliably; reported, never blocking (like screen_check).
@@ -1109,13 +1134,13 @@ def _digest(result):
     instances = result.get('instances') or []
     kinds = {}
     for item in instances:
-        kinds[count_key(item)] = kinds.get(count_key(item), 0) + 1
+        kinds[instance_type(item)] = kinds.get(instance_type(item), 0) + 1
     quote = None
     for kind in QUOTE_ORDER:
         for item in instances:
             said = (item.get('said') or [{}])[0]
             text = str(said.get('text') or '').strip()
-            if (item.get('kind') == kind and is_problem(item) and item.get('confidence') == 'high' and 8 <= len(text) <= 24
+            if (instance_type(item) == kind and is_problem(item) and item.get('confidence') == 'high' and 8 <= len(text) <= 24
                     and not text.startswith(_FILLER)):
                 quote = dict(text=text, at=said.get('start'), kind=kind, instance=item.get('id'))
                 break

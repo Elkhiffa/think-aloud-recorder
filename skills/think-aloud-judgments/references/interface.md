@@ -15,6 +15,8 @@
 "$PY" -B -X utf8 agent_cli.py context-read "$SESSION" --start 300 --end 420 --compact  # 情景文字，合并相邻相同标题
 "$PY" -B -X utf8 agent_cli.py context-read "$SESSION" --start 330 --end 345            # 不合并，含每帧全部文字和坐标
 "$PY" -B -X utf8 agent_cli.py frame "$SESSION" --at 362.5 --output "$WORK/frames/f0362.5.jpg"  # 默认 1280 宽 JPEG；看小字加 --width 1920；文件名不能重复
+"$PY" -B -X utf8 agent_cli.py clip "$SESSION" --start 360 --end 372 --output "$WORK/clips/c0360.mp4" --sheet "$WORK/clips/c0360.jpg"  # 带操作记录的片段（2–20 秒）和逐帧拼图：看拼图核对操作前后发生了什么
+"$PY" -B -X utf8 agent_cli.py clips-build "$SESSION"  # 按已提交结果补齐证据视频
 "$PY" -B -X utf8 agent_cli.py validate "$SESSION" --file "$WORK/result.json"
 "$PY" -B -X utf8 agent_cli.py submit "$SESSION" --token "$TOKEN" --file "$WORK/result.json"
 "$PY" -B -X utf8 agent_cli.py status "$SESSION"
@@ -85,7 +87,7 @@
     "said": [{"kind": "quote", "ref": "t000020"}],
     "refers_to": {"start": 350, "end": 355, "basis": "same_time", "note": "定位依据，可选"},
     "screen": "背包/道具", "elements": ["自动使用道具"],
-    "kind": "not_found",
+    "design_defect": "missing_info", "symptom": "not_found",
     "evidence_source": "behavior", "valence": "negative", "intensity": 2, "owner": "ui_interaction",
     "statement": "独立可读的陈述：要旨、想做什么、遇到什么、后果、画面原因、为什么算问题。",
     "issue_tags": [],
@@ -98,7 +100,7 @@
     "refers_to": {"basis": "earlier_session", "note": "所指的更早游玩"},
     "compare_to": {"start": 330, "end": 332, "note": "被比较的另一个时刻，可选字段"},
     "screen": "某入口/某页签", "screen_proposed": true, "route": ["另一入口/页签", "某入口/某页签"],
-    "elements": [], "kind": "value", "evidence_source": "expert", "valence": "negative", "intensity": 1, "owner": "gameplay",
+    "elements": [], "design_defect": "value", "symptom": "value", "evidence_source": "expert", "valence": "negative", "intensity": 1, "owner": "gameplay",
     "statement": "……", "issue_tags": [], "evidence": [], "confidence": "medium"
   }]
 }
@@ -107,11 +109,11 @@
 ## 校验规则（不满足会被拒）
 
 - 活动：`basis` 只能是 `explicit`、`observed`、`inferred`；`kind` 只能是 `friction`、`positive`、`routine`、`question`。每个活动至少一条证据，`explicit` 的必须引用原话。活动的所有证据都必须落在它自己的 start–end 之内（原话按整句的起止算，结束时间也不能超出）。标题最多 160 字。
-- 证据类型：原话 `{"kind":"quote","ref":"t…"}`；原话节选 `{"kind":"quote_words","ref":"t…","word_range":[起,止)}`（半开区间、原始词序号，取自 `quote-words`）；画面 `{"kind":"video","start":…,"end":…,"observation":"…"}`，一帧时 start=end，而且必须落在 `coverage.video_ranges` 里；操作 `{"kind":"input","ref":"i…"}`，编号取自 `evidence` 区间或 `inputs-summary` 的首尾编号，`coverage.inputs` 不能是 `none`。引用不要手抄文字，程序会自动展开原文和时间。
+- 证据类型：原话 `{"kind":"quote","ref":"t…"}`；原话节选 `{"kind":"quote_words","ref":"t…","word_range":[起,止)}`（半开区间、原始词序号，取自 `quote-words`）；画面 `{"kind":"video","start":…,"end":…,"observation":"…"}`，一帧时 start=end，而且必须落在 `coverage.video_ranges` 里；判断实例的画面证据可加 `"clip":true`，长度 2–20 秒，每条实例最多 2 段；操作 `{"kind":"input","ref":"i…"}`，编号取自 `evidence` 区间或 `inputs-summary` 的首尾编号，`coverage.inputs` 不能是 `none`。引用不要手抄文字，程序会自动展开原文和时间。
 - 实例 `said` 至少一条，只能是 quote 或 quote_words。
 - `refers_to.basis` 只能是 `same_time`、`retrospective`、`unknown`、`earlier_session`。前三种必须有录像时长内的 start、end；回顾实例的 end 不能晚于最早那句 `said` 的开始时间。`earlier_session` 不填 start、end，`note` 必填。`note` 最多 200 字。
 - `compare_to` 可选：`{start, end, note?}`，在录像时长之内。
-- `kind` 只能是 `goal_unclear`、`unnoticed`、`hard_to_perceive`、`not_found`、`misunderstood`、`unsupported`、`hard_to_execute`、`execution_cost`、`outcome_unclear`、`value`、`observation`（含义见 SKILL.md“问题类型”）；`confidence` 只能是 `high`、`medium`、`low`。
+- `design_defect` 只能是 `missing_info`、`unclear_meaning`、`wrong_expectation`、`no_feedback`、`visual_hierarchy`、`blocked`、`hard_to_operate`、`missing_feature`、`value`、`display_error`、`observation`；`secondary_defect` 可选，取值同上（`observation` 除外）；`symptom` 只能是 `goal_unclear`、`unnoticed`、`hard_to_perceive`、`not_found`、`not_understood`、`unsupported`、`cant_execute`、`costly`、`outcome_unclear`、`value`，`display_error` 和 `observation` 可以不填（含义见 SKILL.md“问题类型”）；`confidence` 只能是 `high`、`medium`、`low`。
 - `evidence_source` 只能是 `behavior`、`spoken`、`expert`；`valence` 只能是 `positive`、`negative`、`neutral`；`intensity` 是 1–3 的整数；`owner` 只能是 `ui_interaction`、`visual_hierarchy`、`copy`、`tutorial`、`system`、`input`、`implementation`、`gameplay`、`art`。`observation` 以外的实例四项都必填。
 - `screen` 是字符串或 null。目录存在时，不在目录里的界面必须标 `screen_proposed: true`，否则整份结果被拒。`route` 可选，最多 20 个界面名。`screen_context` 只在 `screen` 为 null 时使用，取值 `hud`、`multi_screen`、`outside_game`、`unknown`。`elements` 是画面文字列表，最多 20 个。
 - `statement` 最多 300 字；`evidence` 最多 12 条，每条 observation 最多 300 字；`issue_tags` 填 `[]`；只有记录者明说 bug 或用落地实现问题的说法时填 `["BUG"]`（见 SKILL“与类型并列的标注”）。

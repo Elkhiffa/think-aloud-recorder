@@ -74,15 +74,19 @@ def export_rows(vault, sessions=None, all_sessions=False):
         for instance in result['instances']:
             screen = names.get(instance['screen']) or instance['screen']
             bug = bugs.get(instance['id']) or instance.get('bug')
-            rows.append(dict(session_id=ident, instance_id=instance['id'], kind=instance['kind'],
+            clips = protocol.instance_clips(instance)
+            if clips:
+                from clip_export import clip_path
+                clips = [dict(clip, path=str(clip_path(folder, clip['start'], clip['end']))) for clip in clips]
+            rows.append(dict(session_id=ident, instance_id=instance['id'], kind=protocol.instance_type(instance),
                              problem=protocol.is_problem(instance) or bool(bug), bug=bug,
-                             **{key: instance[key] for key in ('evidence_source', 'valence', 'intensity', 'owner') if key in instance},
+                             **{key: instance[key] for key in ('symptom', 'secondary_defect', 'evidence_source', 'valence', 'intensity', 'owner') if key in instance},
                              statement=instance['statement'], quote=_quote(instance),
                              screen=screen, screen_path=screen.split('/') if screen else [],
                              screen_context=instance.get('screen_context'), elements=instance.get('elements') or [],
                              said_start=min(said['start'] for said in instance['said']),
                              refers_start=instance['refers_to'].get('start'), refers_end=instance['refers_to'].get('end'),
-                             frame_at=_frame_at(instance),
+                             frame_at=_frame_at(instance), **({'clips': clips} if clips else {}),
                              event_title=events.get(instance['event_id'], ''), activity=activity.get(instance['event_id'], '')))
             count += 1
         summary.append(dict(session, rows=count))

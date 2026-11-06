@@ -2,9 +2,8 @@
   'use strict';
   const $=id=>document.getElementById(id);
   const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-  // Interaction-cycle kinds first; the legacy ones belong to sessions organized before 11-05.
-  const KIND={goal_unclear:'目标不明',unnoticed:'未察觉',hard_to_perceive:'辨识困难',not_found:'找不到',misunderstood:'理解错',
-    unsupported:'功能不支持',hard_to_execute:'执行困难',execution_cost:'执行成本',outcome_unclear:'结果看不懂',value:'价值判断',
+  // Design defects first; the legacy kinds belong to sessions organized before them.
+  const KIND={missing_info:'信息缺失',unclear_meaning:'表意不明',wrong_expectation:'预期传达有误',no_feedback:'反馈缺失或延迟',visual_hierarchy:'视觉层级',blocked:'操作阻断',hard_to_operate:'操作困难',missing_feature:'功能缺失',value:'体验与价值',display_error:'表现错误',
     confusion:'困惑',obstacle:'阻碍',cost:'操作成本',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
   const CONTEXT={hud:'HUD / 战斗 / 大世界',multi_screen:'跨多个界面',outside_game:'游戏外窗口',unknown:'认不出界面'};
   const state={overview:null,instances:new Map(),labels:{},reports:[],report:null,issues:new Map(),feedback:[],
@@ -41,9 +40,10 @@
       call('thumbnail',button.dataset.session,Number(button.dataset.time)).then(src=>{thumbCache.set(thumbKey(button),src);showThumb(button,src);}).catch(()=>{button.textContent='无画面';}).finally(()=>{thumbActive--;pumpThumbs();});
     }
   }
+  function closeLightbox(){$('lightbox').hidden=true;$('lightboxVideo').removeAttribute('src');$('lightboxVideo').load();}
   function thumb(session,time,caption,clip){
     if(!Number.isFinite(time))return '<span class="thumb"></span>';
-    return `<button type="button" class="thumb" data-session="${escape(session)}" data-time="${time}" data-caption="${escape(caption)}"${clip?` data-clip-start="${clip.start}" data-clip-end="${clip.end}" title="播放动图"`:' title="查看大图"'}></button>`;
+    return `<button type="button" class="thumb" data-session="${escape(session)}" data-time="${time}" data-caption="${escape(caption)}"${clip?` data-clip-start="${clip.start}" data-clip-end="${clip.end}" title="播放操作记录"`:' title="查看大图"'}></button>`;
   }
   function jump(session,time,text){return Number.isFinite(time)?`<button type="button" class="jump" data-open-session="${escape(session)}" data-open-time="${time}" title="在新窗口打开回看并停在这一刻">${escape(text)}</button>`:'';}
 
@@ -590,15 +590,15 @@
     }
     const thumbButton=event.target.closest('.thumb[data-session]');
     if(thumbButton){
-      $('lightboxCaption').textContent=thumbButton.dataset.caption;$('lightboxImage').removeAttribute('src');$('lightbox').hidden=false;
       const clip=thumbButton.dataset.clipStart!==undefined;
-      (clip?call('clip',thumbButton.dataset.session,Number(thumbButton.dataset.clipStart),Number(thumbButton.dataset.clipEnd)):call('thumbnail',thumbButton.dataset.session,Number(thumbButton.dataset.time),true)).then(src=>{$('lightboxImage').src=src;}).catch(error=>{$('lightboxCaption').textContent=error.message;});
+      $('lightboxCaption').textContent=thumbButton.dataset.caption;$('lightboxImage').removeAttribute('src');$('lightboxImage').hidden=clip;$('lightboxVideo').hidden=!clip;$('lightbox').hidden=false;
+      (clip?call('clip',thumbButton.dataset.session,Number(thumbButton.dataset.clipStart),Number(thumbButton.dataset.clipEnd)):call('thumbnail',thumbButton.dataset.session,Number(thumbButton.dataset.time),true)).then(src=>{$(clip?'lightboxVideo':'lightboxImage').src=src;}).catch(error=>{$('lightboxCaption').textContent=error.message;});
       return;
     }
-    if(event.target.closest('#lightbox'))$('lightbox').hidden=true;
+    if(event.target.closest('#lightbox'))closeLightbox();
   });
   document.addEventListener('keydown',event=>{
-    if(event.key==='Escape'){$('lightbox').hidden=true;$('menu').hidden=true;}
+    if(event.key==='Escape'){closeLightbox();$('menu').hidden=true;}
     if((event.key==='Enter'||event.key===' ')&&event.target.matches?.('[data-tag]')){event.preventDefault();event.target.click();}
   });
   document.addEventListener('contextmenu',event=>{

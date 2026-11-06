@@ -470,7 +470,7 @@ def query_instances(vault, issue=None, screen=None, element=None, kind=None, ses
                 continue
             if element is not None and element not in instance['elements']:
                 continue
-            if kind is not None and instance['kind'] != kind:
+            if kind is not None and protocol.instance_type(instance) != kind:
                 continue
             # 路径 3：跨场次整理按单场标的 bug 取候选（any = 明说和疑似都要）。
             if bug is not None and (not instance.get('bug') if bug == 'any' else instance.get('bug') != bug):
@@ -478,14 +478,14 @@ def query_instances(vault, issue=None, screen=None, element=None, kind=None, ses
             row = dict(session_id=meta['id'], instance_id=instance['id'],
                        said_start=min(said['start'] for said in instance['said']),
                        refers_start=instance['refers_to']['start'], refers_end=instance['refers_to']['end'],
-                       screen=instance['screen'], elements=instance['elements'], kind=instance['kind'],
+                       screen=instance['screen'], elements=instance['elements'], kind=protocol.instance_type(instance),
                        statement=instance['statement'], issue_tags=tags, issue_links=links,
                        event_id=instance['event_id'], event_title=titles.get(instance['event_id'], ''),
                        refers_basis=instance['refers_to']['basis'], catalog_screen=catalog_screen,
                        # 画面证据里 agent 核对过的时刻，比所指区间的起点更能代表界面本身。
                        frame_at=next((row['start'] for row in instance['evidence'] if row['kind'] == 'video'), None),
                        **({'clips': clips} if (clips := protocol.instance_clips(instance)) else {}),
-                       **{key: instance[key] for key in ('route', 'screen_proposed', 'screen_context', 'compare_to', 'bug',
+                       **{key: instance[key] for key in ('route', 'screen_proposed', 'screen_context', 'compare_to', 'bug', 'symptom', 'secondary_defect',
                                                          'evidence_source', 'valence', 'intensity', 'owner')
                           if key in instance})
             rows.append((str(meta.get('created') or meta['id']), row))
