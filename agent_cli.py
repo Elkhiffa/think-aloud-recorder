@@ -512,7 +512,7 @@ def main(argv=None):
         elif name == 'publish':
             value = protocol.publish_ready(args.session)
         elif name == 'status':
-            value = protocol.preprocessing_status(args.session)
+            value = protocol.agent_status(args.session)
         elif name == 'evidence':
             value = protocol.evidence(args.session, args.start, args.end)
         elif name == 'quote-words':

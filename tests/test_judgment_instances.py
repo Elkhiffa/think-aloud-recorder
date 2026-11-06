@@ -56,6 +56,31 @@ class JudgmentInstanceTests(unittest.TestCase):
                                     evidence=[dict(kind='video', start=1, end=1, observation='合成入口按钮。')],
                                     confidence='high')])
 
+    def test_a_redo_does_not_see_the_previous_pass(self):
+        """触发路径：agent 重整一场已有结果的场次，领取前后读 status 和 evidence → 看不到旧类型、旧原话、旧标题；重整进行中连旧数量也看不到，提交后能回读新数量。"""
+        job = agent.claim(self.folder, 'first-pass')
+        agent.submit(self.folder, job['token'], self.candidate())
+        meta = json.loads((self.folder / 'session.json').read_text(encoding='utf-8'))
+        meta.update(session_name='旧整理起的标题', session_name_source='agent', activity_naming=dict(applied_name='旧整理起的标题', short_title='旧整理起的标题'))
+        recorder.write(self.folder / 'session.json', meta)
+        before = agent.agent_status(self.folder)
+        self.assertEqual(before['instances'], 1)
+        self.assertFalse({'kinds', 'quote', 'event_titles', 'result'} & set(before))
+        self.assertNotIn('旧整理起的标题', json.dumps(agent.evidence(self.folder), ensure_ascii=False))
+        redo = agent.reprocess(self.folder, 'second-pass', '重整')
+        during = agent.agent_status(self.folder)
+        self.assertFalse({'kinds', 'quote', 'event_titles', 'instances', 'events'} & set(during))
+        self.assertEqual((during['state'], during['label']), ('complete', '重新分析中'))
+        agent.submit(self.folder, redo['token'], self.candidate())
+        self.assertEqual(agent.agent_status(self.folder)['instances'], 1)
+
+    def test_the_recorders_own_title_still_reaches_the_agent(self):
+        """触发路径：记录者手动给场次起了名 → 这是素材的一部分，重整的 agent 仍能读到。"""
+        meta = json.loads((self.folder / 'session.json').read_text(encoding='utf-8'))
+        meta.update(session_name='手动起的名字', session_name_source='manual')
+        recorder.write(self.folder / 'session.json', meta)
+        self.assertEqual(agent.evidence(self.folder)['title'], '手动起的名字')
+
     def test_valid_v2_submits_and_expands_source_quotes(self):
         """触发路径：外部 agent 按新格式提交一场整理。"""
         candidate = self.candidate()

@@ -4,7 +4,7 @@ The ready manifest is published last; a result is one atomic commit. A leased
 claim fences late workers. Source revisions deliberately exclude session names,
 job state and user notes, so presenting a result cannot enqueue itself again.
 """
-from session_metadata import acceptance as session_acceptance, session_title
+from session_metadata import acceptance as session_acceptance, session_naming
 from collections import OrderedDict
 from copy import deepcopy
 import hashlib
@@ -403,7 +403,8 @@ def evidence(folder, start=None, end=None):
     from speaker_roles import speaker_payload
     speakers = speaker_payload(folder, meta, segments)
     value = dict(version=VERSION, session_id=meta['id'], revision=revision,
-                 title=session_title(meta),
+                 # An automatic name comes from the previous organising pass, not from the material; a manual one is the recorder's.
+                 title=session_naming(meta)['manual_name'] or str(meta.get('game') or '体验回看'),
                  test=bool(meta.get('test')), **session_acceptance(meta), duration_seconds=duration,
                  timebase='video_seconds', speakers=speakers,
                  paths={name: str(_path(folder, name)) for name in material['sources'] if material['sources'][name]},
@@ -1284,6 +1285,17 @@ def _store_result(key, signature, value):
         pass  # An unwritable state directory only costs the next start a fresh check.
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def agent_status(folder):
+    """The status an organising agent reads: a redo is judged independently, so the previous pass's types, quote and titles stay out,
+    and its counts too while the redo is running."""
+    value = {key: item for key, item in preprocessing_status(folder).items() if key not in ('kinds', 'quote', 'event_titles')}
+    redo = value.get('reanalysis')
+    if redo:
+        value = {key: item for key, item in value.items() if key not in ('events', 'questions', 'ideas', 'instances')}
+        value['label'] = '重新分析中' if redo.get('state') == 'processing' else '重新分析未完成'
+    return value
 
 
 def preprocessing_status(folder, meta=None, include_result=False, annotate=True):
