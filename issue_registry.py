@@ -484,6 +484,7 @@ def query_instances(vault, issue=None, screen=None, element=None, kind=None, ses
                        refers_basis=instance['refers_to']['basis'], catalog_screen=catalog_screen,
                        # 画面证据里 agent 核对过的时刻，比所指区间的起点更能代表界面本身。
                        frame_at=next((row['start'] for row in instance['evidence'] if row['kind'] == 'video'), None),
+                       **({'clips': clips} if (clips := protocol.instance_clips(instance)) else {}),
                        **{key: instance[key] for key in ('route', 'screen_proposed', 'screen_context', 'compare_to', 'bug',
                                                          'evidence_source', 'valence', 'intensity', 'owner')
                           if key in instance})

@@ -88,6 +88,8 @@ select,input{border:1px solid var(--line);border-radius:4px;padding:4px 8px;back
 @keyframes flash{0%,40%{background:var(--mark)}}
 @media (prefers-reduced-motion:reduce){.card.flash{animation:none;outline:2px solid var(--accent)}}
 .thumb{width:160px;aspect-ratio:16/9;background:var(--bg);border:0;padding:0;border-radius:4px;overflow:hidden}
+.thumb[data-clip-start]{position:relative}
+.thumb[data-clip-start]::after{content:'动图';position:absolute;right:4px;bottom:4px;padding:0 6px;border-radius:3px;background:rgb(20 18 15 / .78);color:#f6f0e6;font-size:12px;line-height:20px}
 .thumb img{width:100%;height:100%;object-fit:cover;display:block}
 .card-title{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;margin:0;font-size:15px;font-weight:600;color:var(--heading);line-height:1.5}
 .kind{flex:none;font-size:13px;padding:0 6px;border-radius:4px;background:var(--tint);color:var(--accent)}

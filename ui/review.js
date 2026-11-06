@@ -799,6 +799,7 @@
         if(!findings)findings=Findings.create(panel,{state:{view:state.tab==='events'?'events':'problems'},clock:formatTime,
           editable:()=>!!(data.desktop&&data.preprocessing?.editing?.result_sha256),
           onSeek:time=>seekKeep(time,false),
+          onPlay:seek,
           onEdit:id=>{const current=data.preprocessing;editEvent(current.result.events.find(event=>event.id===id),current.editing);},
           onView:view=>{if(state.tab!==view)setTab(view);}});
         panel.classList.add('findings');findings.update({result,activities:info.activities||[],bugs:info.bugs||{}});findings.setTime(video.currentTime||0);

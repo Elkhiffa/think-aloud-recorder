@@ -304,6 +304,15 @@ def main(argv=None):
     inputs_summary.add_argument('session')
     inputs_summary.add_argument('--start', type=float, required=True)
     inputs_summary.add_argument('--end', type=float, required=True)
+    clip = commands.add_parser('clip', help='截一段录像，画面下方带操作记录，存成 GIF，用于依赖操作才看得懂的问题；只读场次')
+    clip.add_argument('session')
+    clip.add_argument('--start', type=float, required=True)
+    clip.add_argument('--end', type=float, required=True, help='片段 2–30 秒：只截这次操作和它的结果')
+    clip.add_argument('--output', required=True, help='.gif，存到场次以外的工作目录')
+    clip.add_argument('--width', type=int, default=960, help='宽度 480–1280，默认 960')
+    clip.add_argument('--sheet', help='同时存一张逐帧拼图（.jpg），用来核对动图拍到了什么')
+    clips_build = commands.add_parser('clips-build', help='按已提交结果补齐场次的证据动图（文件丢失或上次生成失败时用）')
+    clips_build.add_argument('session')
     for name in ('publish', 'status', 'evidence', 'quote-words', 'claim', 'reprocess', 'renew', 'fail', 'validate', 'submit', 'frame'):
         command = commands.add_parser(name)
         command.add_argument('session')
@@ -518,6 +527,12 @@ def main(argv=None):
             value = protocol.fail(args.session, args.token, args.reason)
         elif name == 'frame':
             value = frame(args.session, args.at, args.output, args.width)
+        elif name == 'clip':
+            from clip_export import make_clip
+            value = make_clip(args.session, args.start, args.end, args.output, args.width, args.sheet)
+        elif name == 'clips-build':
+            from clip_export import build_clips
+            value = build_clips(args.session)
         elif name == 'inputs-summary':
             value = protocol.input_summary(args.session, args.start, args.end)
         elif name == 'name-activities':

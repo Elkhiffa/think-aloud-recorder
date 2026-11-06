@@ -108,6 +108,22 @@ class InsightAPI:
             return 'data:image/jpeg;base64,' + base64.b64encode(path.read_bytes()).decode('ascii')
         return self._call(work)
 
+    def clip(self, session_id, start, end):
+        """A stored operation clip. One missing from the folder (a partial copy, a failed run) is made on the spot from the same span."""
+        def work():
+            if any(type(value) not in (int, float) or not math.isfinite(value) or value < 0 for value in (start, end)):
+                raise ValueError('动图时间无效。')
+            import agent_protocol
+            import clip_export
+            if not agent_protocol.CLIP_SECONDS[0] <= end - start <= agent_protocol.CLIP_SECONDS[1]:
+                raise ValueError('动图时间无效。')
+            folder, _ = self._sessions()[session_id]
+            path = clip_export.clip_path(folder, start, end)
+            if not path.is_file():
+                clip_export._render(folder, start, end, path)
+            return 'data:image/gif;base64,' + base64.b64encode(path.read_bytes()).decode('ascii')
+        return self._call(work)
+
     def open_review(self, session_id, at):
         # Path 1: each evidence time opens the session's own review window at that moment.
         if type(at) not in (int, float) or not math.isfinite(at) or at < 0:

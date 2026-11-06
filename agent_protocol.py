@@ -26,6 +26,8 @@ ANALYSIS_CONTEXT = 'analysis-context.json'
 FILES = ('录像.mp4', '口述.flac', '录像.whisper.json',
          'input-events.json', 'input-events.revocation.json')
 MAX_RESULT = 2 * 1024 * 1024
+CLIP_SECONDS = (2, 30)
+MAX_CLIPS_PER_INSTANCE = 2
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 _RESULT_STORE = None  # (directory, version) once the desktop app configures it
@@ -660,6 +662,15 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                            observation=_text(item.get('observation'), 300, '判断实例画面事实'))
                 if not any(checked['start'] <= ref['start'] and checked['end'] >= ref['end'] for checked in ranges):
                     raise ValueError('画面证据不在已检查范围内。')
+                if 'clip' in item:
+                    # 路径 3：走焦、按键没反应这类判断要看“按了什么、然后发生什么”，一张静帧说不清，这段由提交时生成动图。
+                    if item['clip'] is not True:
+                        raise ValueError('画面证据的 clip 只能是 true。')
+                    if not CLIP_SECONDS[0] <= ref['end'] - ref['start'] <= CLIP_SECONDS[1]:
+                        raise ValueError(f'动图片段长度需在 {CLIP_SECONDS[0]}–{CLIP_SECONDS[1]} 秒之间：只截这次操作和它的结果。')
+                    if sum(1 for other in refs if other.get('clip')) >= MAX_CLIPS_PER_INSTANCE:
+                        raise ValueError(f'每条判断实例最多 {MAX_CLIPS_PER_INSTANCE} 段动图。')
+                    ref['clip'] = True
                 refs.append(ref)
             expanded_bytes += len(json.dumps(said + refs, ensure_ascii=False).encode('utf-8'))
             if expanded_bytes > MAX_RESULT:
@@ -874,7 +885,21 @@ def submit(folder, token, value):
         from context_track import check_screens
         summary['screen_check'] = check_screens(folder, result['instances'])
         summary['statement_check'] = statement_check(result['instances'])
+        if clip_spans(result):
+            # 路径 3：结果写入后在锁外生成；生成失败只写进回执，判断已经提交成功，可用 clips-build 补。
+            from clip_export import build_clips
+            summary['clips'] = build_clips(folder, result)
     return summary
+
+
+def instance_clips(instance):
+    """An instance's clip spans, for the views that offer them."""
+    return [dict(start=row['start'], end=row['end']) for row in instance.get('evidence') or [] if row.get('clip')]
+
+
+def clip_spans(result):
+    """The distinct (start, end) spans an organized result marks as clips, in time order."""
+    return sorted({(row['start'], row['end']) for instance in result.get('instances') or [] for row in instance.get('evidence') or [] if row.get('clip')})
 
 
 def _activity_name_source(folder):

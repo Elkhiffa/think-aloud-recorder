@@ -54,6 +54,11 @@
 .fd-quote::before{content:"“"}.fd-quote::after{content:"”"}
 .fd-quote{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .fd-stmt{font-size:12px;line-height:1.6;color:var(--fd-muted);margin-top:2px}
+.findings .fd-clip{color:var(--fd-ink);font-weight:600}
+.fd-clip i{display:inline-block;margin-right:4px;font-style:normal}
+.fd-clip[aria-expanded=true] i{transform:rotate(90deg)}
+.fd-clip-view{margin-top:8px}
+.fd-clip-view img{display:block;width:100%;max-width:720px;border-radius:4px}
 .fd-meta{display:flex;flex-wrap:wrap;gap:2px 12px;margin-top:2px;font-size:12px;color:var(--fd-muted)}
 .fd-kind{color:var(--fd-ink)}
 .fd-owner{color:var(--fd-ink)}

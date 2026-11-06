@@ -17,7 +17,7 @@ EVENT_FIELDS = ('id', 'title', 'start', 'end', 'summary', 'issue', 'notes', 'man
 INSTANCE_FIELDS = ('id', 'event_id', 'kind', 'said', 'refers_to', 'compare_to', 'statement', 'screen',
                    'evidence_source', 'valence', 'intensity', 'owner')
 DESK_METHODS = ('ready', 'get_overview', 'read_report', 'add_feedback', 'set_cover', 'edit_feedback', 'remove_feedback',
-                'thumbnail', 'open_review', 'desk_state', 'session_detail', 'review_session', 'rename_session',
+                'thumbnail', 'clip', 'open_review', 'desk_state', 'session_detail', 'review_session', 'rename_session',
                 'process_session', 'package_session', 'open_folder', 'open_raw', 'recover_cloud_task', 'show_in_insight',
                 'get_layout', 'save_layout', 'take_focus', 'set_acceptance')
 LAYOUT_KEYS = ('sessions', 'insight')
@@ -83,6 +83,9 @@ class DeskAPI:
     def thumbnail(self, session_id, at, large=False):
         return self._insight.thumbnail(session_id, at, large)
 
+    def clip(self, session_id, start, end):
+        return self._insight.clip(session_id, start, end)
+
     def open_review(self, session_id, at, tab=None, event_id=None):
         """Path 1: a desk click opens review at that moment, on 问题 or on 体验事件 with the event expanded."""
         if tab is None:
@@ -121,7 +124,9 @@ class DeskAPI:
                 view = dict(events=[{key: row.get(key) for key in EVENT_FIELDS if key in row} for row in result.get('events', [])],
                             coverage=result.get('coverage'))
                 if 'instances' in result:
-                    view['instances'] = [{key: row.get(key) for key in INSTANCE_FIELDS if key in row}
+                    from agent_protocol import instance_clips
+                    view['instances'] = [{**{key: row.get(key) for key in INSTANCE_FIELDS if key in row},
+                                          **({'clips': clips} if (clips := instance_clips(row)) else {})}
                                          for row in result['instances']]
             # Version acceptance stays out of insight, so its judgments carry no 洞察 links.
             issues = (self._instance_issues(result, (status.get('editing') or {}).get('result_sha256'))

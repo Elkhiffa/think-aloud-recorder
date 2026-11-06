@@ -41,9 +41,9 @@
       call('thumbnail',button.dataset.session,Number(button.dataset.time)).then(src=>{thumbCache.set(thumbKey(button),src);showThumb(button,src);}).catch(()=>{button.textContent='无画面';}).finally(()=>{thumbActive--;pumpThumbs();});
     }
   }
-  function thumb(session,time,caption){
+  function thumb(session,time,caption,clip){
     if(!Number.isFinite(time))return '<span class="thumb"></span>';
-    return `<button type="button" class="thumb" data-session="${escape(session)}" data-time="${time}" data-caption="${escape(caption)}" title="查看大图"></button>`;
+    return `<button type="button" class="thumb" data-session="${escape(session)}" data-time="${time}" data-caption="${escape(caption)}"${clip?` data-clip-start="${clip.start}" data-clip-end="${clip.end}" title="播放动图"`:' title="查看大图"'}></button>`;
   }
   function jump(session,time,text){return Number.isFinite(time)?`<button type="button" class="jump" data-open-session="${escape(session)}" data-open-time="${time}" title="在新窗口打开回看并停在这一刻">${escape(text)}</button>`:'';}
 
@@ -64,7 +64,7 @@
     if(row.route?.length)screen+=' · 路线：'+escape(row.route.join(' -> '));
     if(row.elements?.length)screen+=' › '+escape(row.elements.join('、'));
     const counter=link?.role==='counter';
-    return `<article class="card${counter?' counter':''}" data-key="${escape(key(row.session_id,row.instance_id))}" data-issue="${escape(issue||'')}">${thumb(row.session_id,at,label(row)+' · '+formatTime(at))}<div>`+
+    return `<article class="card${counter?' counter':''}" data-key="${escape(key(row.session_id,row.instance_id))}" data-issue="${escape(issue||'')}">${thumb(row.session_id,at,label(row)+' · '+formatTime(at),row.clips?.[0])}<div>`+
       `<h4 class="card-title"><span class="kind kind-${escape(row.kind)}">${escape(KIND[row.kind]||row.kind)}</span><span>${escape(row.event_title||'未归入事件')}</span>${counter?'<span class="badge">反例</span>':''}</h4>`+
       `<p class="statement">${escape(row.statement)}</p>`+
       `<div class="aside"><span class="meta">${time}${earlier}${compare}<span>${escape(label(row))}</span>${flag({kind:'instance',session_id:row.session_id,instance_id:row.instance_id,issue:issue&&issue!=='cited'?issue:undefined})}</span><div>界面：${screen}</div>${link?.reason?`<div>归入理由：${escape(link.reason)}</div>`:''}</div></div></article>`;
@@ -591,7 +591,8 @@
     const thumbButton=event.target.closest('.thumb[data-session]');
     if(thumbButton){
       $('lightboxCaption').textContent=thumbButton.dataset.caption;$('lightboxImage').removeAttribute('src');$('lightbox').hidden=false;
-      call('thumbnail',thumbButton.dataset.session,Number(thumbButton.dataset.time),true).then(src=>{$('lightboxImage').src=src;}).catch(error=>{$('lightboxCaption').textContent=error.message;});
+      const clip=thumbButton.dataset.clipStart!==undefined;
+      (clip?call('clip',thumbButton.dataset.session,Number(thumbButton.dataset.clipStart),Number(thumbButton.dataset.clipEnd)):call('thumbnail',thumbButton.dataset.session,Number(thumbButton.dataset.time),true)).then(src=>{$('lightboxImage').src=src;}).catch(error=>{$('lightboxCaption').textContent=error.message;});
       return;
     }
     if(event.target.closest('#lightbox'))$('lightbox').hidden=true;

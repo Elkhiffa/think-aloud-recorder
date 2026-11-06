@@ -14,7 +14,7 @@
   const GROUPS=[...Object.keys(PROBLEM),'bug','other'];
   const GROUP_LABEL={...PROBLEM,bug:'Bug',other:'其他'};
   const BUG_LABEL={explicit:'Bug',suspected:'疑似 Bug'};
-  const OWNER={ui_interaction:'交互入口与流程',visual_hierarchy:'视觉层级',copy:'文案',tutorial:'教学引导',system:'系统数值',
+  const OWNER={ui_interaction:'交互入口与流程',visual_hierarchy:'视觉设计',copy:'文案',tutorial:'教学引导',system:'系统数值',
     input:'输入操作',implementation:'实现 / QA',gameplay:'玩法关卡叙事',art:'美术表现'};
   const CHEV='<svg class="fd-chev" viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6z"/></svg>';
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -36,7 +36,8 @@
       return {id:item.id,kind:item.kind,group:groupOf(item.kind,item.valence),valence:item.valence||null,owner:item.owner||null,source:item.evidence_source||null,
         at:said[0]?.start??item.refers_to?.start??0,
         quote:said.map(ref=>ref.text).filter(Boolean).join(' … '),statement:item.statement||'',screen:item.screen||'',
-        refers:item.refers_to||null,compare:item.compare_to||null,event:item.event_id,bug:bugs?.[item.id]||item.bug||null,issues:issues?.[item.id]||[]};
+        refers:item.refers_to||null,compare:item.compare_to||null,event:item.event_id,bug:bugs?.[item.id]||item.bug||null,issues:issues?.[item.id]||[],
+        clips:item.clips||(item.evidence||[]).filter(row=>row.clip).map(row=>({start:row.start,end:row.end}))};
     }).sort((a,b)=>a.at-b.at);
     return {events,eventById,tags,items};
   }
@@ -52,11 +53,31 @@
     const state=options.state||{};
     state.view=state.view||'problems';state.filter=state.filter||new Set();state.activity=state.activity||'';
     state.open=state.open||new Set();state.folded=state.folded||new Set();state.auto=state.auto??null;state.current=state.current??null;
+    state.clipOpen=state.clipOpen||new Set();state.clipSrc=state.clipSrc||new Map();state.clipError=state.clipError||new Map();
     container.classList.add('findings');
     let data=null,view=null;
 
     const visible=item=>(!state.filter.size||[...state.filter].some(group=>inGroup(item,group)))&&(!state.activity||view.tags.get(item.event)?.includes(state.activity));
     const timeButton=(time,label,extra='')=>`<button type="button" class="fd-jump" data-seek="${time}"${extra}>${escape(label)}</button>`;
+    // Clips: a window without the video (the desk) plays the GIF in the row; review has the video, so the same button plays that span there.
+    const clipKey=(item,clip)=>`${item.id}@${clip.start}@${clip.end}`;
+    function clipButton(item,clip){
+      if(!options.loadClip)return `<button type="button" class="fd-clip" data-play="${clip.start}" title="在回看里播放这一段">▶ ${escape(clock(clip.start))}–${escape(clock(clip.end))}</button>`;
+      const key=clipKey(item,clip),open=state.clipOpen.has(key);
+      return `<button type="button" class="fd-clip" data-clip="${escape(key)}" aria-expanded="${open}"><i aria-hidden="true">▸</i>动图 ${Math.round(clip.end-clip.start)} 秒</button>`;
+    }
+    function clipPanels(item){
+      if(!options.loadClip)return '';
+      return item.clips.filter(clip=>state.clipOpen.has(clipKey(item,clip))).map(clip=>{const key=clipKey(item,clip),src=state.clipSrc.get(key),error=state.clipError.get(key);
+        return `<div class="fd-clip-view">${src?`<img alt="操作动图" src="${src}">`:`<p class="fd-empty">${escape(error||'正在读取动图…')}</p>`}</div>`;}).join('');
+    }
+    function toggleClip(key){
+      if(state.clipOpen.delete(key)){render();return;}
+      state.clipOpen.add(key);state.clipError.delete(key);render();
+      if(state.clipSrc.has(key))return;
+      const [,start,end]=key.split('@').map((part,index)=>index?Number(part):part);
+      options.loadClip(start,end).then(src=>{state.clipSrc.set(key,src);}).catch(error=>{state.clipError.set(key,error.message||'读取动图失败。');}).finally(render);
+    }
     function row(item,{showEvent,group}){
       const event=view.eventById.get(item.event),refers=item.refers;
       const referred=!refers?'':refers.basis==='earlier_session'?`<span title="${escape(refers.note||'')}">指本场之前</span>`:
@@ -68,11 +89,11 @@
       // 该谁改 on every judged problem; the evidence source only when it is the recorder's design judgment, the weaker kind.
       const owner=item.owner&&group!=='other'?`<span class="fd-owner">该谁改：${escape(OWNER[item.owner]||item.owner)}</span>`:'';
       const expert=item.source==='expert'&&group!=='other'?'<span class="fd-expert">设计师判断</span>':'';
-      const meta=[kind,badge,owner,expert,item.screen?`<span class="fd-screen">${escape(item.screen)}</span>`:'',referred,compared,
+      const meta=[...item.clips.map(clip=>clipButton(item,clip)),kind,badge,owner,expert,item.screen?`<span class="fd-screen">${escape(item.screen)}</span>`:'',referred,compared,
         showEvent&&event?`<button type="button" class="fd-event-link" data-goto-event="${escape(event.id)}" title="在「体验事件」里查看这一段">${escape(event.title)}</button>`:'',
         ...item.issues.map(issue=>`<button type="button" class="fd-insight-link" data-insight="${escape(issue.id)}" data-insight-item="${escape(item.id)}" title="在洞察窗口里查看这条证据">${issue.role==='counter'?'反例 · ':''}洞察：${escape(issue.title)}</button>`)].filter(Boolean).join('');
       return `<li class="fd-row k-${group}" data-item="${escape(item.id)}"><button type="button" class="fd-at" data-seek="${item.at}" data-event="${escape(item.event)}" title="定位到说出口的时刻">${clock(item.at)}</button>`+
-        `<div class="fd-main">${item.quote?`<p class="fd-quote">${escape(item.quote)}</p>`:''}<p class="fd-stmt">${escape(item.statement)}</p>${meta?`<p class="fd-meta">${meta}</p>`:''}</div></li>`;
+        `<div class="fd-main">${item.quote?`<p class="fd-quote">${escape(item.quote)}</p>`:''}<p class="fd-stmt">${escape(item.statement)}</p>${meta?`<p class="fd-meta">${meta}</p>`:''}${clipPanels(item)}</div></li>`;
     }
     function groups(items,{showEvent,prefix}){
       return GROUPS.map(group=>{const rows=items.filter(item=>inGroup(item,group));if(!rows.length)return '';const key=prefix+group,folded=state.folded.has(key);
@@ -198,6 +219,8 @@
     container.addEventListener('click',event=>{
       const target=event.target.closest('button');if(!target||!container.contains(target)||target.disabled)return;
       if(target.dataset.insight){options.onInsight?.(target.dataset.insightItem,target.dataset.insight);return;}
+      if(target.dataset.clip){toggleClip(target.dataset.clip);return;}
+      if(target.dataset.play!==undefined){options.onPlay?.(Number(target.dataset.play));return;}
       if(target.dataset.filter){const group=target.dataset.filter;state.filter.has(group)?state.filter.delete(group):state.filter.add(group);render();return;}
       if(target.hasAttribute('data-clear-activity')){state.activity='';render();return;}
       if(target.dataset.activity){state.activity=state.activity===target.dataset.activity?'':target.dataset.activity;render();return;}

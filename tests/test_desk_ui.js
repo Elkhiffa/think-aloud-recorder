@@ -62,6 +62,7 @@ async function fixture(state={}) {
   const api=new Proxy({}, {get(_target,name){return async(...args)=>{calls.push({name,args});
     if(name==='desk_state')return {ok:true,data:plain(data.state)};
     if(name==='session_detail')return {ok:true,data:plain(data.details[args[0]]||emptyDetail(args[0]))};
+    if(name==='clip')return data.clipError?{ok:false,error:data.clipError}:{ok:true,data:'data:image/gif;base64,R0lG'};
     return {ok:true,data:{}};};}});
   const context=vm.createContext({document,window:{pywebview:{api},addEventListener(){}},localStorage:{getItem(){return null;},setItem(){}},
     matchMedia:()=>({matches:false,addEventListener(){}}),getComputedStyle:()=>({getPropertyValue:()=>''}),setTimeout(){return 1;},clearTimeout(){},
@@ -138,9 +139,45 @@ test('interaction-cycle kinds: the menu lists the kinds present with counts, leg
   f.data.details.new={id:'new',state:'complete',label:'',kinds:{unnoticed:1,value_positive:1},result,activities:[],bugs:{},instance_issues:{}};
   await f.select('new');
   const views=f.el('deskFindings').innerHTML;
-  assert.match(views,/data-filter="unnoticed"[^>]*>未察觉 <b>1<\/b>/);assert.match(views,/fd-owner">该谁改：视觉层级</);
+  assert.match(views,/data-filter="unnoticed"[^>]*>未察觉 <b>1<\/b>/);assert.match(views,/fd-owner">该谁改：视觉设计</);
   assert.match(views,/fd-kind">价值判断 · 正面</,'the positive value judgment sits with the other kinds');
   assert.doesNotMatch(views,/该谁改：玩法关卡叙事/,'who fixes it is shown on problems only');
+});
+
+test('only a judgment with a clip offers one; it plays in the row and reads the file only when opened',async()=>{
+  // Trigger path: a focus problem has a clip; the user opens it in the desk detail, which has no video of its own.
+  const result={events:[{id:'e1',title:'Shop',start:10,end:80,summary:''}],
+    instances:[{id:'i1',event_id:'e1',kind:'hard_to_execute',said:[{start:12,end:14,text:'Focus jumped.'}],refers_to:{start:12,end:14,basis:'same_time'},statement:'Focus jumped away.',screen:'shop',clips:[{start:10,end:17}]},
+      {id:'i2',event_id:'e1',kind:'unnoticed',said:[{start:30,end:31,text:'Missed it.'}],refers_to:{start:30,end:31,basis:'same_time'},statement:'Missed the label.',screen:'shop'}],coverage:null};
+  const f=await fixture({sessions:[{id:'done',game:'Game',state:'可回看',can_review:true,preprocessing:{state:'complete',kinds:{hard_to_execute:1,unnoticed:1}}}]});
+  f.data.details.done={id:'done',state:'complete',label:'',kinds:{hard_to_execute:1,unnoticed:1},result,activities:[],bugs:{},instance_issues:{}};
+  await f.select('done');
+  const container=f.el('deskFindings');container.contains=()=>true;
+  const button=()=>[...container.innerHTML.matchAll(/data-clip="([^"]+)"/g)].map(match=>match[1]);
+  const press=()=>container.listeners.click({target:{closest:()=>({dataset:{clip:button()[0]},disabled:false,hasAttribute:()=>false})}});
+  assert.equal(button().length,1,'the judgment without a clip stays as it was');
+  assert.match(container.innerHTML,/动图 7 秒/);
+  assert.equal(f.calls.some(c=>c.name==='clip'),false,'nothing is read until it is opened');
+  press();await settle();
+  assert.deepEqual(plain(f.calls.filter(c=>c.name==='clip').map(c=>c.args)),[['done',10,17]]);
+  assert.match(container.innerHTML,/<img alt="操作动图" src="data:image\/gif;base64,R0lG">/);
+  press();assert.doesNotMatch(container.innerHTML,/<img alt="操作动图"/);
+  press();await settle();
+  assert.equal(f.calls.filter(c=>c.name==='clip').length,1,'opening it again reuses what was read');
+});
+
+test('a clip that cannot be read says why in the row',async()=>{
+  // Trigger path: the recording moved away after organizing, so a missing clip cannot be made again.
+  const result={events:[{id:'e1',title:'Shop',start:10,end:80,summary:''}],
+    instances:[{id:'i1',event_id:'e1',kind:'hard_to_execute',said:[{start:12,end:14,text:'Focus jumped.'}],refers_to:{start:12,end:14,basis:'same_time'},statement:'Focus jumped away.',screen:'shop',clips:[{start:10,end:17}]}],coverage:null};
+  const f=await fixture({sessions:[{id:'done',game:'Game',state:'可回看',can_review:true,preprocessing:{state:'complete',kinds:{hard_to_execute:1}}}]});
+  f.data.details.done={id:'done',state:'complete',label:'',kinds:{hard_to_execute:1},result,activities:[],bugs:{},instance_issues:{}};
+  f.data.clipError='找不到录像。';
+  await f.select('done');
+  const container=f.el('deskFindings');container.contains=()=>true;
+  const key=/data-clip="([^"]+)"/.exec(container.innerHTML)[1];
+  container.listeners.click({target:{closest:()=>({dataset:{clip:key},disabled:false,hasAttribute:()=>false})}});await settle();
+  assert.match(container.innerHTML,/找不到录像。/);
 });
 
 test('the detail shows the same 问题 / 体验事件 views as review; a click opens review on that tab',async()=>{
