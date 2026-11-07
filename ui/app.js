@@ -186,7 +186,9 @@ function unfoldGames(){const more=$('#gamesMore'),menu=$('#gamesMoreMenu');if(!m
 let gamesFrame=0;window.addEventListener?.('resize',()=>{cancelAnimationFrame(gamesFrame);gamesFrame=requestAnimationFrame(()=>{unfoldGames();fitGames();});});
 $('#gameTabs').addEventListener('click',async event=>{if(event.target.closest('#gamesMoreButton')){toggleGamesMenu();return;}const target=event.target.closest('[data-game],[data-game-add]');if(!target)return;event.preventDefault();toggleGamesMenu(false);if(target.hasAttribute('data-game-add')){openSheet('new');return;}const id=target.dataset.game;if(id===store.activeId)return;const result=await action('select_preset',[id]);if(!result.ok){gamesSignature='';renderGames();}else{lastSignature='';renderLast();}});
 // The four problem types; a session's 问题数 counts only these.
-const KIND_NAMES={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
+// Problem types are design defects; the legacy four (greys) belong to sessions organized before them.
+const KIND_NAMES={missing_info:'信息缺失',unclear_meaning:'表意不明',wrong_expectation:'预期传达有误',no_feedback:'反馈缺失或延迟',visual_hierarchy:'视觉层级',blocked:'操作阻断',hard_to_operate:'操作困难',missing_feature:'功能缺失',value:'体验与价值',display_error:'表现错误',
+  confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
 const WEEKDAYS='日一二三四五六';
 function pad2(n){return String(n).padStart(2,'0');}
 function sessionDisplayTitle(s){const named=s.session_name||(s.title&&s.title!==s.game?s.title:'');if(named)return {named:true,text:named};const titles=(s.preprocessing?.event_titles||[]).filter(Boolean);return {named:false,text:titles.length?titles.join('、'):(()=>{const d=new Date(s.created);return Number.isNaN(d.getTime())?'未命名的记录':pad2(d.getHours())+':'+pad2(d.getMinutes())+' 开始的记录';})()};}

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'"><title>洞察</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="insight.css"><link rel="stylesheet" href="desk.css"></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src data:; connect-src 'none'; object-src 'none'"><title>洞察</title><link rel="stylesheet" href="fonts.css"><link rel="stylesheet" href="insight.css"><link rel="stylesheet" href="desk.css"></head>
 <body data-window="洞察">
 <div class="desk">
 <header class="tb app-drag">
@@ -53,7 +53,7 @@
 </section>
 </div>
 <div id="menu" class="menu" role="menu" hidden></div>
-<div id="lightbox" class="lightbox" hidden><img id="lightboxImage" alt="所指时刻的大图"><p id="lightboxCaption"></p></div>
+<div id="lightbox" class="lightbox" hidden><img id="lightboxImage" alt="所指时刻的大图"><video id="lightboxVideo" autoplay loop muted playsinline aria-label="操作记录" hidden></video><p id="lightboxCaption"></p></div>
 <script src="desk-chrome.js"></script>
 <script src="split.js"></script>
 <script src="insight.js"></script>

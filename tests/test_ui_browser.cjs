@@ -1383,7 +1383,7 @@ async function deskChecks(context, origin) {
     assert.equal(await d4.locator('.nm').innerText(), '萌宠争锋、城镇养成');
     assert.equal(await d4.locator('.nm').evaluate(n => n.classList.contains('auto')), true, 'an unnamed session shows its activities in quiet type');
     assert.deepEqual(await d4.locator('span').allInnerTexts(), ['08/28', '19:40', '萌宠争锋、城镇养成', '萌宠争锋、城镇养成', '1:10:10', '7', '']);
-    assert.equal(await d4.locator('.pc b').innerText(), '7', 'problem count covers the four problem kinds only');
+    assert.equal(await d4.locator('.pc b').innerText(), '7', 'problem count covers the problem kinds only');
     assert.deepEqual(await d4.locator('.fp i').evaluateAll(n => n.map(i => [i.className, i.style.flex.split(' ')[0]])), [['k-confusion', '4'], ['k-cost', '3']]);
     assert.equal(await page.locator('#sessionScroll [data-session="d1"] .pc b').innerText(), '3');
     assert.equal(await page.locator('#sessionScroll [data-session="d2"] .c-st').innerText(), '转写中', 'a session with a running job is transcribing');

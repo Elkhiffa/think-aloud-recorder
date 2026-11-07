@@ -6,6 +6,7 @@ this computer's input.
 """
 from __future__ import annotations
 
+import bisect
 import json
 import math
 import os
@@ -49,6 +50,39 @@ GAP_REASONS = {'focus': '目标窗口不在前台，操作采集已暂停',
 UNCERTAIN_INPUT = '前台归属无法确认，此次输入未记录'
 ELEVATED_FOREGROUND = '前台程序以管理员身份运行，键鼠操作未采集；以管理员身份打开 Think Aloud 可以采集'
 FOREGROUND_MISMATCH = '前台状态校验异常，此区间没有可靠操作记录'
+BLOCK_CHECK = 'keyboard_mouse_block_check'
+KEYBOARD_MOUSE_NOTICE = '本场录制时键鼠可能未采集，空白不代表没操作'
+TRIGGERS_ONLY_NOTICE = '本场手柄只记到扳机，摇杆、按键和键鼠可能未采集，空白不代表没操作'
+_SWITCH_MARGIN = 2.
+
+
+def capture_notice(recording, intervals, gaps, window_states=None):
+    """路径 4：早期场次没有检查前台程序权限，键鼠被 Windows 拦下时不留缺口。
+
+    Foreground keyboard/mouse input far from a window switch proves input reached
+    us. Without that proof the session only says capture is unconfirmed; it never
+    infers gaps or input, because a controller-only session looks identical.
+    """
+    if recording.get(BLOCK_CHECK) is True or any(g.get('reason') == ELEVATED_FOREGROUND for g in gaps):
+        return None
+    if window_states is None:
+        spans = None
+        edges = sorted(t for g in gaps if g.get('type') == 'focus' or '前台' in str(g.get('reason', ''))
+                       for t in (g['start'], g['end']))
+    else:
+        spans = [(w['start'], w['end']) for w in window_states if w['state'] == 'foreground']
+        edges = sorted(t for w in window_states for t in (w['start'], w['end']))
+    for row in intervals:
+        if row.get('device') not in ('keyboard', 'mouse'):
+            continue
+        at = row['start']
+        if spans is not None and not any(a <= at < b for a, b in spans):
+            continue
+        index = bisect.bisect(edges, at)
+        if all(abs(at - edges[i]) > _SWITCH_MARGIN for i in (index - 1, index) if 0 <= i < len(edges)):
+            return None
+    codes = {row.get('code') for row in intervals if row.get('device') == 'xbox'}
+    return TRIGGERS_ONLY_NOTICE if codes and codes <= {'LT', 'RT'} else KEYBOARD_MOUSE_NOTICE
 
 
 def compact_gaps(gaps):
@@ -125,7 +159,7 @@ def prepare_capture(settings, session_path, *, root=None, clock=time.perf_counte
     from input_capture_devices import resolve_sdl
     target = resolve_target(settings['window'])
     return InputRecorder(session_path, lambda: WindowsInputSource(target, resolve_sdl(root), clock, capture_all=True),
-                         clock=clock, recording_scope='all')
+                         clock=clock, recording_scope='all', block_check=True)
 
 
 def direction(x, y):
@@ -138,7 +172,8 @@ class InputRecorder:
     """Translate sanitized source events to intervals; no raw key/text log."""
 
     def __init__(self, session_path, source_factory, *, clock=time.perf_counter,
-                 flush_interval=1.0, recording_scope='foreground'):
+                 flush_interval=1.0, recording_scope='foreground', block_check=False):
+        self.block_check = block_check
         self.path = Path(session_path) / 'input-events.json'
         self.source_factory = source_factory
         self.clock = clock
@@ -424,6 +459,8 @@ class InputRecorder:
         value = {'version': 1, 'state': self._state, 'duration': round(at, 6),
                  'timebase': 'video_seconds', 'capture_source': 'windows-raw-input+sdl2',
                  'clock': {'basis': 'monotonic', 'offset_seconds': self._offset}}
+        if self.block_check:
+            value[BLOCK_CHECK] = True
         if self.recording_scope == 'all':
             value['recording_scope'] = 'all'
             if self._focus_invalid_from is not None:
@@ -734,7 +771,7 @@ def recover_capture(session_path, duration=None, *, error=None, trim_to=None):
         else:
             durable = max([0.] + [i['end'] for i in intervals + gaps])
             error = error or '操作日志不完整，缺失区间已标记。'
-        value = {key: checkpoint[key] for key in ('version', 'timebase', 'capture_source', 'clock', 'recording_scope', 'window_state_invalid_from') if key in checkpoint}
+        value = {key: checkpoint[key] for key in ('version', 'timebase', 'capture_source', 'clock', 'recording_scope', 'window_state_invalid_from', BLOCK_CHECK) if key in checkpoint}
         value.update(duration=durable, intervals=intervals, gaps=[g for g in gaps if g.get('type') != 'window'])
         if value.get('recording_scope') == 'all':
             value['window_states'] = _window_states(gaps, durable, value.get('window_state_invalid_from'))

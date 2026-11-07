@@ -6,6 +6,9 @@ import unittest
 import zipfile
 
 import agent_protocol as agent
+from desk_runtime import INSTANCE_FIELDS
+from export_rows import export_rows
+from issue_registry import query_instances
 import recorder
 from review_runtime import session_review_payload
 
@@ -52,6 +55,31 @@ class JudgmentInstanceTests(unittest.TestCase):
                                     statement='记录者未理解入口的含义。', issue_tags=['TA-01', 'N-001'],
                                     evidence=[dict(kind='video', start=1, end=1, observation='合成入口按钮。')],
                                     confidence='high')])
+
+    def test_a_redo_does_not_see_the_previous_pass(self):
+        """触发路径：agent 重整一场已有结果的场次，领取前后读 status 和 evidence → 看不到旧类型、旧原话、旧标题；重整进行中连旧数量也看不到，提交后能回读新数量。"""
+        job = agent.claim(self.folder, 'first-pass')
+        agent.submit(self.folder, job['token'], self.candidate())
+        meta = json.loads((self.folder / 'session.json').read_text(encoding='utf-8'))
+        meta.update(session_name='旧整理起的标题', session_name_source='agent', activity_naming=dict(applied_name='旧整理起的标题', short_title='旧整理起的标题'))
+        recorder.write(self.folder / 'session.json', meta)
+        before = agent.agent_status(self.folder)
+        self.assertEqual(before['instances'], 1)
+        self.assertFalse({'kinds', 'quote', 'event_titles', 'result'} & set(before))
+        self.assertNotIn('旧整理起的标题', json.dumps(agent.evidence(self.folder), ensure_ascii=False))
+        redo = agent.reprocess(self.folder, 'second-pass', '重整')
+        during = agent.agent_status(self.folder)
+        self.assertFalse({'kinds', 'quote', 'event_titles', 'instances', 'events'} & set(during))
+        self.assertEqual((during['state'], during['label']), ('complete', '重新分析中'))
+        agent.submit(self.folder, redo['token'], self.candidate())
+        self.assertEqual(agent.agent_status(self.folder)['instances'], 1)
+
+    def test_the_recorders_own_title_still_reaches_the_agent(self):
+        """触发路径：记录者手动给场次起了名 → 这是素材的一部分，重整的 agent 仍能读到。"""
+        meta = json.loads((self.folder / 'session.json').read_text(encoding='utf-8'))
+        meta.update(session_name='手动起的名字', session_name_source='manual')
+        recorder.write(self.folder / 'session.json', meta)
+        self.assertEqual(agent.evidence(self.folder)['title'], '手动起的名字')
 
     def test_valid_v2_submits_and_expands_source_quotes(self):
         """触发路径：外部 agent 按新格式提交一场整理。"""
@@ -103,8 +131,101 @@ class JudgmentInstanceTests(unittest.TestCase):
         candidate['instances'][0]['kind'] = 'cost'
         self.assertEqual(agent.validate_result(self.folder, candidate)['instances'][0]['kind'], 'cost')
         candidate['instances'][0]['kind'] = 'tedious'
-        with self.assertRaisesRegex(ValueError, '类型无效'):
+        with self.assertRaisesRegex(ValueError, 'design_defect'):
             agent.validate_result(self.folder, candidate)
+
+    def defect(self, defect='missing_info', **extra):
+        candidate = self.candidate()
+        row = candidate['instances'][0]
+        del row['kind']
+        row.update(design_defect=defect, symptom='not_found', evidence_source='behavior', valence='negative', intensity=2, owner='ui_interaction', **extra)
+        return candidate
+
+    def test_a_design_defect_keeps_its_fields_and_old_results_read_as_before(self):
+        """触发路径：单场整理按设计缺陷提交 → 表象、次缺陷、证据来源等原样存下，校验幂等；旧结果写 kind，不用这些字段，读法不变。"""
+        validated = agent.validate_result(self.folder, self.defect(secondary_defect='visual_hierarchy'))
+        row = validated['instances'][0]
+        self.assertEqual((row['design_defect'], row['symptom'], row['secondary_defect'], row['owner']), ('missing_info', 'not_found', 'visual_hierarchy', 'ui_interaction'))
+        self.assertNotIn('kind', row)
+        self.assertEqual(agent.validate_result(self.folder, validated), validated)
+        legacy = agent.validate_result(self.folder, self.candidate())['instances'][0]
+        self.assertEqual(legacy['kind'], 'confusion')
+        self.assertNotIn('design_defect', legacy)
+        self.assertNotIn('owner', legacy)
+        self.assertEqual((agent.instance_type(row), agent.instance_type(legacy)), ('missing_info', 'confusion'))
+
+    def test_a_design_defect_is_refused_with_how_to_fix_it(self):
+        """触发路径：agent 写错字段 → 校验拒绝并说明该怎么改，不把半成品存进场次。"""
+        cases = [(dict(design_defect='misunderstood'), 'design_defect'),
+                 (dict(symptom=None), 'symptom'),
+                 (dict(symptom='confused'), 'symptom'),
+                 (dict(owner=None), 'owner'),
+                 (dict(kind='confusion'), '不要再写 kind'),
+                 (dict(secondary_defect='missing_info'), 'secondary_defect'),
+                 (dict(secondary_defect='observation'), 'secondary_defect'),
+                 (dict(design_defect='value', valence='positive'), '正面评价')]
+        for change, message in cases:
+            candidate = self.defect()
+            candidate['instances'][0].update(change)
+            with self.assertRaisesRegex(ValueError, message, msg=str(change)):
+                agent.validate_result(self.folder, candidate)
+        unreleased = self.candidate()
+        unreleased['instances'][0]['kind'] = 'misunderstood'
+        with self.assertRaisesRegex(ValueError, 'design_defect'):
+            agent.validate_result(self.folder, unreleased)
+
+    def test_a_display_error_always_carries_a_bug_and_may_have_no_symptom(self):
+        """触发路径：文字重叠、显示卡住这类错误，玩家不一定卡住 → 不用填表象，但必须带 bug，QA 才收得到。"""
+        candidate = self.defect('display_error')
+        del candidate['instances'][0]['symptom']
+        with self.assertRaisesRegex(ValueError, '一定带 bug'):
+            agent.validate_result(self.folder, candidate)
+        candidate['instances'][0]['bug'] = 'suspected'
+        self.assertEqual(agent.validate_result(self.folder, candidate)['instances'][0]['bug'], 'suspected')
+
+    def test_an_observation_needs_no_judged_fields_and_is_no_problem(self):
+        """触发路径：正面评价记成观察 → 不要求表象和落地方，也不算进问题数。"""
+        candidate = self.candidate()
+        row = candidate['instances'][0]
+        del row['kind']
+        row.update(design_defect='observation', valence='positive', evidence_source='spoken', intensity=1, owner='gameplay')
+        validated = agent.validate_result(self.folder, candidate)['instances'][0]
+        self.assertFalse(agent.is_problem(validated))
+        del row['valence'], row['evidence_source'], row['intensity'], row['owner']
+        self.assertFalse(agent.is_problem(agent.validate_result(self.folder, candidate)['instances'][0]))
+
+    def test_the_type_and_its_fields_reach_the_readers(self):
+        """触发路径：跨场次查询、导出表格、场次库详情读这一条 → 都拿到统一的类型和表象、次缺陷，不用区分它是新结果还是旧结果。"""
+        job = agent.claim(self.folder, 'synthetic-v2-worker')
+        agent.submit(self.folder, job['token'], self.defect(secondary_defect='visual_hierarchy'))
+        query = query_instances(self.vault, kind='missing_info')[0]
+        self.assertEqual((query['kind'], query['symptom'], query['secondary_defect']), ('missing_info', 'not_found', 'visual_hierarchy'))
+        self.assertEqual(query_instances(self.vault, kind='confusion'), [])
+        row = export_rows(self.vault, ['fixture'])['rows'][0]
+        self.assertEqual((row['kind'], row['problem'], row['symptom'], row['secondary_defect']), ('missing_info', True, 'not_found', 'visual_hierarchy'))
+        self.assertTrue({'design_defect', 'secondary_defect'} <= set(INSTANCE_FIELDS), 'the desk draws the type and the secondary defect')
+
+    def test_the_session_label_and_bars_count_both_generations(self):
+        """触发路径：场次库和主窗口读场次状态 → 新缺陷按问题计数，比例条的键是缺陷名；旧场次的计数不变。"""
+        job = agent.claim(self.folder, 'synthetic-v2-worker')
+        agent.submit(self.folder, job['token'], self.defect())
+        state = agent.preprocessing_status(self.folder)
+        self.assertEqual(state['label'], '已整理 · 1 个问题')
+        self.assertEqual(state['kinds'], {'missing_info': 1})
+        job = agent.reprocess(self.folder, 'synthetic-v2-worker', '换回旧结果核对')
+        agent.submit(self.folder, job['token'], self.candidate())
+        state = agent.preprocessing_status(self.folder)
+        self.assertEqual(state['label'], '已整理 · 1 个问题')
+        self.assertEqual(state['kinds'], {'confusion': 1})
+
+    def test_statement_check_flags_quote_collages_and_hidden_references(self):
+        """触发路径：陈述把原话串成拼贴、或写“见另一条”“第 120 秒” → validate 和提交回执都提醒（不拦截），agent 提交前改掉。"""
+        candidate = self.candidate()
+        candidate['instances'][0]['statement'] = '他说“一”“二”“三”“四”，详见另一条。'
+        job = agent.claim(self.folder, 'synthetic-v2-worker')
+        submitted = agent.submit(self.folder, job['token'], candidate)
+        self.assertEqual(sorted(w['problem'] for w in submitted['statement_check']['warnings']), ['hidden_reference', 'quotes'])
+        self.assertEqual(agent.statement_check([dict(id='i1', statement='他说“找不到入口”。')])['warnings'], [])
 
     def test_bug_is_marked_beside_the_kind_explicit_or_suspected(self):
         """触发路径：单场整理把“设计没问题、实现出了问题”的判断标成 bug → 回看里 Bug 组和它原本的类型组都列出。"""

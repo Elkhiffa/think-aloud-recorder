@@ -1263,7 +1263,7 @@ class Session:
         with zipfile.ZipFile(tmp,'w',compression=zipfile.ZIP_STORED,allowZip64=True) as z:
             for src in folder.rglob('*'):
                 if src.is_file() and not src.name.endswith(('.tmp','.pending.mp4','.lock')):
-                    if src.name in ('agent-ready.json','agent-state.json','experience-events.json') or 'agent-history' in src.relative_to(folder).parts:
+                    if src.name in ('agent-ready.json','agent-state.json','experience-events.json') or {'agent-history','证据视频'}&set(src.relative_to(folder).parts):
                         # Export only the validated result snapshot below. Job
                         # leases and machine-local readiness are not portable.
                         continue

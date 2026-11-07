@@ -12,7 +12,10 @@
   --ink:#221E19;--muted:#5F574B;--faint:#978D7E;--rule:#DDD5C6;
   --rec:#D23A24;--rec-ink:#FFFBF6;--rec-soft:rgba(255,251,246,.78);
   --warn:#7A4A12;--warn-bg:#F5E3CB;--ok:#4F6B3E;--dot:#D23A24;
-  --k-confusion:#3F5D8C;--k-obstacle:#A3532B;--k-cost:#A8861C;--k-negative:#7C4B78;--k-other:#D8CFBF;
+  /* 问题类型颜色同 findings.css：--k 是填充色，--kt 是文字色，旧分类灰阶 */
+  --k-missing_info:oklch(.6 .13 245);--k-unclear_meaning:oklch(.55 .15 305);--k-wrong_expectation:oklch(.42 .09 255);--k-no_feedback:oklch(.72 .09 220);--k-visual_hierarchy:oklch(.58 .09 185);--k-blocked:oklch(.64 .14 45);--k-hard_to_operate:oklch(.74 .13 85);--k-missing_feature:oklch(.5 .11 55);--k-value:oklch(.62 .15 350);--k-display_error:oklch(.66 .13 125);
+  --kt-missing_info:oklch(.54 .13 245);--kt-no_feedback:oklch(.54 .09 220);--kt-visual_hierarchy:oklch(.53 .09 185);--kt-blocked:oklch(.56 .14 45);--kt-hard_to_operate:oklch(.55 .13 85);--kt-value:oklch(.565 .15 350);--kt-display_error:oklch(.535 .13 125);
+  --k-confusion:oklch(.40 0 0);--k-obstacle:oklch(.52 0 0);--k-cost:oklch(.64 0 0);--k-negative:oklch(.76 0 0);--k-other:#D8CFBF;
   color-scheme:light;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -25,6 +28,7 @@ button:disabled{cursor:default;opacity:.5}
 .hidden{display:none!important}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 .note{font-size:var(--t1);line-height:1.55;color:var(--muted)}
+.k-missing_info{--kc:var(--k-missing_info);--kt:var(--kt-missing_info,var(--k-missing_info))}.k-unclear_meaning{--kc:var(--k-unclear_meaning);--kt:var(--kt-unclear_meaning,var(--k-unclear_meaning))}.k-wrong_expectation{--kc:var(--k-wrong_expectation);--kt:var(--kt-wrong_expectation,var(--k-wrong_expectation))}.k-no_feedback{--kc:var(--k-no_feedback);--kt:var(--kt-no_feedback,var(--k-no_feedback))}.k-visual_hierarchy{--kc:var(--k-visual_hierarchy);--kt:var(--kt-visual_hierarchy,var(--k-visual_hierarchy))}.k-blocked{--kc:var(--k-blocked);--kt:var(--kt-blocked,var(--k-blocked))}.k-hard_to_operate{--kc:var(--k-hard_to_operate);--kt:var(--kt-hard_to_operate,var(--k-hard_to_operate))}.k-missing_feature{--kc:var(--k-missing_feature);--kt:var(--kt-missing_feature,var(--k-missing_feature))}.k-value{--kc:var(--k-value);--kt:var(--kt-value,var(--k-value))}.k-display_error{--kc:var(--k-display_error);--kt:var(--kt-display_error,var(--k-display_error))}
 .k-confusion{--kc:var(--k-confusion)}.k-obstacle{--kc:var(--k-obstacle)}.k-cost{--kc:var(--k-cost)}.k-negative{--kc:var(--k-negative)}.k-other{--kc:var(--k-other)}
 
 /* 自绘标题栏：拖动交给 Windows（app-region），可点的东西退出拖动。 */
@@ -133,7 +137,7 @@ button:disabled{cursor:default;opacity:.5}
 .fp{display:flex;height:8px;border-radius:4px;overflow:hidden;gap:2px}
 .fp i{display:block;background:var(--kc,var(--k-other))}
 .kleg{display:flex;flex-wrap:wrap;gap:var(--s1) var(--s4);margin-top:var(--s2);font-size:var(--t1)}
-.kleg span{color:var(--kc)}
+.kleg span{color:var(--kt,var(--kc))}
 .kleg b{font-size:var(--t2)}
 .quote{border-radius:var(--r-md);background:var(--sheet);padding:var(--s3) var(--s4);margin-top:var(--s3)}
 .quote p{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}

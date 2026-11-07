@@ -3,14 +3,20 @@
    Bug 是和类型并列的一组（设计没问题、实现出了问题）：一条判断仍有自己的类型，是 bug 时两组都列出。
    调用方持有状态并决定点击去向（回看原地跳转，场次库打开回看）；这里只负责画和接点击。 */
 (function(root){
-  const PROBLEM={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
+  // Problem types are design defects; the four legacy kinds belong to sessions organized before them and show in grey until those are redone.
+  const DEFECTS={missing_info:'信息缺失',unclear_meaning:'表意不明',wrong_expectation:'预期传达有误',no_feedback:'反馈缺失或延迟',visual_hierarchy:'视觉层级',blocked:'操作阻断',hard_to_operate:'操作困难',missing_feature:'功能缺失',value:'体验与价值',display_error:'表现错误'};
+  const LEGACY={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',negative:'负面评价'};
+  const PROBLEM={...DEFECTS,...LEGACY};
   const OTHER={expectation:'预期',suggestion:'建议',positive:'正向体验',observation:'观察',self_correction:'自我修正'};
   const LABEL={...PROBLEM,...OTHER};
   const GROUPS=[...Object.keys(PROBLEM),'bug','other'];
   const GROUP_LABEL={...PROBLEM,bug:'Bug',other:'其他'};
   const BUG_LABEL={explicit:'Bug',suspected:'疑似 Bug'};
+  const OWNER={ui_interaction:'交互入口与流程',visual_hierarchy:'视觉设计',copy:'文案',tutorial:'教学引导',system:'系统数值',
+    input:'输入操作',implementation:'实现 / QA',gameplay:'玩法关卡叙事',art:'美术表现'};
   const CHEV='<svg class="fd-chev" viewBox="0 0 10 6" aria-hidden="true"><path d="M0 0h10L5 6z"/></svg>';
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const typeOf=item=>item.design_defect||item.kind;
   const groupOf=kind=>kind in PROBLEM?kind:'other';
   const isVersion2=result=>Array.isArray(result?.instances);
   // One scroll listener per scroller; the desk re-creates the view on every detail render.
@@ -25,9 +31,11 @@
     for(const activity of activities||[])for(const id of activity.event_ids||[])if(tags.has(id)&&!tags.get(id).includes(activity.name))tags.get(id).push(activity.name);
     const items=(result?.instances||[]).map(item=>{
       const said=[...(item.said||[])].sort((a,b)=>a.start-b.start);
-      return {id:item.id,kind:item.kind,group:groupOf(item.kind),at:said[0]?.start??item.refers_to?.start??0,
+      return {id:item.id,kind:typeOf(item),group:groupOf(typeOf(item)),secondary:item.secondary_defect||null,valence:item.valence||null,owner:item.owner||null,source:item.evidence_source||null,
+        at:said[0]?.start??item.refers_to?.start??0,
         quote:said.map(ref=>ref.text).filter(Boolean).join(' … '),statement:item.statement||'',screen:item.screen||'',
-        refers:item.refers_to||null,compare:item.compare_to||null,event:item.event_id,bug:bugs?.[item.id]||item.bug||null,issues:issues?.[item.id]||[]};
+        refers:item.refers_to||null,compare:item.compare_to||null,event:item.event_id,bug:bugs?.[item.id]||item.bug||null,issues:issues?.[item.id]||[],
+        clips:item.clips||(item.evidence||[]).filter(row=>row.clip).map(row=>({start:row.start,end:row.end}))};
     }).sort((a,b)=>a.at-b.at);
     return {events,eventById,tags,items};
   }
@@ -43,11 +51,31 @@
     const state=options.state||{};
     state.view=state.view||'problems';state.filter=state.filter||new Set();state.activity=state.activity||'';
     state.open=state.open||new Set();state.folded=state.folded||new Set();state.auto=state.auto??null;state.current=state.current??null;
+    state.clipOpen=state.clipOpen||new Set();state.clipSrc=state.clipSrc||new Map();state.clipError=state.clipError||new Map();
     container.classList.add('findings');
     let data=null,view=null;
 
     const visible=item=>(!state.filter.size||[...state.filter].some(group=>inGroup(item,group)))&&(!state.activity||view.tags.get(item.event)?.includes(state.activity));
     const timeButton=(time,label,extra='')=>`<button type="button" class="fd-jump" data-seek="${time}"${extra}>${escape(label)}</button>`;
+    // Clips: a window without the video (the desk) plays the clip in the row; review has the video, so the same button plays that span there.
+    const clipKey=(item,clip)=>`${item.id}@${clip.start}@${clip.end}`;
+    function clipButton(item,clip){
+      if(!options.loadClip)return `<button type="button" class="fd-clip" data-play="${clip.start}" title="在回看里播放这一段">▶ ${escape(clock(clip.start))}–${escape(clock(clip.end))}</button>`;
+      const key=clipKey(item,clip),open=state.clipOpen.has(key);
+      return `<button type="button" class="fd-clip" data-clip="${escape(key)}" aria-expanded="${open}"><i aria-hidden="true">▸</i>操作记录 ${Math.round(clip.end-clip.start)} 秒</button>`;
+    }
+    function clipPanels(item){
+      if(!options.loadClip)return '';
+      return item.clips.filter(clip=>state.clipOpen.has(clipKey(item,clip))).map(clip=>{const key=clipKey(item,clip),src=state.clipSrc.get(key),error=state.clipError.get(key);
+        return `<div class="fd-clip-view">${src?`<video src="${src}" autoplay loop muted playsinline aria-label="操作记录"></video>`:`<p class="fd-empty">${escape(error||'正在读取视频…')}</p>`}</div>`;}).join('');
+    }
+    function toggleClip(key){
+      if(state.clipOpen.delete(key)){render();return;}
+      state.clipOpen.add(key);state.clipError.delete(key);render();
+      if(state.clipSrc.has(key))return;
+      const [,start,end]=key.split('@').map((part,index)=>index?Number(part):part);
+      options.loadClip(start,end).then(src=>{state.clipSrc.set(key,src);}).catch(error=>{state.clipError.set(key,error.message||'读取视频失败。');}).finally(render);
+    }
     function row(item,{showEvent,group}){
       const event=view.eventById.get(item.event),refers=item.refers;
       const referred=!refers?'':refers.basis==='earlier_session'?`<span title="${escape(refers.note||'')}">指本场之前</span>`:
@@ -55,12 +83,16 @@
       const compared=item.compare?timeButton(item.compare.start,`对照 ${clock(item.compare.start)}`,` data-event="${escape(item.event)}"`):'';
       // In the Bug group each row names its own kind; elsewhere a bug carries a small mark.
       const badge=item.bug&&group!=='bug'?`<span class="fd-bug-mark${item.bug==='suspected'?' is-suspected':''}">${BUG_LABEL[item.bug]}</span>`:'';
-      const kind=group==='other'||group==='bug'?`<span class="fd-kind">${escape(LABEL[item.kind]||item.kind)}${group==='bug'&&item.bug==='suspected'?' · 疑似':''}</span>`:'';
-      const meta=[kind,badge,item.screen?`<span class="fd-screen">${escape(item.screen)}</span>`:'',referred,compared,
+      const kind=group==='other'||group==='bug'?`<span class="fd-kind">${escape(LABEL[item.kind]||item.kind)}${item.kind==='observation'&&item.valence==='positive'?' · 正面':''}${group==='bug'&&item.bug==='suspected'?' · 疑似':''}</span>`:'';
+      // 该谁改 on every judged problem; the evidence source only when it is the recorder's design judgment, the weaker kind.
+      const owner=item.owner&&group!=='other'?`<span class="fd-owner">该谁改：${escape(OWNER[item.owner]||item.owner)}</span>`:'';
+      const expert=item.source==='expert'&&group!=='other'?'<span class="fd-expert">设计师判断</span>':'';
+      const secondary=item.secondary&&group!=='other'?`<span class="fd-secondary">次：${escape(LABEL[item.secondary]||item.secondary)}</span>`:'';
+      const meta=[...item.clips.map(clip=>clipButton(item,clip)),kind,badge,secondary,owner,expert,item.screen?`<span class="fd-screen">${escape(item.screen)}</span>`:'',referred,compared,
         showEvent&&event?`<button type="button" class="fd-event-link" data-goto-event="${escape(event.id)}" title="在「体验事件」里查看这一段">${escape(event.title)}</button>`:'',
         ...item.issues.map(issue=>`<button type="button" class="fd-insight-link" data-insight="${escape(issue.id)}" data-insight-item="${escape(item.id)}" title="在洞察窗口里查看这条证据">${issue.role==='counter'?'反例 · ':''}洞察：${escape(issue.title)}</button>`)].filter(Boolean).join('');
       return `<li class="fd-row k-${group}" data-item="${escape(item.id)}"><button type="button" class="fd-at" data-seek="${item.at}" data-event="${escape(item.event)}" title="定位到说出口的时刻">${clock(item.at)}</button>`+
-        `<div class="fd-main">${item.quote?`<p class="fd-quote">${escape(item.quote)}</p>`:''}<p class="fd-stmt">${escape(item.statement)}</p>${meta?`<p class="fd-meta">${meta}</p>`:''}</div></li>`;
+        `<div class="fd-main">${item.quote?`<p class="fd-quote">${escape(item.quote)}</p>`:''}<p class="fd-stmt">${escape(item.statement)}</p>${meta?`<p class="fd-meta">${meta}</p>`:''}${clipPanels(item)}</div></li>`;
     }
     function groups(items,{showEvent,prefix}){
       return GROUPS.map(group=>{const rows=items.filter(item=>inGroup(item,group));if(!rows.length)return '';const key=prefix+group,folded=state.folded.has(key);
@@ -186,6 +218,8 @@
     container.addEventListener('click',event=>{
       const target=event.target.closest('button');if(!target||!container.contains(target)||target.disabled)return;
       if(target.dataset.insight){options.onInsight?.(target.dataset.insightItem,target.dataset.insight);return;}
+      if(target.dataset.clip){toggleClip(target.dataset.clip);return;}
+      if(target.dataset.play!==undefined){options.onPlay?.(Number(target.dataset.play));return;}
       if(target.dataset.filter){const group=target.dataset.filter;state.filter.has(group)?state.filter.delete(group):state.filter.add(group);render();return;}
       if(target.hasAttribute('data-clear-activity')){state.activity='';render();return;}
       if(target.dataset.activity){state.activity=state.activity===target.dataset.activity?'':target.dataset.activity;render();return;}
@@ -213,6 +247,6 @@
       },
     };
   }
-  const api={PROBLEM,OTHER,LABEL,GROUPS,GROUP_LABEL,groupOf,isVersion2,model,counts,create};
+  const api={DEFECTS,LEGACY,PROBLEM,OTHER,LABEL,GROUPS,GROUP_LABEL,OWNER,typeOf,groupOf,isVersion2,model,counts,create};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;else root.ThinkAloudFindings=api;
 })(globalThis);

@@ -4,7 +4,7 @@ The ready manifest is published last; a result is one atomic commit. A leased
 claim fences late workers. Source revisions deliberately exclude session names,
 job state and user notes, so presenting a result cannot enqueue itself again.
 """
-from session_metadata import acceptance as session_acceptance, session_title
+from session_metadata import acceptance as session_acceptance, session_naming
 from collections import OrderedDict
 from copy import deepcopy
 import hashlib
@@ -26,10 +26,12 @@ ANALYSIS_CONTEXT = 'analysis-context.json'
 FILES = ('录像.mp4', '口述.flac', '录像.whisper.json',
          'input-events.json', 'input-events.revocation.json')
 MAX_RESULT = 2 * 1024 * 1024
+CLIP_SECONDS = (2, 20)
+MAX_CLIPS_PER_INSTANCE = 2
 _CACHE = OrderedDict()
 _CACHE_LOCK = threading.Lock()
 _RESULT_STORE = None  # (directory, version) once the desktop app configures it
-STATUS_CACHE_VERSION = 1
+STATUS_CACHE_VERSION = 3  # 3: problem counts and kind keys for the design-defect types
 CHECKING = dict(state='checking', label='核对中', reason='正在核对整理结果，完成后显示问题分布。')
 
 
@@ -376,8 +378,11 @@ def input_summary(folder, start, end, gap=0.5):
         segment.update(device=device, label=code, kind=kind)
         if directions:
             segment['directions'] = ''.join(d for d, _ in sorted(directions.items(), key=lambda item: -item[1])[:3])
-    return dict(session_id=meta['id'], revision=revision, range=dict(start=start, end=end), gap_seconds=gap,
-                state=inputs.get('state'), alignment=inputs.get('alignment'), raw_intervals=len(rows), segments=segments)
+    value = dict(session_id=meta['id'], revision=revision, range=dict(start=start, end=end), gap_seconds=gap,
+                 state=inputs.get('state'), alignment=inputs.get('alignment'), raw_intervals=len(rows), segments=segments)
+    if inputs.get('capture_notice'):
+        value['capture_notice'] = inputs['capture_notice']
+    return value
 
 
 def evidence(folder, start=None, end=None):
@@ -398,12 +403,13 @@ def evidence(folder, start=None, end=None):
     from speaker_roles import speaker_payload
     speakers = speaker_payload(folder, meta, segments)
     value = dict(version=VERSION, session_id=meta['id'], revision=revision,
-                 title=session_title(meta),
+                 # An automatic name comes from the previous organising pass, not from the material; a manual one is the recorder's.
+                 title=session_naming(meta)['manual_name'] or str(meta.get('game') or '体验回看'),
                  test=bool(meta.get('test')), **session_acceptance(meta), duration_seconds=duration,
                  timebase='video_seconds', speakers=speakers,
                  paths={name: str(_path(folder, name)) for name in material['sources'] if material['sources'][name]},
                  transcript=segments, inputs={k: inputs[k] for k in
-                     ('state', 'error', 'alignment', 'recording_scope', 'timebase', 'input_corrections') if k in inputs},
+                     ('state', 'error', 'alignment', 'recording_scope', 'timebase', 'input_corrections', 'capture_notice') if k in inputs},
                  coverage=dict(transcript_segments=len(segments),
                                last_transcript_end=max((s['end'] for s in segments), default=None),
                                input_intervals=len(inputs['intervals']), gaps=inputs['gaps'],
@@ -626,9 +632,15 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 raise ValueError('判断实例的 elements 必须是画面文字列表。')
             if not isinstance(tags, list) or any(not isinstance(tag, str) or tag not in issues for tag in tags):
                 raise ValueError('判断实例引用的议题标签不存在。')
-            if row.get('kind') not in ('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion',
-                                       'self_correction', 'observation'):
-                raise ValueError('判断实例类型无效。')
+            # 路径 3：按设计缺陷整理的结果写 design_defect，问题实例带表象、证据来源、正负与强度、落地方；旧场次的结果写 kind，没有这些。
+            defect, kind = row.get('design_defect'), row.get('kind')
+            if defect is not None and kind is not None:
+                raise ValueError('判断实例写 design_defect 就不要再写 kind。')
+            if defect is None and kind not in LEGACY_KINDS:
+                raise ValueError(f'判断实例要写 design_defect：取值为 {"、".join(DESIGN_DEFECTS)}。')
+            judged = {}
+            if defect is not None:
+                judged = _judged_fields(row, defect)
             # 路径 3：bug 与类型并列（设计没问题、实现出了问题）。明说的同时挂 BUG 标签，疑似的不挂；旧结果只有标签，按明说。
             said_bug = any(tag == 'BUG' or tag.startswith('BUG.') for tag in tags)
             bug = row.get('bug', 'explicit' if said_bug else None)
@@ -636,6 +648,8 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 raise ValueError('判断实例的 bug 只能是 explicit（记录者明说）或 suspected（agent 判断）。')
             if bug == 'explicit' and not said_bug:
                 raise ValueError('明说的 bug 要同时在 issue_tags 里写 BUG。')
+            if defect == 'display_error' and not bug:
+                raise ValueError('表现错误 display_error 一定带 bug：明说填 explicit 并在 issue_tags 写 BUG，否则填 suspected。')
             if bug == 'suspected' and said_bug:
                 raise ValueError('疑似 bug 不挂 BUG 标签：BUG 表示记录者明说是 bug。')
             if row.get('confidence') not in ('high', 'medium', 'low'):
@@ -652,6 +666,15 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                            observation=_text(item.get('observation'), 300, '判断实例画面事实'))
                 if not any(checked['start'] <= ref['start'] and checked['end'] >= ref['end'] for checked in ranges):
                     raise ValueError('画面证据不在已检查范围内。')
+                if 'clip' in item:
+                    # 路径 3：走焦、按键没反应这类判断要看“按了什么、然后发生什么”，一张静帧说不清，这段由提交时生成视频。
+                    if item['clip'] is not True:
+                        raise ValueError('画面证据的 clip 只能是 true。')
+                    if not CLIP_SECONDS[0] <= ref['end'] - ref['start'] <= CLIP_SECONDS[1]:
+                        raise ValueError(f'视频片段长度需在 {CLIP_SECONDS[0]}–{CLIP_SECONDS[1]} 秒之间：只截这次操作和它的结果。')
+                    if sum(1 for other in refs if other.get('clip')) >= MAX_CLIPS_PER_INSTANCE:
+                        raise ValueError(f'每条判断实例最多 {MAX_CLIPS_PER_INSTANCE} 段视频。')
+                    ref['clip'] = True
                 refs.append(ref)
             expanded_bytes += len(json.dumps(said + refs, ensure_ascii=False).encode('utf-8'))
             if expanded_bytes > MAX_RESULT:
@@ -662,8 +685,9 @@ def validate_result(folder, value, meta=None, material=None, revision=None):
                 extra['screen_proposed'] = True
             if bug:
                 extra['bug'] = bug
+            extra.update(judged)
             instances.append(dict(id=ident, event_id=row['event_id'], said=said, refers_to=refers_to, **extra,
-                                  screen=screen, elements=list(selected_elements), kind=row['kind'],
+                                  screen=screen, elements=list(selected_elements), **({'design_defect': defect} if defect else {'kind': kind}),
                                   statement=_text(row.get('statement'), 300, '判断陈述'), issue_tags=list(tags),
                                   evidence=refs, confidence=row['confidence']))
         result['instances'] = instances
@@ -864,7 +888,22 @@ def submit(folder, token, value):
         # 路径 3：提交写入后在锁外核对界面编号与画面上亮着的页签（每刻约 2 秒识别），只提醒不拦截。
         from context_track import check_screens
         summary['screen_check'] = check_screens(folder, result['instances'])
+        summary['statement_check'] = statement_check(result['instances'])
+        if clip_spans(result):
+            # 路径 3：结果写入后在锁外生成；生成失败只写进回执，判断已经提交成功，可用 clips-build 补。
+            from clip_export import build_clips
+            summary['clips'] = build_clips(folder, result)
     return summary
+
+
+def instance_clips(instance):
+    """An instance's clip spans, for the views that offer them."""
+    return [dict(start=row['start'], end=row['end']) for row in instance.get('evidence') or [] if row.get('clip')]
+
+
+def clip_spans(result):
+    """The distinct (start, end) spans an organized result marks as clips, in time order."""
+    return sorted({(row['start'], row['end']) for instance in result.get('instances') or [] for row in instance.get('evidence') or [] if row.get('clip')})
 
 
 def _activity_name_source(folder):
@@ -1020,29 +1059,92 @@ def _reanalysis_status(job, raw):
     return dict(value, state='failed', failure_reason=str(job.get('reason') or '')[:2000])
 
 
-QUOTE_ORDER = ('obstacle', 'cost', 'confusion', 'negative')
-# The four problem types every window counts; the other kinds are listed apart.
+# Judgment kinds by the link of the interaction cycle that broke (skills/think-aloud-judgments); `value` is a problem
+# only when negative. Results organized before 11-05 keep the legacy kinds and stay readable until they are redone.
+PROBLEM_DEFECTS = ('missing_info', 'unclear_meaning', 'wrong_expectation', 'no_feedback', 'visual_hierarchy', 'blocked', 'hard_to_operate',
+                   'missing_feature', 'value', 'display_error')
+DESIGN_DEFECTS = PROBLEM_DEFECTS + ('observation',)
+SYMPTOMS = ('goal_unclear', 'unnoticed', 'hard_to_perceive', 'not_found', 'not_understood', 'unsupported', 'cant_execute', 'costly', 'outcome_unclear', 'value')
+LEGACY_KINDS = ('confusion', 'obstacle', 'cost', 'positive', 'negative', 'expectation', 'suggestion', 'self_correction', 'observation')
 PROBLEM_KINDS = ('confusion', 'obstacle', 'cost', 'negative')
+JUDGED_FIELDS = dict(evidence_source=('behavior', 'spoken', 'expert'), valence=('positive', 'negative', 'neutral'), intensity=(1, 2, 3),
+                     owner=('ui_interaction', 'visual_hierarchy', 'copy', 'tutorial', 'system', 'input', 'implementation', 'gameplay', 'art'))
+# Headline quote: the defects that stop a player first.
+QUOTE_ORDER = ('blocked', 'missing_feature', 'wrong_expectation', 'missing_info', 'unclear_meaning', 'no_feedback', 'visual_hierarchy',
+               'hard_to_operate', 'display_error', 'value', 'obstacle', 'cost', 'confusion', 'negative')
 _FILLER = ('呃', '嗯', '哎', '啊', '哦', '好', '然后', '但是', '那', '对', '就是')
+
+
+def instance_type(item):
+    """A judgment's type across both generations: design_defect, or kind on results from before it."""
+    return item.get('design_defect') or item.get('kind')
+
+
+def is_problem(item):
+    kind = instance_type(item)
+    return kind in PROBLEM_DEFECTS or kind in PROBLEM_KINDS
+
+
+def _judged_fields(row, defect):
+    if defect not in DESIGN_DEFECTS:
+        raise ValueError(f'判断实例的 design_defect 无效：取值为 {"、".join(DESIGN_DEFECTS)}。')
+    judged = {}
+    for field, allowed in JUDGED_FIELDS.items():
+        if field in row or defect != 'observation':
+            if row.get(field) not in allowed:
+                raise ValueError(f'判断实例的 {field} 无效：取值为 {"、".join(map(str, allowed))}。')
+            judged[field] = row[field]
+    if defect == 'value' and judged['valence'] == 'positive':
+        raise ValueError('正面评价不是缺陷：记成 observation，valence 填 positive，写好在哪。')
+    symptom = row.get('symptom')
+    if symptom is None and defect not in ('display_error', 'observation'):
+        raise ValueError(f'判断实例要写 symptom（玩家卡在哪一环）：取值为 {"、".join(SYMPTOMS)}。')
+    if symptom is not None:
+        if symptom not in SYMPTOMS:
+            raise ValueError(f'判断实例的 symptom 无效：取值为 {"、".join(SYMPTOMS)}。')
+        judged['symptom'] = symptom
+    secondary = row.get('secondary_defect')
+    if secondary is not None:
+        if secondary not in PROBLEM_DEFECTS or secondary == defect:
+            raise ValueError('secondary_defect 要写另一个缺陷，不能和主缺陷相同，也不能是 observation。')
+        judged['secondary_defect'] = secondary
+    return judged
+
+
+# Writing checks the skill asks for but prose rules do not hold reliably; reported, never blocking (like screen_check).
+_HIDDEN = re.compile(r'另一条|另条|见上|见下|见同场|第\s*\d+(\.\d+)?\s*秒|OCR|理解时刻')
+
+
+def statement_check(instances):
+    warnings = []
+    for item in instances:
+        statement = str(item.get('statement') or '')
+        quotes = statement.count('“')
+        hidden = _HIDDEN.search(statement)
+        if quotes > 3:
+            warnings.append(dict(instance=item.get('id'), problem='quotes', detail=f'陈述里引了 {quotes} 处原话，只留最能说明问题的一两句'))
+        if hidden:
+            warnings.append(dict(instance=item.get('id'), problem='hidden_reference', detail=f'陈述里有读者看不到的“{hidden.group(0)}”'))
+    return dict(checked=len(instances), warnings=warnings)
 
 
 def _digest(result):
     """Small, list-ready summary of a validated result: kind counts, one verbatim quote, event titles.
 
     The quote is the recorder's own words, never rewritten: the first high-confidence
-    instance in obstacle > cost > confusion > negative order whose first quoted line is
-    8-24 characters and does not open with a filler word.
+    problem instance in QUOTE_ORDER whose first quoted line is 8-24 characters and does not
+    open with a filler word.
     """
     instances = result.get('instances') or []
     kinds = {}
     for item in instances:
-        kinds[item.get('kind')] = kinds.get(item.get('kind'), 0) + 1
+        kinds[instance_type(item)] = kinds.get(instance_type(item), 0) + 1
     quote = None
     for kind in QUOTE_ORDER:
         for item in instances:
             said = (item.get('said') or [{}])[0]
             text = str(said.get('text') or '').strip()
-            if (item.get('kind') == kind and item.get('confidence') == 'high' and 8 <= len(text) <= 24
+            if (instance_type(item) == kind and is_problem(item) and item.get('confidence') == 'high' and 8 <= len(text) <= 24
                     and not text.startswith(_FILLER)):
                 quote = dict(text=text, at=said.get('start'), kind=kind, instance=item.get('id'))
                 break
@@ -1087,7 +1189,7 @@ def _status(folder, meta, validate=True):
                 result = transcript_corrections.project(folder, result)
             except (OSError, ValueError, TypeError, KeyError):
                 pass  # A damaged corrections file leaves quotes as transcribed; the file itself is kept.
-            problems = sum(1 for item in result.get('instances', []) if item.get('kind') in PROBLEM_KINDS)
+            problems = sum(1 for item in result.get('instances', []) if is_problem(item))
             value = dict(state='complete', label=(f'已整理 · {problems} 个问题' if 'instances' in result
                                                   else f'已整理 · {len(result["events"])} 个体验事件'),
                          events=len(result['events']), questions=len(result['questions']),
@@ -1183,6 +1285,17 @@ def _store_result(key, signature, value):
         pass  # An unwritable state directory only costs the next start a fresh check.
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def agent_status(folder):
+    """The status an organising agent reads: a redo is judged independently, so the previous pass's types, quote and titles stay out,
+    and its counts too while the redo is running."""
+    value = {key: item for key, item in preprocessing_status(folder).items() if key not in ('kinds', 'quote', 'event_titles')}
+    redo = value.get('reanalysis')
+    if redo:
+        value = {key: item for key, item in value.items() if key not in ('events', 'questions', 'ideas', 'instances')}
+        value['label'] = '重新分析中' if redo.get('state') == 'processing' else '重新分析未完成'
+    return value
 
 
 def preprocessing_status(folder, meta=None, include_result=False, annotate=True):

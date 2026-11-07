@@ -2,7 +2,9 @@
   'use strict';
   const $=id=>document.getElementById(id);
   const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-  const KIND={confusion:'困惑',obstacle:'阻碍',cost:'操作成本',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
+  // Design defects first; the legacy kinds belong to sessions organized before them.
+  const KIND={missing_info:'信息缺失',unclear_meaning:'表意不明',wrong_expectation:'预期传达有误',no_feedback:'反馈缺失或延迟',visual_hierarchy:'视觉层级',blocked:'操作阻断',hard_to_operate:'操作困难',missing_feature:'功能缺失',value:'体验与价值',display_error:'表现错误',
+    confusion:'困惑',obstacle:'阻碍',cost:'操作成本',positive:'正向体验',negative:'负面评价',expectation:'预期',suggestion:'建议',self_correction:'自我修正',observation:'观察'};
   const CONTEXT={hud:'HUD / 战斗 / 大世界',multi_screen:'跨多个界面',outside_game:'游戏外窗口',unknown:'认不出界面'};
   const state={overview:null,instances:new Map(),labels:{},reports:[],report:null,issues:new Map(),feedback:[],
     tags:[],tagGroups:[],instanceTags:{},filters:{kinds:new Set(),tags:new Set(),session:null,sessionLabel:''}};
@@ -38,9 +40,10 @@
       call('thumbnail',button.dataset.session,Number(button.dataset.time)).then(src=>{thumbCache.set(thumbKey(button),src);showThumb(button,src);}).catch(()=>{button.textContent='无画面';}).finally(()=>{thumbActive--;pumpThumbs();});
     }
   }
-  function thumb(session,time,caption){
+  function closeLightbox(){$('lightbox').hidden=true;$('lightboxVideo').removeAttribute('src');$('lightboxVideo').load();}
+  function thumb(session,time,caption,clip){
     if(!Number.isFinite(time))return '<span class="thumb"></span>';
-    return `<button type="button" class="thumb" data-session="${escape(session)}" data-time="${time}" data-caption="${escape(caption)}" title="查看大图"></button>`;
+    return `<button type="button" class="thumb" data-session="${escape(session)}" data-time="${time}" data-caption="${escape(caption)}"${clip?` data-clip-start="${clip.start}" data-clip-end="${clip.end}" title="播放操作记录"`:' title="查看大图"'}></button>`;
   }
   function jump(session,time,text){return Number.isFinite(time)?`<button type="button" class="jump" data-open-session="${escape(session)}" data-open-time="${time}" title="在新窗口打开回看并停在这一刻">${escape(text)}</button>`:'';}
 
@@ -61,7 +64,7 @@
     if(row.route?.length)screen+=' · 路线：'+escape(row.route.join(' -> '));
     if(row.elements?.length)screen+=' › '+escape(row.elements.join('、'));
     const counter=link?.role==='counter';
-    return `<article class="card${counter?' counter':''}" data-key="${escape(key(row.session_id,row.instance_id))}" data-issue="${escape(issue||'')}">${thumb(row.session_id,at,label(row)+' · '+formatTime(at))}<div>`+
+    return `<article class="card${counter?' counter':''}" data-key="${escape(key(row.session_id,row.instance_id))}" data-issue="${escape(issue||'')}">${thumb(row.session_id,at,label(row)+' · '+formatTime(at),row.clips?.[0])}<div>`+
       `<h4 class="card-title"><span class="kind kind-${escape(row.kind)}">${escape(KIND[row.kind]||row.kind)}</span><span>${escape(row.event_title||'未归入事件')}</span>${counter?'<span class="badge">反例</span>':''}</h4>`+
       `<p class="statement">${escape(row.statement)}</p>`+
       `<div class="aside"><span class="meta">${time}${earlier}${compare}<span>${escape(label(row))}</span>${flag({kind:'instance',session_id:row.session_id,instance_id:row.instance_id,issue:issue&&issue!=='cited'?issue:undefined})}</span><div>界面：${screen}</div>${link?.reason?`<div>归入理由：${escape(link.reason)}</div>`:''}</div></div></article>`;
@@ -587,14 +590,15 @@
     }
     const thumbButton=event.target.closest('.thumb[data-session]');
     if(thumbButton){
-      $('lightboxCaption').textContent=thumbButton.dataset.caption;$('lightboxImage').removeAttribute('src');$('lightbox').hidden=false;
-      call('thumbnail',thumbButton.dataset.session,Number(thumbButton.dataset.time),true).then(src=>{$('lightboxImage').src=src;}).catch(error=>{$('lightboxCaption').textContent=error.message;});
+      const clip=thumbButton.dataset.clipStart!==undefined;
+      $('lightboxCaption').textContent=thumbButton.dataset.caption;$('lightboxImage').removeAttribute('src');$('lightboxImage').hidden=clip;$('lightboxVideo').hidden=!clip;$('lightbox').hidden=false;
+      (clip?call('clip',thumbButton.dataset.session,Number(thumbButton.dataset.clipStart),Number(thumbButton.dataset.clipEnd)):call('thumbnail',thumbButton.dataset.session,Number(thumbButton.dataset.time),true)).then(src=>{$(clip?'lightboxVideo':'lightboxImage').src=src;}).catch(error=>{$('lightboxCaption').textContent=error.message;});
       return;
     }
-    if(event.target.closest('#lightbox'))$('lightbox').hidden=true;
+    if(event.target.closest('#lightbox'))closeLightbox();
   });
   document.addEventListener('keydown',event=>{
-    if(event.key==='Escape'){$('lightbox').hidden=true;$('menu').hidden=true;}
+    if(event.key==='Escape'){closeLightbox();$('menu').hidden=true;}
     if((event.key==='Enter'||event.key===' ')&&event.target.matches?.('[data-tag]')){event.preventDefault();event.target.click();}
   });
   document.addEventListener('contextmenu',event=>{

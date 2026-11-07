@@ -3,7 +3,7 @@
 (function(){
   const $=id=>document.getElementById(id);
   const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  // The four problem types; a session's 问题数 counts only these.
+  // The problem types (design defects and the legacy four); a session's 问题数 counts only these.
   const Findings=globalThis.ThinkAloudFindings,KIND=Findings.PROBLEM;
   const WEEK='日一二三四五六';
   const STATES=[['all','全部'],['done','已整理'],['todo','待整理'],['running','转写中'],['failed','失败']];
@@ -56,7 +56,13 @@
   function renderFilters(){
     const counts={all:state.sessions.length,done:0,todo:0,running:0,failed:0,checking:0};state.sessions.forEach(s=>counts[status(s)]++);
     $('stateChips').innerHTML=STATES.map(([key,label])=>`<button type="button" class="${state.filter===key?'on':''}" data-filter="${key}" aria-pressed="${state.filter===key}">${label} <b>${counts[key]}</b></button>`).join('');
-    $('kindMenu').innerHTML=Object.entries(KIND).map(([key,label])=>`<label class="k-${key}"><input type="checkbox" data-kind="${key}"${state.kinds.has(key)?' checked':''}><i class="dot"></i>${label}</label>`).join('');
+    // Only kinds the library holds, each with its problem count; the legacy kinds come last under their own line.
+    const total={};state.sessions.forEach(s=>Object.entries(s.preprocessing?.kinds||{}).forEach(([k,n])=>{if(k in KIND)total[k]=(total[k]||0)+n;}));
+    const option=key=>`<label class="k-${key}"><input type="checkbox" data-kind="${key}"${state.kinds.has(key)?' checked':''}><i class="dot"></i><span class="kn">${KIND[key]}</span><b>${total[key]||0}</b></label>`;
+    const shown=keys=>keys.filter(k=>total[k]||state.kinds.has(k));
+    const defects=shown(Object.keys(Findings.DEFECTS)),legacy=shown(Object.keys(Findings.LEGACY));
+    $('kindMenu').innerHTML=defects.map(option).join('')+(legacy.length?`<div class="km-sep">旧分类（重整前的场次）</div>${legacy.map(option).join('')}`:'')
+      +(defects.length||legacy.length?'':'<div class="km-sep">还没有整理出问题</div>');
     $('kindToggle').textContent=state.kinds.size?`问题类型 · ${state.kinds.size}`:'问题类型';$('kindToggle').classList.toggle('on',state.kinds.size>0);
   }
   function item(s){
@@ -118,6 +124,7 @@
       const findings=Findings.create($('deskFindings'),{state:state.findings,clock:short,scroller:$('sessionDetail'),locked:state.kinds.size>0,
         onView:view=>document.querySelectorAll('#sessionDetail [data-dview]').forEach(button=>{const on=button.dataset.dview===view;button.classList.toggle('on',on);button.setAttribute('aria-selected',String(on));}),
         onSeek:(time,where)=>call('open_review',s.id,time,where.view,where.view==='events'?where.event:'').catch(error=>toast(error.message)),
+        loadClip:(start,end)=>call('clip',s.id,start,end),
         onInsight:(instance,issue)=>call('show_in_insight',s.id,instance,issue).catch(error=>toast(error.message))});
       findings.update({result:detail.result,activities:detail.activities||[],bugs:detail.bugs||{},issues:detail.instance_issues||{}});
     }
