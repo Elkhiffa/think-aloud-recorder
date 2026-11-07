@@ -154,6 +154,7 @@ class DesktopService:
         self._ocr = OcrComponent(self.root)
         # The development runtime has rapidocr itself; the settings row then says so instead of offering a download.
         self._ocr_builtin = importlib.util.find_spec('rapidocr_onnxruntime') is not None
+        self._component_sync = None
         from updater import UpdateManager
         self._updates = UpdateManager(self.root)
         import agent_protocol
@@ -613,7 +614,8 @@ class DesktopService:
                              activity=activity, devices=deepcopy(self._devices), model=model, ocr=ocr,
                              device_defaults=deepcopy(self._device_defaults),
                              device_refresh=deepcopy(self._device_refresh),
-                             device_inventory=deepcopy(self._device_inventory))
+                             device_inventory=deepcopy(self._device_inventory),
+                             component_sync=deepcopy(self._component_sync))
             from agent_protocol import list_status
             from session_metadata import acceptance, session_presentation
             entries = self._session_entries(vault, first_default)
@@ -2261,6 +2263,20 @@ class DesktopService:
         with self._lock:
             self._update_review_count = review_count
             self._update_close_windows = close_windows
+
+    def sync_components(self):
+        """Called by the native window-loaded event: after an update, the skills and OCR component the user already has
+        follow the app to the new version (component_sync). The main window says what was brought along."""
+        import component_sync
+        with self._lock:
+            if self._closed.is_set() or self._exit_pending:
+                return
+            try:
+                self._component_sync = component_sync.run(self.root, Path.home(), time.strftime('%Y%m%d-%H%M%S'),
+                                                          self._ocr, self._ocr_builtin)
+            except Exception:
+                # Opening the recorder comes first; the manual install button stays available.
+                return
 
     def check_startup_update(self):
         """Called by the native window-loaded event, never by state polling."""

@@ -35,8 +35,11 @@ def _write(target, data):
     os.replace(temp, target)
 
 
-def install(root, home, stamp):
-    """Returns one row per agent and skill: installed / updated / unchanged, with backup and extra files."""
+def install(root, home, stamp, only_existing=False):
+    """Returns one row per agent and skill: installed / updated / unchanged, with backup and extra files.
+
+    only_existing: after an app update, bring along only the copies the user already installed; an agent that never
+    had a skill does not get one without the user asking."""
     root, home, base = Path(root), Path(home), source_root(root)
     sources = {}
     for name in SKILLS:
@@ -51,6 +54,8 @@ def install(root, home, stamp):
     for label, key, agent in agents:
         for name, files in sources.items():
             target = agent / 'skills' / name
+            if only_existing and not target.is_dir():
+                continue
             if target.is_symlink() or (target.exists() and not target.is_dir()):
                 raise ValueError(f'{label} 的技能目录里 {name} 不是普通文件夹，未改动。')
             changed = [relative for relative, path in files.items()
@@ -68,4 +73,12 @@ def install(root, home, stamp):
             for relative in changed:
                 _write(target / relative, files[relative].read_bytes())
             rows.append(dict(row, state='updated' if row['backup'] else 'installed'))
-    return dict(source=str(base), results=rows)
+    return dict(source=str(base), results=rows, version=_version(root))
+
+
+def _version(root):
+    import json
+    try:
+        return json.loads((Path(root) / 'portable.json').read_text(encoding='utf-8')).get('version', '')
+    except (OSError, ValueError):
+        return ''
