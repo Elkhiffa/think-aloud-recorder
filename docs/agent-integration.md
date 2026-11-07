@@ -51,7 +51,7 @@ Think Aloud 负责保存原始资料并提供回看。外部 agent 可以把资�
 
 ## Skill 安装与更新
 
-**在软件里安装（0.10.0 起）**：设置 → 通用 → 记录方法（首次设置的第一步也有）→「安装分析 skill」。三份 skill（单场整理 `think-aloud-judgments`、跨场次分析 `think-aloud-insight`、导出到团队表格 `think-aloud-export`）随软件包放在 `app\docs\skills\`，点一下就复制到已经存在的 `%USERPROFILE%\.codemaker\skills`（CodeMaker）、`%USERPROFILE%\.claude\skills` 和 `%USERPROFILE%\.codex\skills`（没装的 agent 不碰）。已有同名副本且内容不同时，先整份备份到 `app\state\skill-backups\<时间>\`（技能目录之外，不会被当成第二份 skill 加载）再写入；内容相同就跳过；你自己加进 skill 文件夹的文件保留不动，并在结果里列出（导出 skill 记下的反馈人 `profile.json` 就是这样保留的）。软件更新后再点一次，就把 skill 同步到新版。
+**在软件里安装（0.10.0 起）**：设置 → 通用 → 记录方法（首次设置的第一步也有）→「安装分析 skill」。三份 skill（单场整理 `think-aloud-judgments`、跨场次分析 `think-aloud-insight`、导出到团队表格 `think-aloud-export`）随软件包放在 `app\docs\skills\`，点一下就复制到已经存在的 `%USERPROFILE%\.codemaker\skills`（CodeMaker）、`%USERPROFILE%\.claude\skills` 和 `%USERPROFILE%\.codex\skills`（没装的 agent 不碰）。已有同名副本且内容不同时，先整份备份到 `app\state\skill-backups\<时间>\`（技能目录之外，不会被当成第二份 skill 加载）再写入；内容相同就跳过；你自己加进 skill 文件夹的文件保留不动，并在结果里列出（导出 skill 记下的反馈人 `profile.json` 就是这样保留的）。在软件里更新后，新版第一次启动时会自动把各 agent 里已经装过的 skill 同步到新版（同样先备份），主窗口提示同步到了哪些 agent；没装过的 agent 和没装过的 skill 不会被新装。之后再启动不会重复覆盖，所以你在更新后改过的 skill 会保留到下一次软件更新。以前下载过识别组件、而新版换了组件时，也会在后台重新下载。约 3 GB 的本地转写模型不自动下载，在设置里单独提示。手动点按钮时，结果会写明是否已和当前软件版本一致。
 
 **手动安装（源码检出或旧版软件）**：
 
