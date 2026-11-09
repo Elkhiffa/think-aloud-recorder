@@ -65,6 +65,16 @@ class TranscriptCorrectionTests(unittest.TestCase):
         self.assertNotIn('corrected_text', self.said(second))
         self.assertEqual(self.said(first)['corrected_text'], '走焦一直跳到右边。')
 
+    def test_listing_for_one_session_leaves_out_the_old_basis(self):
+        """触发路径：重新整理一场的 agent 跑 transcript-fix-list --session → 能核对命中，但看不到依据里写的旧实例编号；用户不带场次列出时照常有依据。"""
+        first = self.make_session('20261008-120000-aaaaaa', '左焦一直跳到右边。')
+        proposed = fixes.propose(self.vault, [dict(basis='上一轮 i07 的结论：手柄焦点', **{'from': '左焦', 'to': '走焦'})], 'codex-1008')
+        fixes.decide(self.vault, [proposed[0]['id']], 'confirmed')
+        for_agent = fixes.list_corrections(self.vault, 'confirmed', '20261008-120000-aaaaaa')
+        self.assertEqual(([row.get('basis') for row in for_agent], [hit['corrected'] for hit in for_agent[0]['hits']]), ([None], ['走焦一直跳到右边。']))
+        self.assertEqual(fixes.list_corrections(self.vault, 'confirmed')[0]['basis'], '上一轮 i07 的结论：手柄焦点')
+        self.assertTrue(first.is_dir())
+
     def test_single_fix_rejection_and_invalid_proposals(self):
         """触发路径：单场 agent 提议一处误听 → 只改这一段；驳回后不生效；对不上逐字稿的提议整批不写。"""
         first = self.make_session('20261008-120000-aaaaaa', '斜视以后再打。')
