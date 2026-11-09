@@ -191,7 +191,12 @@ def list_corrections(vault, status='proposed', session_id=None):
         found = hits(vault, row, sessions)
         if session_id and not any(item['session_id'] == session_id for item in found):
             continue
-        result.append(dict(row, hits=found))
+        listed = dict(row, hits=found)
+        if session_id:
+            # 路径 1：整理一场的 agent 核对本场命中。依据是当初提议时写的，常带着上一次整理的实例编号和结论；
+            # 重新整理要独立判断，所以按场次列时不给依据。用户在对话里确认修正时不带场次，照常能看到。
+            listed.pop('basis', None)
+        result.append(listed)
     return result
 
 
